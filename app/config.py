@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     otel_metrics_export_interval_ms: int = 10000
     otel_exporter_insecure: bool = False
 
+    # Logging — "text" (default) or "json" (structured for SIEM)
+    log_format: str = "text"
+
     # KMS backend — "local" (filesystem) or "vault" (HashiCorp Vault KV v2)
     kms_backend: str = "local"
     vault_addr: str = ""

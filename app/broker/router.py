@@ -218,6 +218,58 @@ async def accept_session(
     )
 
 
+@router.post("/sessions/{session_id}/reject", response_model=SessionResponse)
+async def reject_session(
+    session_id: str,
+    current_agent: TokenPayload = Depends(get_current_agent),
+    store: SessionStore = Depends(get_session_store),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The target rejects the pending session.
+    Only the agent designated as target can reject.
+    """
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if session.target_agent_id != current_agent.agent_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only the target can reject this session")
+
+    if session.status != SessionStatus.pending:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Session is in state '{session.status}', cannot be rejected")
+
+    store.reject(session_id)
+    await save_session(db, session)
+
+    from app.broker.notifications import mark_acted_by_reference
+    await mark_acted_by_reference(db, "session_pending", session_id)
+
+    await log_event(db, "broker.session_rejected", "ok",
+                    agent_id=current_agent.agent_id, session_id=session_id,
+                    org_id=current_agent.org)
+
+    # Notify initiator via WebSocket
+    if ws_manager.is_connected(session.initiator_agent_id):
+        await ws_manager.send_to_agent(session.initiator_agent_id, {
+            "type": "session_rejected",
+            "session_id": session.session_id,
+            "rejected_by": current_agent.agent_id,
+        })
+
+    return SessionResponse(
+        session_id=session.session_id,
+        status=session.status,
+        initiator_agent_id=session.initiator_agent_id,
+        target_agent_id=session.target_agent_id,
+        created_at=session.created_at,
+        expires_at=session.expires_at,
+        message="Session rejected",
+    )
+
+
 @router.post("/sessions/{session_id}/close", response_model=SessionResponse)
 async def close_session(
     session_id: str,

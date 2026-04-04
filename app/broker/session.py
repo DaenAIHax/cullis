@@ -125,6 +125,12 @@ class SessionStore:
             session.status = SessionStatus.active
         return session
 
+    def reject(self, session_id: str) -> Session | None:
+        session = self.get(session_id)
+        if session and session.status == SessionStatus.pending:
+            session.status = SessionStatus.denied
+        return session
+
     def close(self, session_id: str) -> None:
         session = self._sessions.get(session_id)
         if session:

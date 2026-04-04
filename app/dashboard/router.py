@@ -390,10 +390,46 @@ async def audit_log(
             "org_id": e.org_id,
             "details": e.details,
             "created_at": e.timestamp,
+            "entry_hash": e.entry_hash,
         })
 
     return templates.TemplateResponse("audit.html",
         _ctx(request, session, active="audit", events=event_list, query=q or "", limit=_AUDIT_LIMIT)
+    )
+
+
+@router.post("/audit/verify", response_class=HTMLResponse)
+async def verify_audit_chain(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only: verify the cryptographic integrity of the audit log chain."""
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    verify_csrf(request, session)
+
+    from app.db.audit import verify_chain
+    is_valid, total, broken_id = await verify_chain(db)
+
+    verify_result = {"valid": is_valid, "total": total, "broken_id": broken_id}
+
+    # Re-render audit page with verification result
+    query = select(AuditLog).order_by(AuditLog.id.desc()).limit(_AUDIT_LIMIT)
+    result = await db.execute(query)
+    events = result.scalars().all()
+    event_list = [{
+        "event_type": e.event_type, "result": e.result,
+        "agent_id": e.agent_id, "org_id": e.org_id,
+        "details": e.details, "created_at": e.timestamp,
+        "entry_hash": e.entry_hash,
+    } for e in events]
+
+    return templates.TemplateResponse("audit.html",
+        _ctx(request, session, active="audit", events=event_list, query="",
+             limit=_AUDIT_LIMIT, verify_result=verify_result)
     )
 
 

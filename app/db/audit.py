@@ -1,11 +1,18 @@
 """
-Append-only audit log — every session event is recorded here.
-No row is ever modified or deleted (threat model: non-repudiation).
+Append-only audit log with cryptographic hash chain.
+
+Every event is recorded with a SHA-256 hash that chains to the previous entry,
+making any tampering (insert, update, delete, reorder) detectable.
+
+No row is ever modified or deleted (threat model: non-repudiation, SOC2).
 """
+import hashlib
 import json
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Text
+
+from sqlalchemy import Column, Integer, String, DateTime, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.db.database import Base
 
 
@@ -20,6 +27,31 @@ class AuditLog(Base):
     org_id = Column(String(128), nullable=True, index=True)
     details = Column(Text, nullable=True)   # serialized JSON
     result = Column(String(16), nullable=False)  # "ok" | "denied" | "error"
+    entry_hash = Column(String(64), nullable=True, index=True)
+    previous_hash = Column(String(64), nullable=True)
+
+
+def compute_entry_hash(
+    entry_id: int,
+    timestamp: datetime,
+    event_type: str,
+    agent_id: str | None,
+    session_id: str | None,
+    org_id: str | None,
+    result: str,
+    details: str | None,
+    previous_hash: str | None,
+) -> str:
+    """Compute the SHA-256 hash of an audit log entry.
+
+    The canonical string is deterministic — any field change invalidates the hash.
+    """
+    canonical = (
+        f"{entry_id}|{timestamp.isoformat()}|{event_type}|"
+        f"{agent_id or ''}|{session_id or ''}|{org_id or ''}|"
+        f"{result}|{details or ''}|{previous_hash or 'genesis'}"
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 async def log_event(
@@ -31,15 +63,74 @@ async def log_event(
     org_id: str | None = None,
     details: dict | None = None,
 ) -> AuditLog:
+    details_json = json.dumps(details) if details else None
+
+    # Get the hash of the last entry in the chain
+    last = await db.execute(
+        select(AuditLog.entry_hash).order_by(AuditLog.id.desc()).limit(1)
+    )
+    previous_hash = last.scalar_one_or_none()
+
     entry = AuditLog(
         event_type=event_type,
         agent_id=agent_id,
         session_id=session_id,
         org_id=org_id,
-        details=json.dumps(details) if details else None,
+        details=details_json,
         result=result,
+        previous_hash=previous_hash,
     )
     db.add(entry)
+    await db.flush()  # assigns auto-incremented id
+
+    # Normalize timestamp for hash computation — SQLite may strip tzinfo on refresh
+    ts = entry.timestamp
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    entry.entry_hash = compute_entry_hash(
+        entry.id, ts, event_type,
+        agent_id, session_id, org_id, result,
+        details_json, previous_hash,
+    )
     await db.commit()
     await db.refresh(entry)
     return entry
+
+
+async def verify_chain(db: AsyncSession) -> tuple[bool, int, int]:
+    """Walk the audit log and verify every hash in the chain.
+
+    Returns (is_valid, total_checked, first_broken_id).
+    first_broken_id is 0 if the chain is intact.
+    """
+    result = await db.execute(
+        select(AuditLog).order_by(AuditLog.id.asc())
+    )
+    entries = result.scalars().all()
+
+    if not entries:
+        return (True, 0, 0)
+
+    expected_previous: str | None = None
+    for i, entry in enumerate(entries):
+        # Skip entries without hashes (pre-migration)
+        if entry.entry_hash is None:
+            continue
+
+        if entry.previous_hash != expected_previous:
+            return (False, i, entry.id)
+
+        ts = entry.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        expected_hash = compute_entry_hash(
+            entry.id, ts, entry.event_type,
+            entry.agent_id, entry.session_id, entry.org_id,
+            entry.result, entry.details, entry.previous_hash,
+        )
+        if entry.entry_hash != expected_hash:
+            return (False, i, entry.id)
+
+        expected_previous = entry.entry_hash
+
+    return (True, len(entries), 0)

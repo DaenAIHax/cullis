@@ -26,7 +26,7 @@ logger = logging.getLogger("agent_trust")
 async def save_session(db: AsyncSession, session: Session) -> None:
     """Upsert the session record (create or update status/closed_at)."""
     closed_at = None
-    if session.status == SessionStatus.closed:
+    if session.status in (SessionStatus.closed, SessionStatus.denied):
         closed_at = datetime.now(timezone.utc)
 
     existing = await db.get(SessionRecord, session.session_id)

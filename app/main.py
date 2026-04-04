@@ -14,8 +14,6 @@ class _QuietBadgeFilter(logging.Filter):
         return True
 
 
-logging.getLogger("uvicorn.access").addFilter(_QuietBadgeFilter())
-
 from app.config import get_settings
 from app.telemetry import init_telemetry, shutdown_telemetry
 from app.db.database import init_db, AsyncSessionLocal
@@ -35,6 +33,11 @@ from app.onboarding.router import onboarding_router, admin_router
 from app.dashboard.router import router as dashboard_router
 
 settings = get_settings()
+
+from app.logging_config import configure_logging
+configure_logging(settings.log_format)
+logging.getLogger("uvicorn.access").addFilter(_QuietBadgeFilter())
+
 logger = logging.getLogger("agent_trust")
 
 

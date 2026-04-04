@@ -183,3 +183,60 @@ async def test_non_participant_blocked(client: AsyncClient, dpop):
                              json=_envelope_np,
                              headers=dpop.headers("POST", f"/v1/broker/sessions/{session_id}/messages", token_c))
     assert resp.status_code == 403
+
+
+async def test_reject_pending_session(client: AsyncClient, dpop):
+    """Target agent can reject a pending session."""
+    token_a = await _register_and_login(client, dpop, "rej-org-a::agent", "rej-org-a")
+    token_b = await _register_and_login(client, dpop, "rej-org-b::agent", "rej-org-b")
+
+    resp = await client.post("/v1/broker/sessions", json={
+        "target_agent_id": "rej-org-b::agent", "target_org_id": "rej-org-b",
+        "requested_capabilities": [],
+    }, headers=dpop.headers("POST", "/v1/broker/sessions", token_a))
+    assert resp.status_code == 201
+    session_id = resp.json()["session_id"]
+
+    # B rejects
+    resp = await client.post(f"/v1/broker/sessions/{session_id}/reject",
+                             headers=dpop.headers("POST", f"/v1/broker/sessions/{session_id}/reject", token_b))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "denied"
+
+
+async def test_reject_non_pending_fails(client: AsyncClient, dpop):
+    """Cannot reject a session that is already active."""
+    token_a = await _register_and_login(client, dpop, "rejnp-org-a::agent", "rejnp-org-a")
+    token_b = await _register_and_login(client, dpop, "rejnp-org-b::agent", "rejnp-org-b")
+
+    resp = await client.post("/v1/broker/sessions", json={
+        "target_agent_id": "rejnp-org-b::agent", "target_org_id": "rejnp-org-b",
+        "requested_capabilities": [],
+    }, headers=dpop.headers("POST", "/v1/broker/sessions", token_a))
+    session_id = resp.json()["session_id"]
+
+    # B accepts first
+    await client.post(f"/v1/broker/sessions/{session_id}/accept",
+                      headers=dpop.headers("POST", f"/v1/broker/sessions/{session_id}/accept", token_b))
+
+    # B tries to reject — should fail
+    resp = await client.post(f"/v1/broker/sessions/{session_id}/reject",
+                             headers=dpop.headers("POST", f"/v1/broker/sessions/{session_id}/reject", token_b))
+    assert resp.status_code == 409
+
+
+async def test_non_target_cannot_reject(client: AsyncClient, dpop):
+    """Initiator cannot reject a session (only target can)."""
+    token_a = await _register_and_login(client, dpop, "rejnt-org-a::agent", "rejnt-org-a")
+    token_b = await _register_and_login(client, dpop, "rejnt-org-b::agent", "rejnt-org-b")
+
+    resp = await client.post("/v1/broker/sessions", json={
+        "target_agent_id": "rejnt-org-b::agent", "target_org_id": "rejnt-org-b",
+        "requested_capabilities": [],
+    }, headers=dpop.headers("POST", "/v1/broker/sessions", token_a))
+    session_id = resp.json()["session_id"]
+
+    # A (initiator) tries to reject — should fail
+    resp = await client.post(f"/v1/broker/sessions/{session_id}/reject",
+                             headers=dpop.headers("POST", f"/v1/broker/sessions/{session_id}/reject", token_a))
+    assert resp.status_code == 403
