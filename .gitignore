@@ -28,3 +28,8 @@ revoke.py
 generate_certs.py
 generate_demo_certs.py
 agents/*.env
+run.sh
+reset.sh
+agent.sh
+CLAUDE.md
+.claude/
