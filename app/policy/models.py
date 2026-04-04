@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +55,14 @@ class PolicyCreateRequest(BaseModel):
     org_id: str
     policy_type: str = Field(..., description="'session' | 'message'")
     rules: dict = Field(..., description="Rules object — see SessionRule or MessageRule")
+
+    @field_validator("rules")
+    @classmethod
+    def limit_rules_size(cls, v: dict) -> dict:
+        import json
+        if len(json.dumps(v, default=str)) > 32768:
+            raise ValueError("rules exceeds 32 KB limit")
+        return v
 
 
 class PolicyResponse(BaseModel):

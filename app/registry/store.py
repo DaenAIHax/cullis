@@ -85,7 +85,17 @@ async def update_agent_cert(db: AsyncSession, agent_id: str, cert_pem: str,
     First login (cert_thumbprint is None): stores cert + thumbprint (pin).
     Subsequent logins with same cert: updates cert_pem (idempotent).
     Different cert: returns False (thumbprint mismatch — use rotate endpoint).
+
+    Before pinning, checks that the certificate has not been revoked.
     """
+    from app.auth.revocation import check_cert_not_revoked
+    from cryptography import x509 as _x509
+
+    # Check revocation before pinning or accepting the cert
+    cert_obj = _x509.load_pem_x509_certificate(cert_pem.encode())
+    serial_hex = format(cert_obj.serial_number, 'x')
+    await check_cert_not_revoked(db, serial_hex)
+
     agent = await get_agent_by_id(db, agent_id)
     if agent is None:
         return False

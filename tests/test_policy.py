@@ -27,6 +27,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.cert_factory import make_assertion, get_org_ca_pem, sign_message
+from tests.conftest import ADMIN_HEADERS
 
 pytestmark = pytest.mark.asyncio
 
@@ -55,7 +56,7 @@ async def _setup_org_agent(client: AsyncClient, org_id: str, agent_id: str, dpop
 
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
     ca_pem = get_org_ca_pem(org_id)
     await client.post(f"/registry/orgs/{org_id}/certificate",
         json={"ca_certificate": ca_pem},
@@ -64,7 +65,7 @@ async def _setup_org_agent(client: AsyncClient, org_id: str, agent_id: str, dpop
     await client.post("/registry/agents", json={
         "agent_id": agent_id, "org_id": org_id,
         "display_name": agent_id, "capabilities": CAPS,
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
     resp = await client.post("/registry/bindings",
         json={"org_id": org_id, "agent_id": agent_id, "scope": CAPS},
         headers=org_headers(org_id),
@@ -475,7 +476,7 @@ async def test_policy_crud_create(client: AsyncClient, dpop):
     await client.post("/registry/orgs", json={
         "org_id": "crud-buyer", "display_name": "crud-buyer",
         "secret": "crud-buyer-secret",
-    })
+    }, headers=ADMIN_HEADERS)
 
     resp = await client.post("/policy/rules", json={
         "policy_id": "crud-buyer::session-v1",
@@ -506,7 +507,7 @@ async def test_policy_crud_duplicate(client: AsyncClient, dpop):
     await client.post("/registry/orgs", json={
         "org_id": "dup-buyer", "display_name": "dup-buyer",
         "secret": "dup-buyer-secret",
-    })
+    }, headers=ADMIN_HEADERS)
 
     payload = {
         "policy_id": "dup-buyer::session-v1",
@@ -528,7 +529,7 @@ async def test_policy_crud_list(client: AsyncClient, dpop):
     await client.post("/registry/orgs", json={
         "org_id": "list-buyer", "display_name": "list-buyer",
         "secret": "list-buyer-secret",
-    })
+    }, headers=ADMIN_HEADERS)
 
     for i in range(3):
         await client.post("/policy/rules", json={
@@ -555,7 +556,7 @@ async def test_policy_crud_get(client: AsyncClient, dpop):
     await client.post("/registry/orgs", json={
         "org_id": "get-buyer", "display_name": "get-buyer",
         "secret": "get-buyer-secret",
-    })
+    }, headers=ADMIN_HEADERS)
     await client.post("/policy/rules", json={
         "policy_id": "get-buyer::session-v1",
         "org_id": "get-buyer",

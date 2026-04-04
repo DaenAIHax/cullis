@@ -35,12 +35,22 @@ _log = logging.getLogger("agent_trust")
 @router.post("/agents", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     body: AgentRegisterRequest,
+    x_org_id: Annotated[str, Header()],
+    x_org_secret: Annotated[str, Header()],
     db: AsyncSession = Depends(get_db),
 ):
     """
     Register a new agent in the network.
-    In production this endpoint will be protected by an admin token.
+    Requires valid organization credentials (X-Org-Id + X-Org-Secret headers).
     """
+    org = await get_org_by_id(db, x_org_id)
+    if not org or org.status not in ("active", "pending") or not org.verify_secret(x_org_secret):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Invalid organization credentials")
+    if body.org_id != x_org_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="org_id in body does not match authenticated organization")
+
     existing = await get_agent_by_id(db, body.agent_id)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="agent_id already registered")
@@ -150,8 +160,8 @@ async def get_agent_public_key(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Restituisce la chiave pubblica PEM dell'agente, estratta dal certificato salvato al login.
-    Usato dal mittente per cifrare messaggi E2E verso questo agente.
+    Return the agent's PEM public key, extracted from the certificate stored at login.
+    Used by the sender to encrypt E2E messages towards this agent.
     """
     agent = await get_agent_by_id(db, agent_id)
     if not agent:
@@ -159,7 +169,7 @@ async def get_agent_public_key(
     if not agent.cert_pem:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Certificato non disponibile — l'agente deve effettuare il login prima",
+            detail="Certificate not available — agent must login first",
         )
 
     cert = crypto_x509.load_pem_x509_certificate(agent.cert_pem.encode())

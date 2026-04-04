@@ -39,6 +39,7 @@ from tests.cert_factory import (
     make_assertion, get_org_ca_pem, make_dpop_key_pair, make_dpop_proof,
     make_assertion_alternate,
 )
+from tests.conftest import ADMIN_HEADERS
 
 pytestmark = pytest.mark.asyncio
 
@@ -55,7 +56,7 @@ async def _register_agent(client: AsyncClient, agent_id: str, org_id: str):
 
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
 
     ca_pem = get_org_ca_pem(org_id)
     await client.post(f"/registry/orgs/{org_id}/certificate",
@@ -68,7 +69,7 @@ async def _register_agent(client: AsyncClient, agent_id: str, org_id: str):
         "org_id": org_id,
         "display_name": f"Test Agent {agent_id}",
         "capabilities": ["test.read"],
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
 
     resp = await client.post("/registry/bindings",
         json={"org_id": org_id, "agent_id": agent_id, "scope": ["test.read"]},
@@ -173,7 +174,7 @@ async def test_token_denied_unknown_agent(client: AsyncClient, dpop):
     org_secret = org_id + "-secret"
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
     ca_pem = get_org_ca_pem(org_id)
     await client.post(f"/registry/orgs/{org_id}/certificate",
         json={"ca_certificate": ca_pem},

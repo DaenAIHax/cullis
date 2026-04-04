@@ -22,6 +22,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.cert_factory import make_assertion, get_org_ca_pem, sign_message, make_encrypted_envelope, DPoPHelper
+from tests.conftest import ADMIN_HEADERS
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,7 +35,7 @@ async def test_step1_banca_a_registra_agente(client: AsyncClient):
     # Register org banca-a
     await client.post("/registry/orgs", json={
         "org_id": "banca-a", "display_name": "Banca A", "secret": "banca-a-org-secret",
-    })
+    }, headers=ADMIN_HEADERS)
 
     # Upload org CA cert
     ca_pem = get_org_ca_pem("banca-a")
@@ -49,7 +50,7 @@ async def test_step1_banca_a_registra_agente(client: AsyncClient):
         "display_name": "Agente KYC Banca A",
         "capabilities": ["kyc.read", "kyc.write"],
         "metadata": {"environment": "test"},
-    })
+    }, headers={"x-org-id": "banca-a", "x-org-secret": "banca-a-org-secret"})
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["agent_id"] == "banca-a::kyc-agent"
@@ -90,7 +91,7 @@ async def test_step2_banca_b_registra_agente(client: AsyncClient):
     # Register org banca-b
     await client.post("/registry/orgs", json={
         "org_id": "banca-b", "display_name": "Banca B", "secret": "banca-b-org-secret",
-    })
+    }, headers=ADMIN_HEADERS)
 
     # Upload org CA cert
     ca_pem = get_org_ca_pem("banca-b")
@@ -105,7 +106,7 @@ async def test_step2_banca_b_registra_agente(client: AsyncClient):
         "display_name": "Agente KYC Banca B",
         "capabilities": ["kyc.read"],
         "metadata": {"environment": "test"},
-    })
+    }, headers={"x-org-id": "banca-b", "x-org-secret": "banca-b-org-secret"})
     assert resp.status_code == 201, resp.text
     assert resp.json()["agent_id"] == "banca-b::kyc-agent"
 
@@ -291,7 +292,7 @@ async def test_step10_terzo_agente_bloccato(client: AsyncClient):
     # Register and authenticate an intruder agent (with valid org + CA + binding)
     await client.post("/registry/orgs", json={
         "org_id": "banca-c", "display_name": "Banca C", "secret": "banca-c-org-secret",
-    })
+    }, headers=ADMIN_HEADERS)
     ca_pem = get_org_ca_pem("banca-c")
     await client.post("/registry/orgs/banca-c/certificate",
         json={"ca_certificate": ca_pem},
@@ -302,7 +303,7 @@ async def test_step10_terzo_agente_bloccato(client: AsyncClient):
         "org_id": "banca-c",
         "display_name": "Agente Malevolo",
         "capabilities": [],
-    })
+    }, headers={"x-org-id": "banca-c", "x-org-secret": "banca-c-org-secret"})
     rb = await client.post("/registry/bindings",
         json={"org_id": "banca-c", "agent_id": "banca-c::evil-agent", "scope": []},
         headers={"x-org-id": "banca-c", "x-org-secret": "banca-c-org-secret"},

@@ -51,7 +51,7 @@ def init_telemetry() -> None:
         # ── Traces ────────────────────────────────────────────────
         span_exporter = OTLPSpanExporter(
             endpoint=settings.otel_exporter_otlp_endpoint,
-            insecure=True,
+            insecure=settings.otel_exporter_insecure,
         )
         tracer_provider = TracerProvider(resource=resource)
         tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
@@ -61,7 +61,7 @@ def init_telemetry() -> None:
         # ── Metrics ───────────────────────────────────────────────
         metric_exporter = OTLPMetricExporter(
             endpoint=settings.otel_exporter_otlp_endpoint,
-            insecure=True,
+            insecure=settings.otel_exporter_insecure,
         )
         metric_reader = PeriodicExportingMetricReader(
             metric_exporter,

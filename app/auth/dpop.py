@@ -18,6 +18,7 @@ the replay window to a single use.
 """
 import base64
 import hashlib
+import hmac as _hmac
 import json
 import logging
 import os
@@ -70,7 +71,7 @@ def get_current_dpop_nonce() -> str:
 def _is_valid_nonce(nonce: str) -> bool:
     """Check if the nonce matches the current or previous nonce."""
     with _nonce_lock:
-        return nonce == _current_nonce or nonce == _previous_nonce
+        return _hmac.compare_digest(nonce, _current_nonce or "") or _hmac.compare_digest(nonce, _previous_nonce or "")
 
 
 def set_dpop_nonce_header(response: Response) -> None:
@@ -289,7 +290,7 @@ async def verify_dpop_proof(
         expected_ath = _b64url_encode(
             hashlib.sha256(access_token.encode()).digest()
         )
-        if claims.get("ath") != expected_ath:
+        if not _hmac.compare_digest(claims.get("ath", ""), expected_ath):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                                 "Invalid DPoP proof: ath mismatch")
 

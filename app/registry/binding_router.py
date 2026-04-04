@@ -15,7 +15,7 @@ from app.registry.binding_store import (
     revoke_binding,
     list_bindings,
 )
-from app.registry.store import invalidate_agent_tokens
+from app.registry.store import invalidate_agent_tokens, get_agent_by_id
 
 router = APIRouter(prefix="/registry", tags=["registry"])
 
@@ -80,6 +80,21 @@ async def create_agent_binding(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You cannot create a binding for another organization",
+        )
+
+    # Validate scope is a subset of the agent's registered capabilities
+    agent = await get_agent_by_id(db, body.agent_id)
+    if not agent or agent.org_id != body.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found or does not belong to this organization",
+        )
+    agent_caps = set(agent.capabilities)
+    invalid_scope = [s for s in body.scope if s not in agent_caps]
+    if invalid_scope:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Scope {invalid_scope} not in agent capabilities: {sorted(agent_caps)}",
         )
 
     existing = await get_binding_by_org_agent(db, body.org_id, body.agent_id)

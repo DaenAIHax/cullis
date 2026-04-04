@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class TokenRequest(BaseModel):
     client_assertion: str = Field(
         ...,
-        description="JWT RS256 firmato con la chiave privata dell'agente; header x5c contiene il certificato",
+        description="JWT RS256 signed with the agent's private key; x5c header contains the certificate",
     )
 
 

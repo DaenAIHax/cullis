@@ -83,9 +83,11 @@
                     <td class="px-5 py-4 space-x-2">
                         <a href="/dashboard/agents/{{ agent.agent_id }}/rotate-cert"
                            class="px-2 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 text-white rounded">Rotate Cert</a>
-                        <form method="post" action="/dashboard/agents/{{ agent.agent_id }}/delete" class="inline">
+                        <form method="post" action="/dashboard/agents/{{ agent.agent_id }}/delete" class="inline"
+                              onsubmit="return confirm('Delete agent ' + this.dataset.agentId + '?')"
+                              data-agent-id="{{ agent.agent_id }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button onclick="return confirm('Delete agent {{ agent.agent_id }}?')"
+                            <button type="submit"
                                     class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded">Delete</button>
                         </form>
                     </td>

@@ -19,6 +19,9 @@ from app.telemetry_metrics import RATE_LIMIT_REJECT_COUNTER
 _log = logging.getLogger("agent_trust")
 
 
+_MAX_SUBJECTS = 50_000  # maximum unique subjects in memory — LRU eviction
+
+
 class SlidingWindowLimiter:
     """
     Async sliding window rate limiter with dual backend.
@@ -75,6 +78,11 @@ class SlidingWindowLimiter:
         key = (subject, bucket)
 
         with self._lock:
+            # LRU eviction: if too many unique subjects, drop oldest entries
+            if key not in self._windows and len(self._windows) >= _MAX_SUBJECTS:
+                oldest_key = next(iter(self._windows))
+                del self._windows[oldest_key]
+
             dq = self._windows[key]
             while dq and dq[0] < cutoff:
                 dq.popleft()
@@ -87,46 +95,58 @@ class SlidingWindowLimiter:
                 )
             dq.append(now)
 
+    # Lua script for atomic sliding window check + add.
+    # Returns 1 if the request is allowed, 0 if rate limited.
+    _LUA_SCRIPT = """
+    local key = KEYS[1]
+    local now = tonumber(ARGV[1])
+    local cutoff = tonumber(ARGV[2])
+    local max_requests = tonumber(ARGV[3])
+    local request_id = ARGV[4]
+    local ttl = tonumber(ARGV[5])
+
+    redis.call('ZREMRANGEBYSCORE', key, 0, cutoff)
+    local count = redis.call('ZCARD', key)
+    if count >= max_requests then
+        return 0
+    end
+    redis.call('ZADD', key, now, request_id)
+    redis.call('EXPIRE', key, ttl)
+    return 1
+    """
+    _lua_sha: str | None = None
+
     async def _check_redis(self, subject: str, bucket: str,
                            config: tuple[int, int]) -> None:
         """
         Redis sorted set sliding window (multi-worker safe).
 
-        Key:   ratelimit:{subject}:{bucket}
-        Score: unix timestamp
-        Member: unique request ID (avoids dedup on same-millisecond requests)
-
-        Pipeline:
-          1. ZREMRANGEBYSCORE — remove entries outside the window
-          2. ZCARD — count entries in the window
-          3. ZADD — add current request (only executed if under limit)
-          4. EXPIRE — TTL = window_seconds (auto-cleanup for idle keys)
+        Uses an atomic Lua script to avoid the TOCTOU race condition
+        between ZCARD (count) and ZADD (register).
         """
         window_seconds, max_requests = config
         now = time.time()
         cutoff = now - window_seconds
         redis_key = f"ratelimit:{subject}:{bucket}"
         request_id = uuid.uuid4().hex
+        ttl = window_seconds + 10
 
-        pipe = self._redis.pipeline(transaction=True)
-        pipe.zremrangebyscore(redis_key, 0, cutoff)
-        pipe.zcard(redis_key)
-        results = await pipe.execute()
-        count = results[1]
+        # Load the script once, then use EVALSHA for efficiency
+        if self._lua_sha is None:
+            self._lua_sha = await self._redis.script_load(self._LUA_SCRIPT)
 
-        if count >= max_requests:
+        allowed = await self._redis.evalsha(
+            self._lua_sha, 1, redis_key,
+            str(now), str(cutoff), str(max_requests), request_id, str(ttl),
+        )
+
+        if not allowed:
             RATE_LIMIT_REJECT_COUNTER.add(1, {"bucket": bucket})
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Rate limit exceeded for '{bucket}': max {max_requests} req/{window_seconds}s",
                 headers={"Retry-After": str(window_seconds)},
             )
-
-        # Under limit — register this request
-        pipe2 = self._redis.pipeline(transaction=True)
-        pipe2.zadd(redis_key, {request_id: now})
-        pipe2.expire(redis_key, window_seconds + 10)  # +10s slack for cleanup
-        await pipe2.execute()
 
 
 # Shared global instance
@@ -136,3 +156,4 @@ rate_limiter = SlidingWindowLimiter()
 rate_limiter.register("auth.token",       window_seconds=60,  max_requests=10)
 rate_limiter.register("broker.session",   window_seconds=60,  max_requests=20)
 rate_limiter.register("broker.message",   window_seconds=60,  max_requests=60)
+rate_limiter.register("dashboard.login",  window_seconds=300, max_requests=5)

@@ -10,6 +10,7 @@ Verifica che:
 import pytest
 from httpx import AsyncClient
 from tests.cert_factory import make_assertion, get_org_ca_pem
+from tests.conftest import ADMIN_HEADERS
 
 pytestmark = pytest.mark.asyncio
 
@@ -20,7 +21,7 @@ async def _setup(client: AsyncClient, org_id: str, agent_id: str,
     org_secret = org_id + "-secret"
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
     await client.post(f"/registry/orgs/{org_id}/certificate",
         json={"ca_certificate": get_org_ca_pem(org_id)},
         headers={"x-org-id": org_id, "x-org-secret": org_secret},
@@ -28,7 +29,7 @@ async def _setup(client: AsyncClient, org_id: str, agent_id: str,
     await client.post("/registry/agents", json={
         "agent_id": agent_id, "org_id": org_id,
         "display_name": agent_id, "capabilities": capabilities,
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
     resp = await client.post("/registry/bindings",
         json={"org_id": org_id, "agent_id": agent_id, "scope": capabilities},
         headers={"x-org-id": org_id, "x-org-secret": org_secret},

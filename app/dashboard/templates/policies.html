@@ -70,9 +70,11 @@
                     </td>
                     <td class="px-5 py-4">
                         {% if p.is_active %}
-                        <form method="post" action="/dashboard/policies/{{ p.policy_id }}/deactivate" class="inline">
+                        <form method="post" action="/dashboard/policies/{{ p.policy_id }}/deactivate" class="inline"
+                              onsubmit="return confirm('Deactivate policy ' + this.dataset.policyId + '?')"
+                              data-policy-id="{{ p.policy_id }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button onclick="return confirm('Deactivate policy {{ p.policy_id }}?')"
+                            <button type="submit"
                                     class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded">Deactivate</button>
                         </form>
                         {% else %}

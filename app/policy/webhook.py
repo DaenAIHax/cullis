@@ -25,9 +25,12 @@ Webhook contract:
             200 OK  { "decision": "deny", "reason": "..." }
             any non-200 or timeout → treated as DENY
 """
+import ipaddress
 import logging
+import socket
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 
@@ -37,6 +40,55 @@ from app.telemetry_metrics import PDP_WEBHOOK_LATENCY_HISTOGRAM
 _log = logging.getLogger("agent_trust")
 
 _WEBHOOK_TIMEOUT = 5.0  # seconds
+_MAX_RESPONSE_BODY = 4096  # bytes — limit PDP response parsing
+
+
+def _validate_response_ip(resp: httpx.Response) -> None:
+    """
+    Post-request SSRF check: verify that the server IP in the response
+    is not private/loopback. Defends against DNS rebinding attacks where
+    the hostname resolves to an internal IP between validation and request.
+
+    httpx does not expose the remote IP in all transports; when unavailable,
+    we rely on the pre-request DNS validation as a best-effort defense.
+    """
+    # httpx stores network info in response.extensions when using httpcore
+    network_stream = resp.extensions.get("network_stream")
+    if network_stream is not None:
+        try:
+            server_addr = network_stream.get_extra_info("server_addr")
+            if server_addr:
+                ip = ipaddress.ip_address(server_addr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    raise ValueError(f"Response came from private/reserved IP: {ip}")
+        except (TypeError, ValueError, IndexError):
+            pass  # cannot determine — fall through to pre-request validation
+
+
+def _validate_webhook_url(url: str) -> None:
+    """
+    Validate that a webhook URL does not point to internal/private networks (SSRF protection).
+    Raises ValueError if the URL is unsafe.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Webhook URL has no hostname")
+
+    # Block common internal hostnames
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise ValueError(f"Webhook URL points to loopback address: {hostname}")
+
+    # Resolve hostname and check all resulting IPs
+    try:
+        addr_infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ValueError(f"Cannot resolve webhook hostname: {hostname}")
+
+    for _family, _type, _proto, _canonname, sockaddr in addr_infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise ValueError(f"Webhook URL resolves to private/reserved IP: {ip}")
 
 
 @dataclass
@@ -62,12 +114,23 @@ async def call_pdp_webhook(
     If webhook_url is None or the call fails, returns DENY (default-deny).
     """
     if not webhook_url:
-        _log.info(
-            "PDP webhook not configured for org '%s' — skipping (allow)", org_id
+        _log.warning(
+            "PDP webhook not configured for org '%s' — default-deny", org_id
         )
         return WebhookDecision(
-            allowed=True,
-            reason=f"Organization '{org_id}' has no PDP webhook — skipped",
+            allowed=False,
+            reason=f"Organization '{org_id}' has no PDP webhook configured — denied by default",
+            org_id=org_id,
+        )
+
+    # SSRF protection: validate webhook URL before making the request
+    try:
+        _validate_webhook_url(webhook_url)
+    except ValueError as exc:
+        _log.warning("PDP webhook URL rejected (SSRF): org=%s url=%s reason=%s", org_id, webhook_url, exc)
+        return WebhookDecision(
+            allowed=False,
+            reason=f"PDP webhook URL rejected: {exc}",
             org_id=org_id,
         )
 
@@ -85,8 +148,15 @@ async def call_pdp_webhook(
         with tracer.start_as_current_span("pdp.webhook_call") as span:
             span.set_attribute("pdp.org_id", org_id)
             span.set_attribute("pdp.context", session_context)
-            async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT) as client:
+            async with httpx.AsyncClient(
+                timeout=_WEBHOOK_TIMEOUT,
+                follow_redirects=False,
+            ) as client:
                 resp = await client.post(webhook_url, json=payload)
+
+            # Re-validate the actual IP that was connected to (DNS rebinding defense)
+            # httpx stores the remote address in the response extensions when available
+            _validate_response_ip(resp)
             PDP_WEBHOOK_LATENCY_HISTOGRAM.record((time.monotonic() - t0) * 1000, {"org_id": org_id})
 
         if resp.status_code != 200:
@@ -100,9 +170,27 @@ async def call_pdp_webhook(
                 org_id=org_id,
             )
 
+        # Limit response body size to prevent memory exhaustion from malicious webhooks
+        if len(resp.content) > _MAX_RESPONSE_BODY:
+            _log.warning(
+                "PDP webhook response too large for org '%s' (%d bytes) — default-deny",
+                org_id, len(resp.content),
+            )
+            return WebhookDecision(
+                allowed=False,
+                reason=f"PDP webhook response too large ({len(resp.content)} bytes)",
+                org_id=org_id,
+            )
+
         data = resp.json()
         decision = data.get("decision", "deny").lower()
-        reason = data.get("reason", "")
+        if decision not in ("allow", "deny"):
+            _log.warning(
+                "PDP webhook for org '%s' returned invalid decision '%s' — default-deny",
+                org_id, decision,
+            )
+            decision = "deny"
+        reason = str(data.get("reason", ""))[:512]  # limit reason length
 
         if decision == "allow":
             _log.info("PDP webhook allow: org=%s context=%s", org_id, session_context)

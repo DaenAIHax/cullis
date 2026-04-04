@@ -39,6 +39,7 @@ class Session:
     used_nonces: set[str] = field(default_factory=set)
     _messages: list[StoredMessage] = field(default_factory=list)
     _next_seq: int = 0
+    _MAX_NONCES: int = 100_000  # prevent unbounded memory growth
 
     def is_expired(self) -> bool:
         if self.expires_at is None:
@@ -46,8 +47,13 @@ class Session:
         return datetime.now(timezone.utc) > self.expires_at
 
     def consume_nonce(self, nonce: str) -> bool:
-        """Returns False if the nonce has already been used (replay attack)."""
+        """
+        Returns False if the nonce has already been used (replay attack)
+        or if the nonce set has reached its capacity limit (DoS protection).
+        """
         if nonce in self.used_nonces:
+            return False
+        if len(self.used_nonces) >= self._MAX_NONCES:
             return False
         self.used_nonces.add(nonce)
         return True
@@ -106,7 +112,7 @@ class SessionStore:
 
     def get(self, session_id: str) -> Session | None:
         session = self._sessions.get(session_id)
-        if session and session.is_expired():
+        if session and session.is_expired() and session.status != SessionStatus.closed:
             session.status = SessionStatus.closed
         return session
 

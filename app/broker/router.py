@@ -7,7 +7,9 @@ Flow:
   3. Both can send messages via POST /broker/sessions/{id}/messages
      (REST polling always available; WebSocket push as an additional channel)
 """
+import asyncio
 import logging
+import time as _time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -26,6 +28,7 @@ from app.broker.session import get_session_store, SessionStore
 from app.broker.persistence import save_session, save_message
 from app.broker.ws_manager import ws_manager
 from app.policy.webhook import evaluate_session_via_webhooks
+from app.policy.engine import PolicyEngine
 from app.rate_limit.limiter import rate_limiter
 from app.auth.message_signer import verify_message_signature
 from app.telemetry import tracer
@@ -285,9 +288,21 @@ async def send_message(
     """
     await rate_limiter.check(current_agent.agent_id, "broker.message")
 
+    # ── Validate envelope session_id matches URL path ──────────────────────
+    if envelope.session_id != session_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="session_id in envelope does not match URL path")
+
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    # ── Enforce session expiry even if status was not yet updated ─────────
+    if session.is_expired():
+        session.status = SessionStatus.closed
+        await save_session(db, session)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Session has expired")
 
     if session.status != SessionStatus.active:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
@@ -336,6 +351,24 @@ async def send_message(
         envelope.payload,
     )
     _log.info("✔ signature verified  (%s)", current_agent.agent_id)
+
+    # ── Message policy evaluation ────────────────────────────────────────
+    _policy_engine = PolicyEngine()
+    policy_decision = await _policy_engine.evaluate_message(
+        db,
+        sender_org_id=current_agent.org,
+        payload=envelope.payload,
+        agent_id=current_agent.agent_id,
+        session_id=session_id,
+    )
+    if not policy_decision.allowed:
+        await log_event(db, "broker.message_send", "denied",
+                        agent_id=current_agent.agent_id, session_id=session_id,
+                        org_id=current_agent.org,
+                        details={"reason": policy_decision.reason,
+                                 "policy_id": policy_decision.policy_id})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"Message policy: {policy_decision.reason}")
 
     _log.info("✔ message accepted  (%s → %s)", current_agent.org, session.target_org_id)
 
@@ -472,6 +505,7 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
     """
     await websocket.accept()
     agent_id: str | None = None
+    agent_org: str | None = None
 
     try:
         # Step 1: receive authentication message
@@ -541,12 +575,49 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
 
         # Step 3: register connection and confirm
         agent_id = agent.agent_id
-        await ws_manager.connect(agent_id, websocket)
+        agent_org = agent.org
+        try:
+            await ws_manager.connect(agent_id, websocket, org_id=agent_org)
+        except ConnectionRefusedError:
+            await websocket.send_json({"type": "auth_error", "detail": "Too many connections for this organization"})
+            await websocket.close()
+            return
         await websocket.send_json({"type": "auth_ok", "agent_id": agent_id})
 
         # Step 4: keepalive — server pushes; client can send ping
+        _WS_IDLE_TIMEOUT = 300   # 5 minutes
+        _WS_MSG_LIMIT = 30       # max messages per window
+        _WS_MSG_WINDOW = 60      # window in seconds
+        _msg_times: list[float] = []
+
         while True:
-            msg = await websocket.receive_json()
+            # Check token expiry
+            if _time.time() > agent.exp:
+                _log.info("Token expired during WebSocket session for agent %s", agent_id)
+                await websocket.send_json({"type": "auth_error", "detail": "Token expired"})
+                await websocket.close(code=1000, reason="Token expired")
+                break
+
+            # Receive with idle timeout
+            try:
+                msg = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=_WS_IDLE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                _log.info("WebSocket idle timeout for agent %s", agent_id)
+                await websocket.close(code=1000, reason="Idle timeout")
+                break
+
+            # Rate limit incoming messages
+            now = _time.monotonic()
+            _msg_times = [t for t in _msg_times if t > now - _WS_MSG_WINDOW]
+            if len(_msg_times) >= _WS_MSG_LIMIT:
+                _log.warning("WebSocket rate limit exceeded for agent %s", agent_id)
+                await websocket.close(code=1008, reason="Rate limit exceeded")
+                break
+            _msg_times.append(now)
+
             if msg.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
 
@@ -554,4 +625,4 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
         pass
     finally:
         if agent_id:
-            await ws_manager.disconnect(agent_id)
+            await ws_manager.disconnect(agent_id, org_id=agent_org)

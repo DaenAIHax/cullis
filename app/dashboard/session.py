@@ -43,9 +43,20 @@ class DashboardSession:
 _NO_SESSION = DashboardSession(role="none", org_id=None, csrf_token="", logged_in=False)
 
 
+_auto_key: str = ""
+
+
 def _get_secret() -> str:
+    """Return a dedicated dashboard signing key, separate from admin_secret."""
+    global _auto_key
     from app.config import get_settings
-    return get_settings().admin_secret
+    key = get_settings().dashboard_signing_key
+    if key:
+        return key
+    # Auto-generate a per-process key if none configured
+    if not _auto_key:
+        _auto_key = os.urandom(32).hex()
+    return _auto_key
 
 
 def _sign(payload: str) -> str:

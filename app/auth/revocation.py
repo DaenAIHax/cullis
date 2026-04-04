@@ -1,11 +1,11 @@
 """
-Certificate revocation — blocco di certificati x509 compromessi.
+Certificate revocation — blocking compromised x509 certificates.
 
-Un certificato revocato viene rifiutato al momento dell'autenticazione,
-prima della verifica della firma JWT.
+A revoked certificate is rejected during authentication, before JWT
+signature verification.
 
-Lazy cleanup: i record con cert_not_after < now vengono rimossi ad ogni
-inserimento, analogamente alla JTI blacklist.
+Lazy cleanup: records with cert_not_after < now are removed on every
+insert, similar to the JTI blacklist.
 """
 from datetime import datetime, timezone
 
@@ -30,8 +30,8 @@ class RevokedCert(Base):
 
 async def check_cert_not_revoked(db: AsyncSession, serial_hex: str) -> None:
     """
-    Verifica che il certificato non sia stato revocato.
-    Solleva HTTPException 401 se presente in revoked_certs.
+    Verify that the certificate has not been revoked.
+    Raises HTTPException 401 if present in revoked_certs.
     """
     result = await db.execute(
         select(RevokedCert).where(RevokedCert.serial_hex == serial_hex)
@@ -53,23 +53,18 @@ async def revoke_cert(
     reason: str | None = None,
 ) -> RevokedCert:
     """
-    Registra un certificato come revocato.
-    Esegue lazy cleanup dei record con cert già scaduti.
-    Solleva HTTPException 409 se il serial è già revocato.
+    Register a certificate as revoked.
+    Uses atomic INSERT ... ON CONFLICT to avoid TOCTOU race conditions:
+    two concurrent revocation requests for the same serial cannot both succeed.
+    Performs lazy cleanup of records with expired certs.
+    Raises HTTPException 409 if the serial is already revoked.
     """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
     now = datetime.now(timezone.utc)
 
-    # Controlla doppia revoca
-    result = await db.execute(
-        select(RevokedCert).where(RevokedCert.serial_hex == serial_hex)
-    )
-    if result.scalar_one_or_none() is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Certificate already revoked",
-        )
-
-    record = RevokedCert(
+    values = dict(
         serial_hex=serial_hex,
         org_id=org_id,
         revoked_at=now,
@@ -78,15 +73,36 @@ async def revoke_cert(
         cert_not_after=cert_not_after,
         agent_id=agent_id,
     )
-    db.add(record)
 
-    # Lazy cleanup: rimuove cert già scaduti (non più pericolosi)
+    dialect_name = db.bind.dialect.name if db.bind else "unknown"
+
+    if dialect_name == "postgresql":
+        stmt = pg_insert(RevokedCert).values(**values)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["serial_hex"])
+    else:
+        stmt = sqlite_insert(RevokedCert).values(**values)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["serial_hex"])
+
+    result = await db.execute(stmt)
+
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Certificate already revoked",
+        )
+
+    # Lazy cleanup: remove expired certs (no longer a threat)
     await db.execute(
         delete(RevokedCert).where(RevokedCert.cert_not_after < now)
     )
 
     await db.commit()
-    await db.refresh(record)
+
+    # Fetch the inserted record to return
+    fetch_result = await db.execute(
+        select(RevokedCert).where(RevokedCert.serial_hex == serial_hex)
+    )
+    record = fetch_result.scalar_one()
     return record
 
 
@@ -94,7 +110,7 @@ async def list_revoked_certs(
     db: AsyncSession,
     org_id: str | None = None,
 ) -> list[RevokedCert]:
-    """Restituisce tutti i certificati revocati, opzionalmente filtrati per org."""
+    """Return all revoked certificates, optionally filtered by org."""
     query = select(RevokedCert)
     if org_id:
         query = query.where(RevokedCert.org_id == org_id)

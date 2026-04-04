@@ -16,8 +16,8 @@ import time as _time
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,6 +122,26 @@ async def _verify_client_assertion_inner(assertion, db, _span, _t0):
         except Exception as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=f"Chain verification failed: {exc}")
 
+    # ── 5b. Enforce minimum RSA key size (2048 bits) ──────────────────────
+    agent_pub_key = agent_cert.public_key()
+    if isinstance(agent_pub_key, rsa.RSAPublicKey):
+        if agent_pub_key.key_size < 2048:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                detail=f"Agent RSA key too small ({agent_pub_key.key_size} bits) — minimum 2048 required",
+            )
+
+    # ── 5c. Verify Extended Key Usage includes clientAuth (if EKU present) ──
+    try:
+        eku_ext = agent_cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage)
+        if ExtendedKeyUsageOID.CLIENT_AUTH not in eku_ext.value:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                detail="Agent certificate EKU does not include clientAuth (1.3.6.1.5.5.7.3.2)",
+            )
+    except x509.ExtensionNotFound:
+        pass  # No EKU extension — acceptable for backwards compatibility
+
     # ── 6. Verify cert temporal validity ─────────────────────────────────────
     now = datetime.datetime.now(datetime.timezone.utc)
     try:
@@ -187,12 +207,12 @@ async def _verify_client_assertion_inner(assertion, db, _span, _t0):
         if expected_spiffe not in spiffe_sans:
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
-                detail="SPIFFE ID nel SAN non corrisponde all'agente registrato",
+                detail="SPIFFE ID in SAN does not match the registered agent",
             )
     elif settings.require_spiffe_san:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
-            detail="Certificato privo di SPIFFE SAN URI (require_spiffe_san=true)",
+            detail="Certificate missing SPIFFE SAN URI (require_spiffe_san=true)",
         )
 
     # ── 12. JTI blacklist — replay protection ────────────────────────────────

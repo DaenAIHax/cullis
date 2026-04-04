@@ -21,6 +21,9 @@ from app.broker.db_models import SessionRecord as _SR, SessionMessageRecord as _
 from app.broker.notifications import Notification as _Notification  # noqa — registra in Base.metadata
 from app.rate_limit.limiter import rate_limiter
 
+# Admin headers for endpoints that now require admin auth
+ADMIN_HEADERS = {"x-admin-secret": "change-me-in-production"}
+
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 test_engine = create_async_engine(
@@ -38,6 +41,12 @@ async def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
+
+# Override admin secret check for tests — the test admin secret is "change-me-in-production"
+# (the default from Settings). Tests that need to verify admin auth explicitly
+# pass the correct header.
+from app.registry.org_router import _require_admin as _org_require_admin
+app.dependency_overrides[_org_require_admin] = lambda: None
 
 # Patch the module-level engine and session factory so the lifespan
 # (which imports them directly) also uses SQLite instead of Postgres.

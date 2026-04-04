@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
 
     admin_secret: str = "change-me-in-production"
+    dashboard_signing_key: str = ""  # separate key for dashboard cookie HMAC; auto-generated if empty
 
     trust_domain: str = "atn.local"
     require_spiffe_san: bool = False
@@ -46,6 +47,7 @@ class Settings(BaseSettings):
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     otel_traces_sampler_arg: float = 1.0
     otel_metrics_export_interval_ms: int = 10000
+    otel_exporter_insecure: bool = False
 
     # KMS backend — "local" (filesystem) or "vault" (HashiCorp Vault KV v2)
     kms_backend: str = "local"

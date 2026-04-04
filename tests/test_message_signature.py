@@ -27,6 +27,7 @@ from tests.cert_factory import (
     make_assertion, get_org_ca_pem, sign_message, get_agent_key_pem, make_agent_cert,
     get_agent_pubkey_pem, make_encrypted_envelope,
 )
+from tests.conftest import ADMIN_HEADERS
 from cryptography.hazmat.primitives import hashes, serialization
 
 pytestmark = pytest.mark.asyncio
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.asyncio
 async def _setup(client: AsyncClient, agent_id: str, org_id: str, dpop) -> str:
     """Register org + CA + agent + binding + policy; return access token."""
     secret = org_id + "-secret"
-    await client.post("/registry/orgs", json={"org_id": org_id, "display_name": org_id, "secret": secret})
+    await client.post("/registry/orgs", json={"org_id": org_id, "display_name": org_id, "secret": secret}, headers=ADMIN_HEADERS)
     ca_pem = get_org_ca_pem(org_id)
     await client.post(f"/registry/orgs/{org_id}/certificate",
         json={"ca_certificate": ca_pem},
@@ -47,7 +48,7 @@ async def _setup(client: AsyncClient, agent_id: str, org_id: str, dpop) -> str:
     await client.post("/registry/agents", json={
         "agent_id": agent_id, "org_id": org_id,
         "display_name": agent_id, "capabilities": ["order.read"],
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": secret})
     resp = await client.post("/registry/bindings",
         json={"org_id": org_id, "agent_id": agent_id, "scope": ["order.read"]},
         headers={"x-org-id": org_id, "x-org-secret": secret},

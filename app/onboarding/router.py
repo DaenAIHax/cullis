@@ -11,6 +11,8 @@ Flow:
 """
 from datetime import datetime, timezone, timedelta
 
+from cryptography import x509 as crypto_x509
+from cryptography.hazmat.primitives.asymmetric import rsa as rsa_types
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +37,8 @@ admin_router      = APIRouter(prefix="/admin",      tags=["admin"])
 # ── Auth helper ───────────────────────────────────────────────────────────────
 
 def _require_admin(x_admin_secret: str = Header(...)) -> None:
-    if x_admin_secret != get_settings().admin_secret:
+    import hmac
+    if not hmac.compare_digest(x_admin_secret, get_settings().admin_secret):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid admin secret")
 
 
@@ -120,6 +123,35 @@ async def join_network(
         metadata={"contact_email": body.contact_email},
         webhook_url=body.webhook_url,
     )
+    # Validate CA certificate before storing
+    try:
+        ca_cert = crypto_x509.load_pem_x509_certificate(body.ca_certificate.encode())
+        bc = ca_cert.extensions.get_extension_for_class(crypto_x509.BasicConstraints).value
+        if not bc.ca:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="Submitted certificate is not a CA (BasicConstraints CA=false)")
+        # Enforce minimum key size
+        pub_key = ca_cert.public_key()
+        if isinstance(pub_key, rsa_types.RSAPublicKey) and pub_key.key_size < 2048:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail=f"CA RSA key too small ({pub_key.key_size} bits) — minimum 2048 required")
+        # Check temporal validity
+        now = datetime.now(timezone.utc)
+        try:
+            not_after = ca_cert.not_valid_after_utc
+            not_before = ca_cert.not_valid_before_utc
+        except AttributeError:
+            not_after = ca_cert.not_valid_after.replace(tzinfo=timezone.utc)
+            not_before = ca_cert.not_valid_before.replace(tzinfo=timezone.utc)
+        if now > not_after or now < not_before:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="CA certificate is expired or not yet valid")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail=f"Invalid CA certificate: {exc}")
+
     # Set pending status and load the CA immediately
     await set_org_status(db, body.org_id, "pending")
     await update_org_ca_cert(db, body.org_id, body.ca_certificate)
@@ -203,11 +235,11 @@ async def revoke_certificate(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Revoca un certificato agente. Da quel momento in poi qualsiasi tentativo
-    di autenticazione con quel certificato restituisce 401.
+    Revoke an agent certificate. From this point on, any authentication
+    attempt with this certificate returns 401.
     """
-    # Se cert_not_after non è fornito usiamo un default conservativo (now)
-    # in modo che la lazy cleanup non lo rimuova subito
+    # If cert_not_after is not provided, use a conservative default (now + 1y)
+    # so that lazy cleanup does not remove it immediately
     cert_not_after = body.cert_not_after or (datetime.now(timezone.utc) + timedelta(days=365))
 
     record = await revoke_cert(
@@ -245,6 +277,6 @@ async def get_revoked_certs(
     org_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Elenca i certificati revocati, opzionalmente filtrati per org."""
+    """List revoked certificates, optionally filtered by org."""
     records = await list_revoked_certs(db, org_id=org_id)
     return [RevokedCertView.model_validate(r) for r in records]

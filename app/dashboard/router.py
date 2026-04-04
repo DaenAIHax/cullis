@@ -57,13 +57,18 @@ async def login_page(request: Request):
 
 @router.post("/login")
 async def login_submit(request: Request, db: AsyncSession = Depends(get_db)):
+    from app.rate_limit.limiter import rate_limiter
+    client_ip = request.client.host if request.client else "unknown"
+    await rate_limiter.check(client_ip, "dashboard.login")
+
     form = await request.form()
     login_type = form.get("login_type", "")
 
     if login_type == "admin":
+        import hmac as _hmac
         from app.config import get_settings
         secret = form.get("admin_secret", "")
-        if secret != get_settings().admin_secret:
+        if not _hmac.compare_digest(secret, get_settings().admin_secret):
             return templates.TemplateResponse("login.html", {
                 "request": request, "error": "Invalid admin secret.",
             })
@@ -111,8 +116,10 @@ def _ctx(request: Request, session: DashboardSession, **kwargs) -> dict:
     """Build template context with session info and CSRF token."""
     from app.config import get_settings
     _s = get_settings()
-    jaeger_host = _s.otel_exporter_otlp_endpoint.replace(":4317", "").replace("http://jaeger", "http://localhost")
-    jaeger_url = f"{jaeger_host}:16686"
+    _parsed = urlparse(_s.otel_exporter_otlp_endpoint or "http://localhost:4317")
+    _jaeger_host = _parsed.hostname or "localhost"
+    _jaeger_scheme = _parsed.scheme or "http"
+    jaeger_url = f"{_jaeger_scheme}://{_jaeger_host}:16686"
     return {"request": request, "session": session, "csrf_token": session.csrf_token,
             "jaeger_url": jaeger_url, **kwargs}
 
@@ -359,6 +366,7 @@ async def audit_log(
         query = query.where(AuditLog.org_id == session.org_id)
 
     if q:
+        q = q[:100]  # Limit search term length to prevent expensive LIKE queries
         pattern = f"%{q}%"
         query = query.where(or_(
             AuditLog.event_type.ilike(pattern),
@@ -768,7 +776,7 @@ async def cert_rotate_submit(request: Request, agent_id: str, db: AsyncSession =
     if not cn_attrs or cn_attrs[0].value != agent_id:
         return templates.TemplateResponse("cert_rotate.html",
             _ctx(request, session, active="agents", agent=agent,
-                 error=f"Certificate CN '{cn_attrs[0].value if cn_attrs else '?'}' does not match agent '{agent_id}'.",
+                 error=f"Certificate CN does not match agent '{agent_id}'.",
                  success=None))
 
     # Verify signed by org CA
@@ -788,10 +796,10 @@ async def cert_rotate_submit(request: Request, agent_id: str, db: AsyncSession =
         return templates.TemplateResponse("cert_rotate.html",
             _ctx(request, session, active="agents", agent=agent,
                  error="Certificate is not signed by the organization CA.", success=None))
-    except Exception as exc:
+    except Exception:
         return templates.TemplateResponse("cert_rotate.html",
             _ctx(request, session, active="agents", agent=agent,
-                 error=f"Certificate verification failed: {exc}", success=None))
+                 error="Certificate verification failed. Please check the certificate is valid and signed by the organization CA.", success=None))
 
     old_thumbprint = agent.cert_thumbprint
     new_thumbprint = await rotate_agent_cert(db, agent_id, cert_pem)

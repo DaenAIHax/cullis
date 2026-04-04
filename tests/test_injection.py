@@ -152,8 +152,8 @@ class TestLLMJudge:
         assert not result.blocked
         detector._client.messages.create.assert_not_called()
 
-    def test_no_api_key_fails_open(self):
-        # Without API key the judge is unavailable → let through (fail open)
+    def test_no_api_key_fails_closed(self):
+        # Without API key the judge is unavailable → block suspicious (fail closed)
         detector = InjectionDetector()
         detector._client = None
         with patch("app.injection.detector.get_settings") as mock_settings:
@@ -162,7 +162,8 @@ class TestLLMJudge:
             mock_settings.return_value.injection_llm_confidence_threshold = 0.7
             with patch.dict("os.environ", {}, clear=True):
                 result = detector.check({"msg": "a" * 400})
-        assert not result.blocked
+        assert result.blocked
+        assert result.source == "fail_closed"
 
 
 # Nota: i test di integrazione broker (test_injection_blocked_via_endpoint,

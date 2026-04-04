@@ -91,12 +91,21 @@ class InjectionDetector:
         if not is_suspicious(payload):
             return InjectionResult(blocked=False, reason=None, source="pass")
 
+        settings = get_settings()
+        if not settings.injection_llm_judge_enabled:
+            # LLM judge explicitly disabled — allow through (operator decision)
+            logger.info("LLM judge disabled via config — suspicious payload allowed through")
+            return InjectionResult(blocked=False, reason=None, source="pass")
+
         client = self._get_client()
         if client is None:
-            # LLM judge unavailable — fail open but log
-            logger.warning("LLM judge unavailable, suspicious payload allowed through: %s",
-                           json.dumps(payload)[:200])
-            return InjectionResult(blocked=False, reason=None, source="pass")
+            # LLM judge enabled but unavailable (no API key) — fail closed
+            logger.warning("LLM judge unavailable — blocking suspicious payload (fail-closed)")
+            return InjectionResult(
+                blocked=True,
+                reason="Suspicious payload blocked: injection judge unavailable (fail-closed)",
+                source="fail_closed",
+            )
 
         try:
             response = client.messages.create(
@@ -123,12 +132,22 @@ class InjectionDetector:
                     source="llm_judge",
                 )
 
-        except (json.JSONDecodeError, KeyError, IndexError) as exc:
-            logger.error("LLM judge malformed response: %s", exc)
-        except anthropic.APIError as exc:
-            logger.error("LLM judge API error: %s", exc)
+            return InjectionResult(blocked=False, reason=None, source="llm_judge")
 
-        return InjectionResult(blocked=False, reason=None, source="pass")
+        except (json.JSONDecodeError, KeyError, IndexError) as exc:
+            logger.error("LLM judge malformed response — blocking (fail-closed): %s", exc)
+            return InjectionResult(
+                blocked=True,
+                reason="Suspicious payload blocked: injection judge returned malformed response (fail-closed)",
+                source="fail_closed",
+            )
+        except anthropic.APIError as exc:
+            logger.error("LLM judge API error — blocking (fail-closed): %s", exc)
+            return InjectionResult(
+                blocked=True,
+                reason="Suspicious payload blocked: injection judge API error (fail-closed)",
+                source="fail_closed",
+            )
 
 
 # Global instance

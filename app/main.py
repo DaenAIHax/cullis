@@ -76,10 +76,18 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.error("Unhandled error on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
+_cors_origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
+_cors_allow_credentials = "*" not in _cors_origins
+if not _cors_allow_credentials:
+    logger.warning(
+        "CORS allow_origins='*' — credentials disabled. "
+        "Set ALLOWED_ORIGINS to specific origins for production."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins.split(","),
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "DPoP"],
 )
@@ -92,6 +100,8 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Cache-Control"] = "no-store"
     # DPoP-Nonce on all API responses (RFC 9449 §8)
     if not request.url.path.startswith("/dashboard"):
         from app.auth.dpop import get_current_dpop_nonce
@@ -99,7 +109,7 @@ async def security_headers(request: Request, call_next):
     if request.url.path.startswith("/dashboard"):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; "
+            "script-src 'self' https://cdn.tailwindcss.com https://unpkg.com; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "connect-src 'self'; "

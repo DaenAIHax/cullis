@@ -26,31 +26,40 @@ async def check_and_consume_jti(db: AsyncSession, jti: str, expires_at: datetime
     """
     Verify that the JTI has not already been used, then register it.
 
-    - If the JTI is already present (even expired) → 401 replay attack.
-    - If not present → insert the record and clean up expired JTIs.
+    Uses an atomic INSERT … ON CONFLICT DO NOTHING to avoid TOCTOU race
+    conditions: two concurrent requests with the same JTI cannot both succeed.
 
     Raises HTTPException 401 if a replay is detected.
     """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from sqlalchemy import inspect as sa_inspect
+
     now = datetime.now(timezone.utc)
 
-    # Check presence (including expired — better to be conservative)
-    result = await db.execute(
-        select(JtiBlacklist).where(JtiBlacklist.jti == jti)
-    )
-    existing = result.scalar_one_or_none()
+    # Atomic upsert: try to insert — if the JTI already exists the insert
+    # is silently skipped (rowcount == 0) and we reject the request.
+    dialect_name = db.bind.dialect.name if db.bind else "unknown"
 
-    if existing is not None:
+    if dialect_name == "postgresql":
+        stmt = pg_insert(JtiBlacklist).values(jti=jti, expires_at=expires_at)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["jti"])
+    else:
+        # SQLite (used in tests) also supports INSERT OR IGNORE
+        stmt = sqlite_insert(JtiBlacklist).values(jti=jti, expires_at=expires_at)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["jti"])
+
+    result = await db.execute(stmt)
+
+    if result.rowcount == 0:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="client_assertion already used (replay attack detected)",
         )
 
-    # Register the JTI
-    db.add(JtiBlacklist(jti=jti, expires_at=expires_at))
-
-    # Lazy cleanup: remove all expired JTIs
+    # Lazy cleanup: remove all expired JTIs (including boundary)
     await db.execute(
-        delete(JtiBlacklist).where(JtiBlacklist.expires_at < now)
+        delete(JtiBlacklist).where(JtiBlacklist.expires_at <= now)
     )
 
     await db.commit()

@@ -21,10 +21,11 @@ router = APIRouter(prefix="/policy", tags=["policy"])
 async def get_admin(
     x_admin_secret: Annotated[str, Header()],
 ) -> None:
-    if x_admin_secret != get_settings().admin_secret:
+    import hmac
+    if not hmac.compare_digest(x_admin_secret, get_settings().admin_secret):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin secret non valido",
+            detail="Invalid admin secret",
         )
 
 

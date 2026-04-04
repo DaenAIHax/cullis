@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class InboxMessage(BaseModel):
@@ -28,6 +28,14 @@ class SessionRequest(BaseModel):
     )
     context: dict = Field(default_factory=dict, description="Optional metadata about the request")
 
+    @field_validator("context")
+    @classmethod
+    def limit_context_size(cls, v: dict) -> dict:
+        import json
+        if len(json.dumps(v, default=str)) > 16384:
+            raise ValueError("context exceeds 16 KB limit")
+        return v
+
 
 class SessionResponse(BaseModel):
     session_id: str
@@ -47,6 +55,15 @@ class MessageEnvelope(BaseModel):
     session_id: str
     sender_agent_id: str
     payload: dict
-    nonce: str = Field(..., description="UUID to prevent message-level replay attacks")
+    nonce: str = Field(..., max_length=128, description="UUID to prevent message-level replay attacks")
     timestamp: int = Field(..., description="Unix timestamp (seconds UTC) of when the message was signed")
-    signature: str = Field(..., description="RSA-PSS-SHA256 signature of the canonical message")
+    signature: str = Field(..., max_length=2048, description="RSA-PSS-SHA256 signature of the canonical message")
+
+    @field_validator("payload")
+    @classmethod
+    def limit_payload_size(cls, v: dict) -> dict:
+        import json
+        serialized = json.dumps(v, default=str)
+        if len(serialized) > 1_048_576:  # 1 MB
+            raise ValueError("payload exceeds 1 MB limit")
+        return v

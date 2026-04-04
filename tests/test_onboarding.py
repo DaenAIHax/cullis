@@ -42,7 +42,7 @@ async def test_pending_org_cannot_login(client: AsyncClient, dpop):
     await client.post("/registry/agents", json={
         "agent_id": "join-blocked::agent", "org_id": "join-blocked",
         "display_name": "test", "capabilities": [],
-    })
+    }, headers={"x-org-id": "join-blocked", "x-org-secret": "join-blocked-secret"})
     assertion = make_assertion("join-blocked::agent", "join-blocked")
     resp = await client.post(
         "/auth/token",
@@ -77,7 +77,7 @@ async def test_approve_allows_login(client: AsyncClient, dpop):
     await client.post("/registry/agents", json={
         "agent_id": agent_id, "org_id": org_id,
         "display_name": agent_id, "capabilities": ["order.read"],
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
 
     # Approva
     resp = await client.post(f"/admin/orgs/{org_id}/approve",

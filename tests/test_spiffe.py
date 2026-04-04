@@ -18,6 +18,7 @@ from app.spiffe import (
     validate_spiffe_id,
 )
 from tests.cert_factory import make_agent_cert, make_assertion, get_org_ca_pem
+from tests.conftest import ADMIN_HEADERS
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test mapping bidirezionale
@@ -151,7 +152,7 @@ async def _register_agent_with_spiffe(
 
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
     ca_pem = get_org_ca_pem(org_id)
     await client.post(f"/registry/orgs/{org_id}/certificate",
         json={"ca_certificate": ca_pem},
@@ -162,7 +163,7 @@ async def _register_agent_with_spiffe(
         "org_id": org_id,
         "display_name": f"Test Agent {agent_id}",
         "capabilities": ["test.read"],
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
     resp = await client.post("/registry/bindings",
         json={"org_id": org_id, "agent_id": agent_id, "scope": ["test.read"]},
         headers={"x-org-id": org_id, "x-org-secret": org_secret},
@@ -277,7 +278,7 @@ async def test_autenticazione_fallisce_con_san_sbagliato(client: AsyncClient, dp
     org_secret = org_id + "-secret"
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
     ca_pem = get_org_ca_pem(org_id)
     await client.post(f"/registry/orgs/{org_id}/certificate",
         json={"ca_certificate": ca_pem},
@@ -288,7 +289,7 @@ async def test_autenticazione_fallisce_con_san_sbagliato(client: AsyncClient, dp
         "org_id": org_id,
         "display_name": f"Test Agent {agent_id}",
         "capabilities": ["test.read"],
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
     resp = await client.post("/registry/bindings",
         json={"org_id": org_id, "agent_id": agent_id, "scope": ["test.read"]},
         headers={"x-org-id": org_id, "x-org-secret": org_secret},

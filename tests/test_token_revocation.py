@@ -13,6 +13,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.cert_factory import make_assertion, get_org_ca_pem
+from tests.conftest import ADMIN_HEADERS
 
 pytestmark = pytest.mark.asyncio
 
@@ -23,7 +24,7 @@ async def _setup_agent(client: AsyncClient, agent_id: str, org_id: str, dpop) ->
 
     await client.post("/registry/orgs", json={
         "org_id": org_id, "display_name": org_id, "secret": org_secret,
-    })
+    }, headers=ADMIN_HEADERS)
 
     ca_pem = get_org_ca_pem(org_id)
     await client.post(
@@ -37,7 +38,7 @@ async def _setup_agent(client: AsyncClient, agent_id: str, org_id: str, dpop) ->
         "org_id": org_id,
         "display_name": f"Test {agent_id}",
         "capabilities": ["test.read"],
-    })
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
 
     resp = await client.post(
         "/registry/bindings",

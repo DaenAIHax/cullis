@@ -5,6 +5,7 @@ Cover the most common and direct variants of prompt injection.
 Not exhaustive — the LLM judge handles ambiguous cases.
 """
 import re
+import unicodedata
 
 # Each pattern is (name, compiled regex)
 # The flags re.IGNORECASE and re.UNICODE are applied to all.
@@ -40,7 +41,10 @@ def fast_check(text: str) -> tuple[bool, str | None]:
     """
     Check the text against all patterns.
     Returns (True, pattern_name) on match, (False, None) otherwise.
+    Text is NFKD-normalized first to prevent unicode bypass attacks
+    (e.g. zero-width spaces, fullwidth characters).
     """
+    text = unicodedata.normalize("NFKD", text)
     for name, pattern in PATTERNS:
         if pattern.search(text):
             return True, name

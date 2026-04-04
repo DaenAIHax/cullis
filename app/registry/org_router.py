@@ -1,19 +1,35 @@
+import hmac
 from datetime import datetime
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.database import get_db
 from app.registry.org_store import register_org, get_org_by_id, list_orgs, update_org_ca_cert
 
 router = APIRouter(prefix="/registry", tags=["registry"])
 
 
+def _require_admin(x_admin_secret: str = Header(...)) -> None:
+    """Validate admin secret with timing-safe comparison."""
+    if not hmac.compare_digest(x_admin_secret, get_settings().admin_secret):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid admin secret")
+
+
 class OrgRegisterRequest(BaseModel):
-    org_id: str
-    display_name: str
+    org_id: str = Field(..., max_length=128)
+    display_name: str = Field(..., max_length=256)
     secret: str
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def limit_metadata_size(cls, v: dict) -> dict:
+        import json
+        if len(json.dumps(v, default=str)) > 16384:
+            raise ValueError("metadata exceeds 16 KB limit")
+        return v
 
 
 class OrgResponse(BaseModel):
@@ -25,12 +41,13 @@ class OrgResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@router.post("/orgs", response_model=OrgResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/orgs", response_model=OrgResponse, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(_require_admin)])
 async def register_organization(
     body: OrgRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Register a new organization in the network."""
+    """Register a new organization in the network. Requires admin secret."""
     existing = await get_org_by_id(db, body.org_id)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="org_id already registered")
@@ -44,9 +61,10 @@ async def register_organization(
     )
 
 
-@router.get("/orgs", response_model=list[OrgResponse])
+@router.get("/orgs", response_model=list[OrgResponse],
+            dependencies=[Depends(_require_admin)])
 async def list_organizations(db: AsyncSession = Depends(get_db)):
-    """List active organizations."""
+    """List active organizations. Requires admin secret."""
     orgs = await list_orgs(db)
     return [
         OrgResponse(
@@ -94,6 +112,48 @@ async def upload_org_ca_certificate(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
     if not org.verify_secret(x_org_secret):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid org credentials")
+
+    # Validate the CA certificate before accepting it
+    from cryptography import x509 as crypto_x509
+    from cryptography.hazmat.primitives.asymmetric import rsa as rsa_types
+    try:
+        ca_cert = crypto_x509.load_pem_x509_certificate(body.ca_certificate.encode())
+        bc = ca_cert.extensions.get_extension_for_class(crypto_x509.BasicConstraints).value
+        if not bc.ca:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="Certificate is not a CA (BasicConstraints CA=false)")
+        pub_key = ca_cert.public_key()
+        if isinstance(pub_key, rsa_types.RSAPublicKey) and pub_key.key_size < 2048:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail=f"CA RSA key too small ({pub_key.key_size} bits) — minimum 2048")
+        now_utc = datetime.now()
+        try:
+            not_after = ca_cert.not_valid_after_utc
+            not_before = ca_cert.not_valid_before_utc
+        except AttributeError:
+            import datetime as _dt
+            not_after = ca_cert.not_valid_after.replace(tzinfo=_dt.timezone.utc)
+            not_before = ca_cert.not_valid_before.replace(tzinfo=_dt.timezone.utc)
+        import datetime as _dt
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+        if now_utc > not_after or now_utc < not_before:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="CA certificate is expired or not yet valid")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail=f"Invalid CA certificate: {exc}")
+
+    # If replacing an existing CA, invalidate all agent cert thumbprints for this org
+    # so they must re-authenticate with certs signed by the new CA
+    if org.ca_certificate:
+        from app.registry.store import list_agents, invalidate_agent_tokens
+        agents = await list_agents(db, org_id=org_id)
+        for agent in agents:
+            agent.cert_thumbprint = None
+            agent.cert_pem = None
+            await invalidate_agent_tokens(db, agent.agent_id)
 
     updated = await update_org_ca_cert(db, org_id, body.ca_certificate)
     return {"org_id": updated.org_id, "ca_certificate_loaded": True}
