@@ -28,6 +28,11 @@ revoke.py
 generate_certs.py
 generate_demo_certs.py
 agents/*.env
+agents/buyer.py
+agents/manufacturer.py
+agents/client.py
+agents/mock_pdp.py
+agents/DEMO.md
 run.sh
 reset.sh
 agent.sh
