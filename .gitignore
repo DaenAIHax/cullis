@@ -32,4 +32,5 @@ run.sh
 reset.sh
 agent.sh
 CLAUDE.md
+CHANGELOG.md
 .claude/
