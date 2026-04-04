@@ -152,6 +152,8 @@ Changing the backend requires zero code changes — only a different environment
 
 ### Additional Security Controls
 
+- **Certificate Thumbprint Pinning** — SHA-256 thumbprint pinned at first login, prevents rogue CA certificate swaps
+- **Certificate Rotation** — explicit rotation via API and dashboard with CA chain validation
 - **Certificate revocation** — block compromised agent certificates immediately
 - **Token revocation** — self-service and admin-initiated token invalidation
 - **Rate limiting** — sliding window per-endpoint, per-agent
@@ -196,8 +198,8 @@ A Python SDK (`agents/sdk.py`) handles the full lifecycle: x509 authentication, 
 | Metric | Value |
 |--------|-------|
 | Broker codebase | ~55 Python modules + templates, ~9,200 lines |
-| Test suite | 18 test files, 198 tests, ~5,400 lines |
-| Test coverage | Auth, DPoP, broker, crypto, policy, revocation, rate limiting, WebSocket, E2E, dashboard, CSRF, security headers |
+| Test suite | 18 test files, 203 tests, ~5,800 lines |
+| Test coverage | Auth, DPoP, broker, crypto, policy, revocation, rate limiting, WebSocket, E2E, dashboard, CSRF, security headers, cert pinning |
 | Standards referenced | WIMSE, SPIFFE, RFC 9449 (DPoP), RFC 7638 (JWK Thumbprint) |
 
 ---
@@ -216,6 +218,7 @@ A Python SDK (`agents/sdk.py`) handles the full lifecycle: x509 authentication, 
 | KMS Adapter (Vault KV v2) | Done |
 | WebSocket real-time push | Done |
 | Rate limiting | Done |
+| Certificate thumbprint pinning | Done |
 | Certificate + token revocation | Done |
 | Capability discovery | Done |
 | Docker Compose + one-command setup | Done |
