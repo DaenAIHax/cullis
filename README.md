@@ -22,16 +22,41 @@ ATN acts as a **Credential Broker** that physically separates two concerns:
 
 This means the network operator has **zero visibility** into organizational business logic, and organizations have **zero dependency** on a centralized policy engine.
 
-```
-                              Task Request Envelope
-Org A Agent  ──────────>  [ Credential Broker (CDP) ]  ──────────>  Org B Agent
-                                (Trust Router)
-                                     |   |
-                   [ Org A PDP Webhook ] [ Org B PDP Webhook ]
-                     (Org A IT system)    (Org B IT system)
+```mermaid
+flowchart TD
+    A["🏢 Org A Agent"] -- "Task Request Envelope\n(x509 + SPIFFE signed)" --> B["🔐 Credential Broker\n(Trust Router / CDP)"]
+    B -- "Short-lived DPoP-bound\ncredentials" --> C["🏭 Org B Agent"]
+    B -- "Policy query" --> D["Org A PDP Webhook\n(Org A IT systems)"]
+    B -- "Policy query" --> E["Org B PDP Webhook\n(Org B IT systems)"]
+    D -- "allow / deny" --> B
+    E -- "allow / deny" --> B
 ```
 
 **Session Flow:**
+
+```mermaid
+sequenceDiagram
+    participant A as Org A Agent
+    participant B as Credential Broker
+    participant PA as Org A PDP
+    participant PB as Org B PDP
+    participant C as Org B Agent
+
+    A->>B: 1. Session request + signed Task Request Envelope
+    B->>B: 2. Verify x509 identity + SPIFFE SAN
+    par Policy check
+        B->>PA: 3. Policy query (request context)
+        B->>PB: 3. Policy query (request context)
+    end
+    PA-->>B: allow / deny
+    PB-->>B: allow / deny
+    Note over B: Proceed only if BOTH return allow
+    B->>A: 4. Issue short-lived DPoP-bound credentials
+    B->>C: 4. Issue short-lived DPoP-bound credentials
+    B->>B: 5. Record decisions in immutable audit ledger
+```
+
+**Session Flow (summary):**
 1. Agent A submits a session request with a signed Task Request Envelope.
 2. The Broker verifies the cryptographic workload identity (x509 + SPIFFE).
 3. The Broker calls **both** organizations' PDP webhooks with the request context.
