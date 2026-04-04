@@ -14,3 +14,17 @@ __pycache__/
 
 # Test cache
 .pytest_cache/
+
+# Local-only: notes, drafts, demo scripts, CLI tools
+miglioramenti/
+demo/
+drafts/
+admin.py
+bootstrap.py
+join.py
+join_agent.py
+policy.py
+revoke.py
+generate_certs.py
+generate_demo_certs.py
+agents/*.env
