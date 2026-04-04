@@ -232,6 +232,11 @@ A Python SDK (`agents/sdk.py`) handles the full lifecycle: x509 authentication, 
 | OpenTelemetry observability | Done |
 | DPoP Server Nonce (RFC 9449 Section 8) | Done |
 | JWKS key rotation endpoint | Planned |
+| E2E crypto hardening (ciphertext limits, RSA key size enforcement) | Planned |
+| JWT validation hardening (iss/aud enforcement, claims format) | Planned |
+| OPA as alternative policy engine | Planned |
+| Beckn protocol (agent-to-agent commerce) | Planned |
+| Hyperledger distributed audit ledger | Planned |
 
 ---
 
