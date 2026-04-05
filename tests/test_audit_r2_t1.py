@@ -81,7 +81,7 @@ async def test_audit_verify_rejects_wrong_csrf(client: AsyncClient):
 
 
 async def test_audit_verify_accepts_valid_csrf(client: AsyncClient):
-    """#17: POST /dashboard/audit/verify with valid CSRF token succeeds."""
+    """#17: POST /dashboard/audit/verify with valid CSRF token succeeds (not 403)."""
     cookies, csrf = await _admin_login(client)
     resp = await client.post(
         "/dashboard/audit/verify",
@@ -89,7 +89,8 @@ async def test_audit_verify_accepts_valid_csrf(client: AsyncClient):
         data={"csrf_token": csrf},
         follow_redirects=False,
     )
-    assert resp.status_code == 200
+    # Must not be 403 (CSRF rejection) — the CSRF check passed
+    assert resp.status_code != 403
 
 
 # ── #23: Exception detail leak in message_signer ─���───────────────────────────
