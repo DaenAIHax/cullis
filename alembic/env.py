@@ -26,8 +26,9 @@ if database_url:
 from app.db.database import Base  # noqa: E402
 from app.auth.jti_blacklist import JtiBlacklist  # noqa: E402, F401
 from app.auth.revocation import RevokedCert  # noqa: E402, F401
-from app.broker.db_models import SessionRecord, SessionMessageRecord  # noqa: E402, F401
+from app.broker.db_models import SessionRecord, SessionMessageRecord, RfqRecord, RfqResponseRecord  # noqa: E402, F401
 from app.broker.notifications import Notification  # noqa: E402, F401
+from app.auth.transaction_db import TransactionTokenRecord  # noqa: E402, F401
 from app.db.audit import AuditLog  # noqa: E402, F401
 from app.policy.store import PolicyRecord  # noqa: E402, F401
 from app.registry.binding_store import BindingRecord  # noqa: E402, F401

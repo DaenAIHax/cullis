@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}RFQ {{ rfq.rfq_id }}{% endblock %}
+{% block content %}
+<div class="max-w-6xl">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h2 class="text-2xl font-bold text-white">RFQ Detail</h2>
+            <p class="text-sm text-gray-500 mt-1 font-mono">{{ rfq.rfq_id }}</p>
+        </div>
+        <a href="/dashboard" class="px-3 py-1.5 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-md hover:bg-gray-800">Back</a>
+    </div>
+
+    {% if success %}
+    <div class="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
+        <p class="text-sm text-emerald-400">{{ success }}</p>
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+        <p class="text-sm text-red-400">{{ error }}</p>
+    </div>
+    {% endif %}
+
+    <!-- RFQ Info -->
+    <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
+        <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-4">Request Info</h3>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div>
+                <p class="text-xs text-gray-600">Initiator Agent</p>
+                <p class="text-sm text-white font-mono">{{ rfq.initiator_agent_id }}</p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-600">Initiator Org</p>
+                <p class="text-sm text-white">{{ rfq.initiator_org_id }}</p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-600">Capabilities</p>
+                <p class="text-sm text-white">{{ rfq.capabilities }}</p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-600">Matched Agents</p>
+                <p class="text-sm text-white">{{ rfq.matched_agents or 'None' }}</p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-600">Timeout</p>
+                <p class="text-sm text-white">{{ rfq.timeout_seconds }}s</p>
+            </div>
+            <div>
+                <p class="text-xs text-gray-600">Status</p>
+                {% if rfq.status == 'open' %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/10 text-yellow-400">
+                    <span class="w-1.5 h-1.5 rounded-full bg-yellow-500"></span>Open
+                </span>
+                {% elif rfq.status == 'closed' %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-500/10 text-gray-400">
+                    <span class="w-1.5 h-1.5 rounded-full bg-gray-500"></span>Closed
+                </span>
+                {% elif rfq.status == 'approved' %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Approved
+                </span>
+                {% else %}
+                <span class="text-sm text-white">{{ rfq.status }}</span>
+                {% endif %}
+            </div>
+            <div>
+                <p class="text-xs text-gray-600">Created At</p>
+                <p class="text-sm text-white">{{ rfq.created_at }}</p>
+            </div>
+            {% if rfq.closed_at %}
+            <div>
+                <p class="text-xs text-gray-600">Closed At</p>
+                <p class="text-sm text-white">{{ rfq.closed_at }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Quotes -->
+    <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-800">
+            <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider">Quotes ({{ responses | length }})</h3>
+        </div>
+
+        {% if responses %}
+        <table class="w-full">
+            <thead>
+                <tr class="border-b border-gray-800">
+                    <th class="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Responder Agent</th>
+                    <th class="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Org</th>
+                    <th class="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payload</th>
+                    <th class="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Received</th>
+                    <th class="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800">
+                {% for resp in responses %}
+                <tr class="hover:bg-gray-800/50">
+                    <td class="px-5 py-4">
+                        <p class="text-sm text-white font-mono">{{ resp.responder_agent_id }}</p>
+                    </td>
+                    <td class="px-5 py-4">
+                        <p class="text-sm text-gray-400">{{ resp.responder_org_id }}</p>
+                    </td>
+                    <td class="px-5 py-4">
+                        <pre class="text-xs text-gray-300 bg-gray-800 rounded p-2 max-w-md overflow-x-auto whitespace-pre-wrap">{{ resp.payload }}</pre>
+                    </td>
+                    <td class="px-5 py-4">
+                        <p class="text-sm text-gray-400">{{ resp.received_at }}</p>
+                    </td>
+                    <td class="px-5 py-4">
+                        {% if rfq.status != 'approved' %}
+                        <form method="post" action="/dashboard/rfq/{{ rfq.rfq_id }}/approve">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="response_id" value="{{ resp.id }}">
+                            <input type="hidden" name="responder_agent_id" value="{{ resp.responder_agent_id }}">
+                            <button type="submit" class="px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded">Approve</button>
+                        </form>
+                        {% else %}
+                        <span class="text-xs text-gray-600">-</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="px-5 py-8 text-center text-sm text-gray-600">No quotes received yet</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -38,8 +38,9 @@ from app.registry.binding_store import (
     BindingRecord, create_binding, approve_binding, revoke_binding, get_binding_by_org_agent,
 )
 from app.policy.store import PolicyRecord, create_policy, get_policy, deactivate_policy
-from app.broker.db_models import SessionRecord, SessionMessageRecord
+from app.broker.db_models import SessionRecord, SessionMessageRecord, RfqRecord, RfqResponseRecord
 from app.broker.ws_manager import ws_manager
+from app.auth.transaction_token import create_transaction_token, compute_payload_hash
 
 import logging
 _log = logging.getLogger("agent_trust")
@@ -749,6 +750,130 @@ async def verify_audit_chain(
     return templates.TemplateResponse("audit.html",
         _ctx(request, session, active="audit", events=event_list, query="",
              limit=_AUDIT_LIMIT, verify_result=verify_result)
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RFQ Detail & Approval
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/rfqs", response_class=HTMLResponse)
+async def rfq_list(request: Request, db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+
+    q = select(RfqRecord).order_by(RfqRecord.created_at.desc()).limit(100)
+    if not session.is_admin:
+        q = q.where(RfqRecord.initiator_org_id == session.org_id)
+    rfqs = (await db.execute(q)).scalars().all()
+
+    return templates.TemplateResponse("rfqs.html",
+        _ctx(request, session, active="rfq", rfqs=rfqs)
+    )
+
+
+@router.get("/rfq/{rfq_id}", response_class=HTMLResponse)
+async def rfq_detail(request: Request, rfq_id: str, db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+
+    rfq = (await db.execute(
+        select(RfqRecord).where(RfqRecord.rfq_id == rfq_id)
+    )).scalar_one_or_none()
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found")
+
+    if not session.is_admin and rfq.initiator_org_id != session.org_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    responses = (await db.execute(
+        select(RfqResponseRecord).where(RfqResponseRecord.rfq_id == rfq_id)
+    )).scalars().all()
+
+    return templates.TemplateResponse("rfq_detail.html",
+        _ctx(request, session, active="rfq", rfq=rfq, responses=responses,
+             success=None, error=None)
+    )
+
+
+@router.post("/rfq/{rfq_id}/approve", response_class=HTMLResponse)
+async def rfq_approve(request: Request, rfq_id: str, db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    rfq = (await db.execute(
+        select(RfqRecord).where(RfqRecord.rfq_id == rfq_id)
+    )).scalar_one_or_none()
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found")
+
+    if not session.is_admin and rfq.initiator_org_id != session.org_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    form = await request.form()
+    response_id = form.get("response_id")
+    responder_agent_id = form.get("responder_agent_id", "")
+
+    if not response_id:
+        raise HTTPException(status_code=400, detail="Missing response_id")
+
+    quote = (await db.execute(
+        select(RfqResponseRecord).where(
+            RfqResponseRecord.id == int(response_id),
+            RfqResponseRecord.rfq_id == rfq_id,
+        )
+    )).scalar_one_or_none()
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+
+    payload_hash = compute_payload_hash(quote.payload)
+    token_id, token_record = await create_transaction_token(
+        db,
+        agent_id=rfq.initiator_agent_id,
+        org_id=rfq.initiator_org_id,
+        txn_type="CREATE_ORDER",
+        resource_id=rfq_id,
+        payload_hash=payload_hash,
+        approved_by=session.org_id if not session.is_admin else "admin",
+        rfq_id=rfq_id,
+        target_agent_id=responder_agent_id,
+    )
+
+    rfq.status = "approved"
+    await db.commit()
+
+    try:
+        await ws_manager.send_to_agent(rfq.initiator_agent_id, {
+            "type": "transaction_token",
+            "token_id": token_id,
+            "rfq_id": rfq_id,
+            "txn_type": "CREATE_ORDER",
+            "target_agent_id": responder_agent_id,
+            "payload_hash": payload_hash,
+        })
+    except Exception:
+        _log.warning("Could not deliver transaction token to agent %s via WS",
+                      rfq.initiator_agent_id)
+
+    await log_event(db, "rfq.approved", "ok",
+                    agent_id=rfq.initiator_agent_id, org_id=rfq.initiator_org_id,
+                    details={"rfq_id": rfq_id, "approved_quote_id": response_id,
+                             "responder_agent_id": responder_agent_id, "token_id": token_id})
+
+    responses = (await db.execute(
+        select(RfqResponseRecord).where(RfqResponseRecord.rfq_id == rfq_id)
+    )).scalars().all()
+    await db.refresh(rfq)
+
+    return templates.TemplateResponse("rfq_detail.html",
+        _ctx(request, session, active="rfq", rfq=rfq, responses=responses,
+             success=f"Quote approved. Transaction token issued to agent {rfq.initiator_agent_id}.",
+             error=None)
     )
 
 
