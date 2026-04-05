@@ -16,7 +16,7 @@ __pycache__/
 .pytest_cache/
 
 # Local-only: notes, drafts, demo scripts, CLI tools
-miglioramenti/
+imp/
 demo/
 drafts/
 admin.py

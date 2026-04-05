@@ -16,7 +16,7 @@ import time as _time
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
@@ -131,6 +131,13 @@ async def _verify_client_assertion_inner(assertion, db, _span, _t0):
             raise HTTPException(
                 status.HTTP_401_UNAUTHORIZED,
                 detail=f"Agent RSA key too small ({agent_pub_key.key_size} bits) — minimum 2048 required",
+            )
+    elif isinstance(agent_pub_key, ec.EllipticCurvePublicKey):
+        _ALLOWED_EC_CURVES = (ec.SECP256R1, ec.SECP384R1, ec.SECP521R1)
+        if not isinstance(agent_pub_key.curve, _ALLOWED_EC_CURVES):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                detail=f"Agent EC curve '{agent_pub_key.curve.name}' not allowed — use P-256, P-384, or P-521",
             )
 
     # ── 5c. Verify Extended Key Usage includes clientAuth (if EKU present) ──

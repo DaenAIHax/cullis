@@ -11,7 +11,7 @@ import re
 import pathlib
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.responses import RedirectResponse
@@ -106,8 +106,12 @@ async def login_submit(request: Request, db: AsyncSession = Depends(get_db)):
     })
 
 
-@router.get("/logout")
+@router.post("/logout")
 async def logout(request: Request):
+    session = get_session(request)
+    if session.logged_in:
+        if not await verify_csrf(request, session):
+            raise HTTPException(status_code=403, detail="Invalid CSRF token")
     response = RedirectResponse(url="/dashboard/login", status_code=303)
     clear_session(response)
     return response
@@ -575,7 +579,8 @@ async def verify_audit_chain(
         return session
     if not session.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
-    verify_csrf(request, session)
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
     from app.db.audit import verify_chain
     is_valid, total, broken_id = await verify_chain(db)

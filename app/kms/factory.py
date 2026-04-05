@@ -48,12 +48,14 @@ def _build_provider() -> KMSProvider:
             secret_path=settings.vault_secret_path,
         )
 
-    # Default: local filesystem
-    if backend != "local":
-        _log.warning("Unknown KMS_BACKEND '%s' — falling back to local", backend)
-    _log.info("KMS backend: local  (key=%s)", settings.broker_ca_key_path)
-    from app.kms.local import LocalKMSProvider
-    return LocalKMSProvider(
-        key_path=settings.broker_ca_key_path,
-        cert_path=settings.broker_ca_cert_path,
+    if backend == "local":
+        _log.info("KMS backend: local  (key=%s)", settings.broker_ca_key_path)
+        from app.kms.local import LocalKMSProvider
+        return LocalKMSProvider(
+            key_path=settings.broker_ca_key_path,
+            cert_path=settings.broker_ca_cert_path,
+        )
+
+    raise RuntimeError(
+        f"Unknown KMS_BACKEND '{backend}'. Supported values: 'local', 'vault'."
     )

@@ -8,11 +8,15 @@ Each session has a unique ID and tracks:
 - current status
 - already used nonces (message-level replay protection)
 """
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 
 from app.broker.models import SessionStatus
+
+_log = logging.getLogger("agent_trust")
 
 
 @dataclass
@@ -86,9 +90,34 @@ class Session:
 
 
 class SessionStore:
+    _MAX_SESSIONS: int = 10_000  # hard cap — prevents unbounded memory growth
+
     def __init__(self, session_ttl_minutes: int = 60):
         self._sessions: dict[str, Session] = {}
         self._ttl = timedelta(minutes=session_ttl_minutes)
+        self._lock = asyncio.Lock()  # protects state transitions (accept/reject/close)
+
+    # ── Eviction ─────────────────────────────────────────────────────────
+
+    def _evict_stale(self) -> int:
+        """Remove expired and terminal sessions from the in-memory store.
+
+        Called automatically before creating a new session.  Returns the
+        number of sessions evicted.
+        """
+        now = datetime.now(timezone.utc)
+        to_remove = [
+            sid for sid, s in self._sessions.items()
+            if s.status in (SessionStatus.closed, SessionStatus.denied)
+            or (s.expires_at is not None and s.expires_at < now)
+        ]
+        for sid in to_remove:
+            del self._sessions[sid]
+        if to_remove:
+            _log.info("Evicted %d stale session(s) from in-memory store", len(to_remove))
+        return len(to_remove)
+
+    # ── CRUD ─────────────────────────────────────────────────────────────
 
     def create(
         self,
@@ -98,6 +127,15 @@ class SessionStore:
         target_org_id: str,
         requested_capabilities: list[str],
     ) -> Session:
+        # Evict stale sessions before checking the cap
+        self._evict_stale()
+
+        if len(self._sessions) >= self._MAX_SESSIONS:
+            raise RuntimeError(
+                f"Session store full ({self._MAX_SESSIONS} sessions) — "
+                "cannot create new session"
+            )
+
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         session = Session(
@@ -148,11 +186,12 @@ class SessionStore:
                 closed.append(s)
         return closed
 
-    def list_for_agent(self, agent_id: str) -> list[Session]:
-        return [
+    def list_for_agent(self, agent_id: str, *, limit: int = 100, offset: int = 0) -> list[Session]:
+        matches = [
             s for s in self._sessions.values()
             if s.initiator_agent_id == agent_id or s.target_agent_id == agent_id
         ]
+        return matches[offset:offset + limit]
 
 
 # Singleton per il MVP

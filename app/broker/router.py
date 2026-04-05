@@ -9,10 +9,11 @@ Flow:
 """
 import asyncio
 import logging
+import re
 import time as _time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
 _log = logging.getLogger("agent_trust")
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,18 @@ from app.registry.store import get_agent_by_id as _get_agent_by_id
 from app.registry.org_store import get_org_by_id
 
 router = APIRouter(prefix="/broker", tags=["broker"])
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _validate_session_id(session_id: str) -> None:
+    """Reject non-UUID session IDs to prevent log injection (#41)."""
+    if not _UUID_RE.match(session_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Invalid session_id format (expected UUID)")
 
 
 @router.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -125,13 +138,17 @@ async def _create_session_inner(body, current_agent, store, db, span):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail=f"Policy: {pdp_decision.reason}")
 
-    session = store.create(
-        initiator_agent_id=current_agent.agent_id,
-        initiator_org_id=current_agent.org,
-        target_agent_id=body.target_agent_id,
-        target_org_id=body.target_org_id,
-        requested_capabilities=body.requested_capabilities,
-    )
+    try:
+        session = store.create(
+            initiator_agent_id=current_agent.agent_id,
+            initiator_org_id=current_agent.org,
+            target_agent_id=body.target_agent_id,
+            target_org_id=body.target_org_id,
+            requested_capabilities=body.requested_capabilities,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=str(exc))
     await save_session(db, session)
 
     SESSION_CREATED_COUNTER.add(1, {"initiator_org": current_agent.org})
@@ -184,20 +201,23 @@ async def accept_session(
     The target accepts the pending session.
     Only the agent designated as target can accept.
     """
-    session = store.get(session_id)
-    if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    _validate_session_id(session_id)
 
-    if session.target_agent_id != current_agent.agent_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Only the target can accept this session")
+    async with store._lock:
+        session = store.get(session_id)
+        if not session:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    if session.status != SessionStatus.pending:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail=f"Session is in state '{session.status}', cannot be accepted")
+        if session.target_agent_id != current_agent.agent_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only the target can accept this session")
 
-    store.activate(session_id)
-    await save_session(db, session)
+        if session.status != SessionStatus.pending:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail=f"Session is in state '{session.status}', cannot be accepted")
+
+        store.activate(session_id)
+        await save_session(db, session)
 
     # Clear the pending notification for this session
     from app.broker.notifications import mark_acted_by_reference
@@ -229,20 +249,23 @@ async def reject_session(
     The target rejects the pending session.
     Only the agent designated as target can reject.
     """
-    session = store.get(session_id)
-    if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    _validate_session_id(session_id)
 
-    if session.target_agent_id != current_agent.agent_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Only the target can reject this session")
+    async with store._lock:
+        session = store.get(session_id)
+        if not session:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    if session.status != SessionStatus.pending:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail=f"Session is in state '{session.status}', cannot be rejected")
+        if session.target_agent_id != current_agent.agent_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only the target can reject this session")
 
-    store.reject(session_id)
-    await save_session(db, session)
+        if session.status != SessionStatus.pending:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail=f"Session is in state '{session.status}', cannot be rejected")
+
+        store.reject(session_id)
+        await save_session(db, session)
 
     from app.broker.notifications import mark_acted_by_reference
     await mark_acted_by_reference(db, "session_pending", session_id)
@@ -281,32 +304,35 @@ async def close_session(
     A participant explicitly closes an active session.
     Both agents (initiator and target) can call this endpoint.
     """
-    session = store.get(session_id)
-    if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    _validate_session_id(session_id)
 
-    participants = {session.initiator_agent_id, session.target_agent_id}
-    if current_agent.agent_id not in participants:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="You are not a participant of this session")
+    async with store._lock:
+        session = store.get(session_id)
+        if not session:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-    if session.status == SessionStatus.closed:
-        return SessionResponse(
-            session_id=session.session_id,
-            status=session.status,
-            initiator_agent_id=session.initiator_agent_id,
-            target_agent_id=session.target_agent_id,
-            created_at=session.created_at,
-            expires_at=session.expires_at,
-            message="Session already closed",
-        )
+        participants = {session.initiator_agent_id, session.target_agent_id}
+        if current_agent.agent_id not in participants:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="You are not a participant of this session")
 
-    if session.status != SessionStatus.active:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail=f"Session is in state '{session.status}', cannot be closed")
+        if session.status == SessionStatus.closed:
+            return SessionResponse(
+                session_id=session.session_id,
+                status=session.status,
+                initiator_agent_id=session.initiator_agent_id,
+                target_agent_id=session.target_agent_id,
+                created_at=session.created_at,
+                expires_at=session.expires_at,
+                message="Session already closed",
+            )
 
-    store.close(session_id)
-    await save_session(db, session)
+        if session.status != SessionStatus.active:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail=f"Session is in state '{session.status}', cannot be closed")
+
+        store.close(session_id)
+        await save_session(db, session)
 
     await log_event(db, "session_closed", "ok",
                     agent_id=current_agent.agent_id, session_id=session_id,
@@ -340,6 +366,9 @@ async def send_message(
     After saving, pushes the message via WS to the recipient if connected.
     """
     await rate_limiter.check(current_agent.agent_id, "broker.message")
+
+    # ── Validate session_id format ────────────────────────────────────────
+    _validate_session_id(session_id)
 
     # ── Validate envelope session_id matches URL path ──────────────────────
     if envelope.session_id != session_id:
@@ -437,8 +466,15 @@ async def send_message(
                                 envelope.signature, client_seq=envelope.client_seq)
 
     # Atomic DB insert — source of truth for nonce uniqueness.
-    # If the nonce already exists in the DB, undo in-memory state.
-    inserted = await save_message(db, session_id, session._messages[-1])
+    # Rollback in-memory state on ANY failure (nonce conflict or DB error).
+    try:
+        inserted = await save_message(db, session_id, session._messages[-1])
+    except Exception:
+        session._messages.pop()
+        session._next_seq -= 1
+        _log.exception("DB error saving message in session %s", session_id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to persist message")
     if not inserted:
         session._messages.pop()
         session._next_seq -= 1
@@ -490,13 +526,17 @@ async def send_message(
 @router.get("/sessions", response_model=list[SessionResponse])
 async def list_sessions(
     status: SessionStatus | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     current_agent: TokenPayload = Depends(get_current_agent),
     store: SessionStore = Depends(get_session_store),
 ):
-    """List sessions for the authenticated agent, with optional status filter."""
-    sessions = store.list_for_agent(current_agent.agent_id)
+    """List sessions for the authenticated agent, with optional status filter and pagination."""
+    sessions = store.list_for_agent(current_agent.agent_id, limit=limit + offset, offset=0)
     if status is not None:
         sessions = [s for s in sessions if s.status == status]
+    # Apply pagination after status filter
+    page = sessions[offset:offset + limit]
     return [
         SessionResponse(
             session_id=s.session_id,
@@ -506,7 +546,7 @@ async def list_sessions(
             created_at=s.created_at,
             expires_at=s.expires_at,
         )
-        for s in sessions
+        for s in page
     ]
 
 
@@ -522,9 +562,17 @@ async def poll_messages(
     The client saves the last seq and passes it to the next poll to receive only new ones.
     Remains available as a fallback when WebSocket is not in use.
     """
+    _validate_session_id(session_id)
+    await rate_limiter.check(current_agent.agent_id, "broker.poll")
+
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    # Block polling on sessions that are not active (#28)
+    if session.status != SessionStatus.active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Session is {session.status.value} — polling not available")
 
     participants = {session.initiator_agent_id, session.target_agent_id}
     if current_agent.agent_id not in participants:
@@ -567,6 +615,9 @@ async def get_notifications(
     ]
 
 
+_WS_AUTH_TIMEOUT = 10  # seconds — max time to wait for initial auth message
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     """
@@ -580,14 +631,31 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
       4. Server pusha: {"type": "new_message", ...} e {"type": "session_pending", ...}
       5. Client può mandare {"type": "ping"} → server risponde {"type": "pong"}
     """
+    # ── Origin validation (#25) — CORSMiddleware does not cover WebSocket ──
+    from app.config import get_settings
+    _ws_settings = get_settings()
+    _ws_origins = [o.strip() for o in _ws_settings.allowed_origins.split(",") if o.strip()]
+    if "*" not in _ws_origins:
+        origin = websocket.headers.get("origin", "")
+        if origin not in _ws_origins:
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
     agent_id: str | None = None
     agent_org: str | None = None
 
     try:
-        # Step 1: receive authentication message
+        # Step 1: receive authentication message (with timeout to prevent connection exhaustion)
         try:
-            auth_msg = await websocket.receive_json()
+            auth_msg = await asyncio.wait_for(
+                websocket.receive_json(),
+                timeout=_WS_AUTH_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            _log.warning("WebSocket auth timeout — closing unauthenticated connection")
+            await websocket.close(code=1008, reason="Auth timeout")
+            return
         except Exception:
             await websocket.close(code=1003)
             return

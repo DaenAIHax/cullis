@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from cryptography import x509 as crypto_x509
 from cryptography.hazmat.primitives.asymmetric import rsa as rsa_types
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -29,7 +29,7 @@ from app.registry.org_store import (
     list_pending_orgs,
     set_org_status,
 )
-from app.rate_limit.limiter import rate_limiter
+from app.rate_limit.limiter import get_client_ip, rate_limiter
 
 onboarding_router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 admin_router      = APIRouter(prefix="/admin",      tags=["admin"])
@@ -46,9 +46,9 @@ def _require_admin(x_admin_secret: str = Header(...)) -> None:
 # ── Models ────────────────────────────────────────────────────────────────────
 
 class JoinRequest(BaseModel):
-    org_id: str
-    display_name: str
-    secret: str                    # org secret — used later for binding approval
+    org_id: str = Field(..., pattern=r"^[a-z0-9][a-z0-9._-]{0,127}$")
+    display_name: str = Field(..., max_length=256)
+    secret: str = Field(..., max_length=256)   # org secret — used later for binding approval
     ca_certificate: str            # PEM of the organization's CA
     contact_email: str = ""        # informational for the admin
     webhook_url: str | None = None # PDP webhook URL — None means default-deny
@@ -113,7 +113,7 @@ async def join_network(
     The org is created in 'pending' state until admin approval.
     """
     # Rate limit by client IP to prevent registration flood
-    client_ip = request.client.host if request and request.client else "unknown"
+    client_ip = get_client_ip(request)
     await rate_limiter.check(client_ip, "onboarding.join")
 
     existing = await get_org_by_id(db, body.org_id)

@@ -77,9 +77,10 @@ async def list_organizations(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.get("/orgs/{org_id}", response_model=OrgResponse)
+@router.get("/orgs/{org_id}", response_model=OrgResponse,
+            dependencies=[Depends(_require_admin)])
 async def get_organization(org_id: str, db: AsyncSession = Depends(get_db)):
-    """Organization detail."""
+    """Organization detail. Requires admin secret."""
     org = await get_org_by_id(db, org_id)
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")

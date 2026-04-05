@@ -80,7 +80,9 @@ def verify_message_signature(
             detail="Invalid message signature — cannot verify the sender",
         )
     except Exception as exc:
+        import logging
+        logging.getLogger("agent_trust").error("Signature verification error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Signature verification error: {exc}",
+            detail="Signature verification failed",
         )

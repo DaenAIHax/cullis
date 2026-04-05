@@ -91,7 +91,10 @@
                     <span class="text-xs text-gray-400 font-medium">{{ session.org_id }}</span>
                     {% endif %}
                 </div>
-                <a href="/dashboard/logout" class="text-xs text-gray-600 hover:text-gray-400">Logout</a>
+                <form method="post" action="/dashboard/logout" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+                    <button type="submit" class="text-xs text-gray-600 hover:text-gray-400">Logout</button>
+                </form>
             </div>
             {% endif %}
         </div>

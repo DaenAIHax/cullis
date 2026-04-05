@@ -18,6 +18,7 @@ Environment variables:
                      defaults to "secret/data/broker"
 """
 import logging
+import os
 
 import httpx
 from cryptography import x509 as crypto_x509
@@ -43,6 +44,18 @@ class VaultKMSProvider:
         self._secret_path = secret_path  # e.g. "secret/data/broker"
         self._private_key_pem: str | None = None
         self._public_key_pem: str | None = None
+
+        # Enforce TLS — Vault token is the most sensitive credential
+        if not self._vault_addr.startswith("https://"):
+            allow_http = os.environ.get("VAULT_ALLOW_HTTP", "").lower() == "true"
+            if allow_http:
+                _log.warning("Vault address uses HTTP (TLS disabled via VAULT_ALLOW_HTTP=true) — NOT safe for production")
+            else:
+                _log.critical("Vault address '%s' does not use HTTPS — refusing to send token over plaintext", self._vault_addr)
+                raise ValueError(
+                    f"Vault address must use https:// (got '{self._vault_addr}'). "
+                    "Set VAULT_ALLOW_HTTP=true to override for development only."
+                )
 
     def invalidate_cache(self) -> None:
         """Force re-fetch on next access (e.g. after key rotation)."""

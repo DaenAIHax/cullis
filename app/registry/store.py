@@ -2,6 +2,7 @@
 ORM model and queries for the agent registry.
 """
 import hashlib
+import hmac
 import json
 import bcrypt
 from datetime import datetime, timezone
@@ -105,7 +106,7 @@ async def update_agent_cert(db: AsyncSession, agent_id: str, cert_pem: str,
         agent.cert_thumbprint = thumbprint
         await db.commit()
         return True
-    if agent.cert_thumbprint == thumbprint:
+    if hmac.compare_digest(agent.cert_thumbprint, thumbprint):
         # Same cert — idempotent update
         agent.cert_pem = cert_pem
         await db.commit()

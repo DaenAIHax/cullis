@@ -7,7 +7,7 @@ signature verification.
 Lazy cleanup: records with cert_not_after < now are removed on every
 insert, similar to the JTI blacklist.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import Column, String, DateTime, select, delete
@@ -91,9 +91,10 @@ async def revoke_cert(
             detail="Certificate already revoked",
         )
 
-    # Lazy cleanup: remove expired certs (no longer a threat)
+    # Lazy cleanup: remove expired certs (no longer a threat).
+    # Buffer of 30 min beyond cert expiry to cover tokens issued just before expiry.
     await db.execute(
-        delete(RevokedCert).where(RevokedCert.cert_not_after < now)
+        delete(RevokedCert).where(RevokedCert.cert_not_after < now - timedelta(minutes=30))
     )
 
     await db.commit()

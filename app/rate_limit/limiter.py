@@ -149,6 +149,19 @@ class SlidingWindowLimiter:
             )
 
 
+def get_client_ip(request) -> str:
+    """Extract the client IP from a FastAPI/Starlette Request.
+
+    When uvicorn runs with --proxy-headers behind a trusted reverse proxy,
+    request.client.host already reflects the real client IP (X-Forwarded-For
+    is parsed by uvicorn's ProxyHeadersMiddleware). This helper centralises
+    that dependency so callers don't access request.client directly.
+    """
+    if request and request.client:
+        return request.client.host
+    return "unknown"
+
+
 # Shared global instance
 rate_limiter = SlidingWindowLimiter()
 

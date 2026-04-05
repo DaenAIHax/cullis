@@ -3,7 +3,11 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class AgentRegisterRequest(BaseModel):
-    agent_id: str = Field(..., max_length=256, description="Unique agent ID, e.g. 'banca-x::kyc-agent-v1'")
+    agent_id: str = Field(
+        ..., max_length=256,
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,127}::[a-z0-9][a-z0-9._-]{0,127}$",
+        description="Unique agent ID, e.g. 'banca-x::kyc-agent-v1'",
+    )
     org_id: str = Field(..., max_length=128, description="Organization ID, e.g. 'banca-x'")
     display_name: str = Field(..., max_length=256)
     secret: str | None = Field(None, description="Optional shared secret — not used with x509 authentication")

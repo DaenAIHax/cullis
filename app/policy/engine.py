@@ -44,19 +44,64 @@ class PolicyEngine:
         Evaluate whether the initiator can open a session with the target.
 
         Logic:
-          1. Evaluate org-specific policies for initiator_org_id.
-             - A matching deny  → immediate deny.
-             - A matching allow → allow.
-          2. No policy found → deny (strict default deny).
+          1. Evaluate initiator_org policies — must find an allow.
+          2. Evaluate target_org policies — a matching deny blocks the session.
+             If target has no policies, it is treated as opt-out (allowed).
+          3. No initiator policy found → deny (strict default deny).
         """
-        policies = await list_policies(db, initiator_org_id, policy_type="session")
+        # ── Phase 1: Initiator org policies (default-deny) ──────────────
+        initiator_decision = await self._evaluate_org_session_policies(
+            db, initiator_org_id, target_org_id, capabilities,
+            active_session_count, agent_id, session_id,
+        )
+        if not initiator_decision.allowed:
+            return initiator_decision
+
+        # ── Phase 2: Target org policies (opt-out — no policy = allow) ──
+        target_policies = await list_policies(db, target_org_id, policy_type="session")
+        if target_policies:
+            for record in target_policies:
+                rules = record.rules
+                conditions = rules.get("conditions", {})
+                effect = rules.get("effect", "allow")
+
+                is_match = True
+
+                # Check if target org policy applies to this initiator
+                allowed_orgs: list[str] = conditions.get("target_org_id", [])
+                if allowed_orgs and initiator_org_id not in allowed_orgs:
+                    is_match = False
+
+                if is_match and effect == "deny":
+                    decision = PolicyDecision(
+                        allowed=False,
+                        reason="Denied by target organisation policy",
+                        policy_id=record.policy_id,
+                    )
+                    await self._audit(db, "session", decision, target_org_id, agent_id, session_id)
+                    return decision
+
+        return initiator_decision
+
+    async def _evaluate_org_session_policies(
+        self,
+        db: AsyncSession,
+        org_id: str,
+        target_org_id: str,
+        capabilities: list[str],
+        active_session_count: int = 0,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> PolicyDecision:
+        """Evaluate session policies for a single org (initiator side)."""
+        policies = await list_policies(db, org_id, policy_type="session")
 
         if not policies:
             decision = PolicyDecision(
                 allowed=False,
-                reason="Nessuna policy definita — default deny",
+                reason="No policy defined — default deny",
             )
-            await self._audit(db, "session", decision, initiator_org_id, agent_id, session_id)
+            await self._audit(db, "session", decision, org_id, agent_id, session_id)
             return decision
 
         last_deny_reason = "No matching org policy found"
@@ -104,7 +149,7 @@ class PolicyEngine:
                     reason="Explicitly denied by org policy",
                     policy_id=record.policy_id,
                 )
-                await self._audit(db, "session", decision, initiator_org_id, agent_id, session_id)
+                await self._audit(db, "session", decision, org_id, agent_id, session_id)
                 return decision
 
             decision = PolicyDecision(
@@ -112,7 +157,7 @@ class PolicyEngine:
                 reason="Allowed by org policy",
                 policy_id=record.policy_id,
             )
-            await self._audit(db, "session", decision, initiator_org_id, agent_id, session_id)
+            await self._audit(db, "session", decision, org_id, agent_id, session_id)
             return decision
 
         decision = PolicyDecision(
@@ -120,7 +165,7 @@ class PolicyEngine:
             reason=last_deny_reason,
             policy_id=last_deny_policy_id,
         )
-        await self._audit(db, "session", decision, initiator_org_id, agent_id, session_id)
+        await self._audit(db, "session", decision, org_id, agent_id, session_id)
         return decision
 
     # ------------------------------------------------------------------
