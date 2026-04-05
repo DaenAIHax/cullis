@@ -133,7 +133,7 @@ Each organization registers a webhook at onboarding. For every session request, 
 
 Alternatively, set `POLICY_BACKEND=opa` to use **Open Policy Agent** as the policy engine. ATN ships with Rego policies and a ready-to-deploy OPA sidecar (`enterprise-kit/opa/`). The webhook and OPA backends share the same interface — switching requires only an environment variable change.
 
-Organizations retain full sovereignty over authorization decisions. The broker is a neutral enforcer.
+The local policy engine also enforces **dual-org evaluation**: session policies from both the initiator and target organization must allow the session. Organizations retain full sovereignty over authorization decisions. The broker is a neutral enforcer.
 
 ### Immutable Audit Trail
 
@@ -158,10 +158,14 @@ Changing the backend requires zero code changes — only a different environment
 
 - **Certificate Thumbprint Pinning** — SHA-256 thumbprint pinned at first login, prevents rogue CA certificate swaps
 - **Certificate Rotation** — explicit rotation via API and dashboard with CA chain validation
-- **Certificate revocation** — block compromised agent certificates immediately
+- **Certificate revocation** — block compromised agent certificates immediately, sessions closed + WebSocket disconnected on binding revoke
 - **Token revocation** — self-service and admin-initiated token invalidation
-- **Rate limiting** — sliding window per-endpoint, per-agent
+- **EC curve whitelist** — only P-256, P-384, P-521 accepted for agent certificates
+- **Rate limiting** — sliding window per-endpoint, per-agent (auth, message send, message poll, onboarding)
 - **Capability-scoped sessions** — requested capabilities must be authorized in both parties' bindings
+- **Input validation** — regex patterns on org_id, agent_id, UUID format on session_id; prevents injection and SPIFFE ID corruption
+- **WebSocket hardening** — Origin validation, auth timeout (10s), connection limits per org, binding check on connect
+- **Session state locking** — atomic accept/reject/close transitions, eviction of expired sessions, memory DoS protection
 
 ---
 
@@ -202,9 +206,10 @@ A Python SDK (`agents/sdk.py`) handles the full lifecycle: x509 authentication, 
 
 | Metric | Value |
 |--------|-------|
-| Broker codebase | ~60 Python modules + templates, ~10,500 lines |
-| Test suite | 27 test files, 274 tests |
-| Test coverage | Auth, DPoP, broker, crypto, policy, OPA, revocation, rate limiting, WebSocket, E2E, dashboard, CSRF, security headers, cert pinning, KMS encryption, health probes, audit export |
+| Broker codebase | ~60 Python modules + templates, ~11,000 lines |
+| Test suite | 30 test files, 350+ tests |
+| Test coverage | Auth, DPoP, broker, crypto, policy, OPA, revocation, rate limiting, WebSocket, E2E, dashboard, CSRF, security headers, cert pinning, KMS encryption, health probes, audit export, input validation, session locking, dual-org policy |
+| Security audits | 2 rounds, 44 findings analyzed, 33 confirmed and fixed |
 | Standards referenced | WIMSE, SPIFFE, RFC 9449 (DPoP), RFC 7638 (JWK Thumbprint), RFC 7517 (JWKS) |
 
 ---
@@ -248,7 +253,8 @@ A Python SDK (`agents/sdk.py`) handles the full lifecycle: x509 authentication, 
 | Audit log export API (JSON/CSV, admin-only) | Done |
 | OPA as alternative policy engine | Done |
 | Async-safe locks (threading.Lock → asyncio.Lock) | Done |
-| 3-VM enterprise demo lab | Planned |
+| Security audit Round 2 (28 findings fixed) | Done |
+| 3-VM enterprise demo lab (ERPNext + Odoo) | In Progress |
 | Transaction tokens (per-operation authorization) | Planned |
 | MCP proxy (cross-org tool invocation) | Planned |
 | Supply chain traceability ledger | Planned |
