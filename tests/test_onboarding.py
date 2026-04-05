@@ -74,16 +74,18 @@ async def test_approve_allows_login(client: AsyncClient, dpop):
     org_secret = org_id + "-secret"
 
     await _join(client, org_id)
-    await client.post("/v1/registry/agents", json={
-        "agent_id": agent_id, "org_id": org_id,
-        "display_name": agent_id, "capabilities": ["order.read"],
-    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
 
-    # Approva
+    # Approva prima — agents can only be registered for active orgs (#34)
     resp = await client.post(f"/v1/admin/orgs/{org_id}/approve",
                              headers={"x-admin-secret": ADMIN_SECRET})
     assert resp.status_code == 200
     assert resp.json()["status"] == "active"
+
+    # Register agent after org is active
+    await client.post("/v1/registry/agents", json={
+        "agent_id": agent_id, "org_id": org_id,
+        "display_name": agent_id, "capabilities": ["order.read"],
+    }, headers={"x-org-id": org_id, "x-org-secret": org_secret})
 
     # Ora il binding e il login devono funzionare
     resp = await client.post("/v1/registry/bindings",

@@ -104,7 +104,10 @@ async def test_admin_login_wrong_secret(client: AsyncClient):
 
 async def test_logout(client: AsyncClient):
     cookies = await _admin_cookies(client)
-    resp = await client.get("/dashboard/logout", cookies=cookies, follow_redirects=False)
+    # Logout changed to POST with CSRF (#43)
+    csrf = _extract_csrf(cookies)
+    resp = await client.post("/dashboard/logout", cookies=cookies, follow_redirects=False,
+                             data={"csrf_token": csrf})
     assert resp.status_code == 303
 
 
