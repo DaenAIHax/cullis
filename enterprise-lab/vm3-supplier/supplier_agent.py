@@ -130,32 +130,28 @@ def handle_session(broker: BrokerClient, agent_id: str, session_id: str,
             final_result = result
             break
 
-    # Listen via WebSocket
+    # Listen for messages via polling (reliable fallback)
     if not final_result:
-        ws = _open_ws(broker, agent_id)
-        if ws is not None:
+        last_seq = max((m["seq"] for m in queued), default=-1)
+        for _ in range(60):  # max 2 min
             try:
-                for raw in ws:
-                    msg = json.loads(raw)
-                    if msg.get("type") != "new_message" or msg.get("session_id") != session_id:
-                        continue
-                    m = broker.decrypt_payload(msg["message"], session_id=session_id)
-                    if m["sender_agent_id"] == agent_id:
-                        continue
-                    result = handle_message(
-                        broker, agent_id, session_id, m["payload"],
-                        m["sender_agent_id"], conversation, system_prompt,
-                    )
-                    if result:
-                        final_result = result
-                        break
-            except Exception as e:
-                log(agent_id, f"WS error: {e}", YELLOW)
-            finally:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
+                messages = broker.poll(session_id, after=last_seq)
+            except Exception:
+                break  # session closed
+            for msg in messages:
+                last_seq = msg["seq"]
+                if msg["sender_agent_id"] == agent_id:
+                    continue
+                result = handle_message(
+                    broker, agent_id, session_id, msg["payload"],
+                    msg["sender_agent_id"], conversation, system_prompt,
+                )
+                if result:
+                    final_result = result
+                    break
+            if final_result:
+                break
+            time.sleep(2)
 
     # Create Sale Order in Odoo if negotiation succeeded
     if final_result and final_result.get("type") in ("order_confirm", "order_accepted"):
@@ -231,7 +227,11 @@ def main():
 
     try:
         log(agent_id, "Authenticating with ATN broker...", CYAN)
-        broker.register(agent_id, org_id, agent_id, caps)
+        # Agent already registered via bootstrap — skip re-registration
+        try:
+            broker.register(agent_id, org_id, agent_id, caps)
+        except Exception:
+            pass  # 404 or 409 — agent already exists
         broker.login(agent_id, org_id, cert_path, key_path)
         log(agent_id, "Authenticated.", GREEN)
 
@@ -243,7 +243,7 @@ def main():
                 session = my_pending[0]
                 session_id = session["session_id"]
                 initiator = session["initiator_agent_id"]
-                buyer_org = session.get("initiator_org_id", "unknown")
+                buyer_org = session.get("initiator_org_id") or initiator.split("::")[0]
                 log(agent_id, f"Session from {initiator} ({buyer_org})", GREEN)
                 broker.accept_session(session_id)
 
@@ -264,7 +264,7 @@ def main():
                         if msg.get("type") == "session_pending":
                             session_id = msg["session_id"]
                             initiator = msg.get("initiator_agent_id", "unknown")
-                            buyer_org = msg.get("initiator_org_id", "unknown")
+                            buyer_org = msg.get("initiator_org_id") or initiator.split("::")[0]
                             broker.accept_session(session_id)
                             log(agent_id, f"Session from {initiator}: {session_id}", GREEN)
                             ws.close()

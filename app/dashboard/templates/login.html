@@ -44,94 +44,26 @@
 
     <!-- Card container -->
     <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-6 backdrop-blur-sm" style="box-shadow:0 0 40px rgba(99,102,241,0.04);">
-        <!-- Tab selector -->
-        <div class="flex mb-6 bg-gray-950 rounded-lg p-1">
-            <button onclick="showTab('admin')" id="tab-admin"
-                    class="flex-1 px-3 py-2 rounded-md text-sm font-medium text-white bg-gray-800 transition-colors">
-                Admin
-            </button>
-            <button onclick="showTab('org')" id="tab-org"
-                    class="flex-1 px-3 py-2 rounded-md text-sm font-medium text-gray-400 transition-colors">
-                Organization
-            </button>
-            <button onclick="showTab('sso')" id="tab-sso"
-                    class="flex-1 px-3 py-2 rounded-md text-sm font-medium text-gray-400 transition-colors">
-                SSO
-            </button>
-        </div>
-
-        <!-- Admin login -->
-        <form id="form-admin" method="post" action="/dashboard/login" class="space-y-4">
-            <input type="hidden" name="login_type" value="admin">
+        <form method="post" action="/dashboard/login" class="space-y-4">
             <div>
-                <label class="block text-sm font-medium text-gray-300 mb-1">Admin Secret</label>
-                <input type="password" name="admin_secret" required placeholder="Enter admin secret"
+                <label class="block text-sm font-medium text-gray-300 mb-1">User</label>
+                <input type="text" name="user_id" required placeholder="Enter your user ID"
+                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Password</label>
+                <input type="password" name="password" required placeholder="Enter your password"
                        class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
             </div>
             <button type="submit" class="w-full px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-md transition-colors">
-                Login as Admin
+                Login
             </button>
         </form>
-
-        <!-- Org login -->
-        <form id="form-org" method="post" action="/dashboard/login" class="space-y-4 hidden">
-            <input type="hidden" name="login_type" value="org">
-            <div>
-                <label class="block text-sm font-medium text-gray-300 mb-1">Organization ID</label>
-                <input type="text" name="org_id" placeholder="e.g. acme-corp"
-                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-300 mb-1">Organization Secret</label>
-                <input type="password" name="org_secret" placeholder="Enter org secret"
-                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
-            </div>
-            <button type="submit" class="w-full px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-md transition-colors">
-                Login as Organization
-            </button>
-        </form>
-
-        <!-- SSO login -->
-        <div id="form-sso" class="space-y-4 hidden">
-            {% if admin_oidc_enabled is defined and admin_oidc_enabled %}
-            <a href="/dashboard/oidc/start?role=admin"
-               class="block w-full px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-md text-center transition-colors">
-                Admin SSO Login
-            </a>
-            <div class="relative my-3"><div class="absolute inset-0 flex items-center"><div class="w-full border-t border-gray-800"></div></div><div class="relative flex justify-center text-xs"><span class="bg-gray-950 px-2 text-gray-500">or</span></div></div>
-            {% endif %}
-            <div>
-                <label class="block text-sm font-medium text-gray-300 mb-1">Organization ID</label>
-                <input type="text" id="sso-org-id" placeholder="e.g. acme-corp"
-                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
-            </div>
-            <button onclick="startOrgSso()" class="w-full px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-md transition-colors">
-                Continue with Organization SSO
-            </button>
-        </div>
     </div>
 
     <p class="text-center text-xs text-gray-600 mt-6">
-        External organizations can join via the API: <code class="text-gray-500">POST /v1/onboarding/join</code>
+        New organization? <a href="/dashboard/register" class="text-brand-500 hover:text-brand-400">Request to join the network</a>
     </p>
 </div>
-
-<script>
-function showTab(tab) {
-    ['admin', 'org', 'sso'].forEach(t => {
-        const form = document.getElementById('form-' + t);
-        const btn = document.getElementById('tab-' + t);
-        form.classList.toggle('hidden', t !== tab);
-        btn.classList.toggle('bg-gray-800', t === tab);
-        btn.classList.toggle('text-white', t === tab);
-        btn.classList.toggle('text-gray-400', t !== tab);
-    });
-}
-function startOrgSso() {
-    const orgId = document.getElementById('sso-org-id').value.trim();
-    if (!orgId) { alert('Please enter your Organization ID.'); return; }
-    window.location.href = '/dashboard/oidc/start?role=org&org_id=' + encodeURIComponent(orgId);
-}
-</script>
 </body>
 </html>

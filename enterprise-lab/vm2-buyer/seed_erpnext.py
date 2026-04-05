@@ -40,9 +40,12 @@ def fail(msg):
 
 
 class ERPNextSeeder:
-    def __init__(self, base_url: str, admin_password: str):
+    def __init__(self, base_url: str, admin_password: str, site_name: str = "erp.localhost"):
         self._url = base_url.rstrip("/")
-        self._session = httpx.Client(timeout=30.0)
+        self._session = httpx.Client(timeout=30.0, headers={
+            "Host": site_name,
+            "X-Frappe-Site-Name": site_name,
+        })
         self._login(admin_password)
 
     def _login(self, password: str):

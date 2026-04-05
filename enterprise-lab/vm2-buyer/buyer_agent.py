@@ -85,55 +85,51 @@ def negotiate(broker: BrokerClient, agent_id: str, session_id: str,
     print(f"  {GREEN}>{RESET} {json.dumps(msg_out, indent=2)}\n")
     broker.send(session_id, agent_id, msg_out, recipient_agent_id=target_agent_id)
 
-    # Negotiate via WebSocket
-    ws = _open_ws(broker, agent_id)
-    if ws is not None:
-        try:
-            for raw in ws:
-                msg = json.loads(raw)
-                if msg.get("type") != "new_message":
-                    continue
-                if msg.get("session_id") != session_id:
-                    continue
-
-                m = broker.decrypt_payload(msg["message"], session_id=session_id)
-                if m["sender_agent_id"] == agent_id:
-                    continue
-
-                payload = m["payload"]
-                msg_type = payload.get("type", "unknown")
-                log(agent_id, f"<< {msg_type.upper()} from {m['sender_agent_id']}", YELLOW)
-                print(f"  {YELLOW}<{RESET} {json.dumps(payload, indent=2)}\n")
-
-                if payload.get("final"):
-                    return payload
-
-                llm_prompt = (
-                    f"Supplier responded with: {json.dumps(payload)}\n"
-                    f"Decide your next action. Output only JSON."
-                )
-                llm_response = ask_llm(SYSTEM_PROMPT, conversation, llm_prompt)
-                msg_out = extract_json(llm_response)
-                conversation.append({"role": "user", "content": llm_prompt})
-                conversation.append({"role": "assistant", "content": json.dumps(msg_out)})
-
-                log(agent_id, f">> {msg_out['type'].upper()}", CYAN)
-                print(f"  {GREEN}>{RESET} {json.dumps(msg_out, indent=2)}\n")
-                broker.send(session_id, agent_id, msg_out, recipient_agent_id=target_agent_id)
-
-                if msg_out.get("final"):
-                    return msg_out
-
-                max_turns -= 1
-                if max_turns <= 0:
-                    break
-        except Exception as e:
-            log(agent_id, f"WS error: {e}", YELLOW)
-        finally:
+    # Wait for response via polling (reliable) — WebSocket is optional
+    last_seq = -1
+    for turn in range(max_turns):
+        # Poll for new messages
+        for attempt in range(30):
             try:
-                ws.close()
+                messages = broker.poll(session_id, after=last_seq)
             except Exception:
-                pass
+                log(agent_id, "Session closed or unavailable.", YELLOW)
+                return None
+            incoming = [m for m in messages if m["sender_agent_id"] != agent_id]
+            if incoming:
+                break
+            time.sleep(2)
+        else:
+            log(agent_id, "Timeout waiting for supplier response.", YELLOW)
+            return None
+
+        for msg in incoming:
+            last_seq = msg["seq"]
+            payload = msg["payload"]
+            msg_type = payload.get("type", "unknown")
+
+            log(agent_id, f"<< {msg_type.upper()} from {msg['sender_agent_id']}", YELLOW)
+            print(f"  {YELLOW}<{RESET} {json.dumps(payload, indent=2)}\n")
+
+            if payload.get("final"):
+                return payload
+
+            # Ask LLM what to do
+            llm_prompt = (
+                f"Supplier responded with: {json.dumps(payload)}\n"
+                f"Decide your next action. Output only JSON."
+            )
+            llm_response = ask_llm(SYSTEM_PROMPT, conversation, llm_prompt)
+            msg_out = extract_json(llm_response)
+            conversation.append({"role": "user", "content": llm_prompt})
+            conversation.append({"role": "assistant", "content": json.dumps(msg_out)})
+
+            log(agent_id, f">> {msg_out['type'].upper()}", CYAN)
+            print(f"  {GREEN}>{RESET} {json.dumps(msg_out, indent=2)}\n")
+            broker.send(session_id, agent_id, msg_out, recipient_agent_id=target_agent_id)
+
+            if msg_out.get("final"):
+                return msg_out
 
     return None
 
@@ -199,7 +195,10 @@ def main():
 
     try:
         log(agent_id, "Authenticating with ATN broker...", CYAN)
-        broker.register(agent_id, org_id, agent_id, caps)
+        try:
+            broker.register(agent_id, org_id, agent_id, caps)
+        except Exception:
+            pass  # agent already registered via bootstrap
         broker.login(agent_id, org_id, cert_path, key_path)
         log(agent_id, "Authenticated.", GREEN)
 

@@ -78,7 +78,11 @@
                             <button class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded">Reject</button>
                         </form>
                         {% elif org.status == 'active' %}
-                        <span class="text-xs text-gray-600">-</span>
+                        <form method="post" action="/dashboard/orgs/{{ org.org_id }}/unlock-ca" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button class="px-2 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 text-white rounded"
+                                    onclick="return confirm('Unlock CA certificate for {{ org.org_id }}?')">Unlock CA</button>
+                        </form>
                         {% endif %}
                     </td>
                 </tr>

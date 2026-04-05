@@ -58,6 +58,7 @@ async def register_org(
     secret: str,
     metadata: dict | None = None,
     webhook_url: str | None = None,
+    status: str = "active",
 ) -> OrganizationRecord:
     record = OrganizationRecord(
         org_id=org_id,
@@ -65,6 +66,7 @@ async def register_org(
         secret_hash=bcrypt.hashpw(secret.encode(), bcrypt.gensalt()).decode(),
         metadata_json=json.dumps(metadata or {}),
         webhook_url=webhook_url,
+        status=status,
     )
     db.add(record)
     await db.commit()

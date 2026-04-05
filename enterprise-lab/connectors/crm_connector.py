@@ -181,7 +181,7 @@ class OdooConnector:
         """Find or create a customer partner by org_id."""
         existing = self._execute(
             "res.partner", "search_read",
-            [[["ref", "=", org_id]]],
+            [("ref", "=", org_id)],
             fields=["id", "name"],
             limit=1,
         )

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Join Network — Agent Trust Network</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: { brand: { 500:'#6366f1', 600:'#4f46e5', 700:'#4338ca' } } } }
+        }
+    </script>
+</head>
+<body class="h-full flex items-center justify-center">
+<div style="position:fixed;top:50%;left:50%;width:600px;height:600px;transform:translate(-50%,-50%);background:radial-gradient(circle,rgba(99,102,241,0.08) 0%,transparent 70%);pointer-events:none;z-index:0;"></div>
+
+<div class="w-full max-w-md relative z-10">
+    <div class="text-center mb-10">
+        <div class="inline-flex items-center justify-center mb-4">
+            <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M28 4L8 14v14c0 12.4 8.5 24 20 28 11.5-4 20-15.6 20-28V14L28 4z" fill="rgba(99,102,241,0.12)" stroke="#6366f1" stroke-width="1.5"/>
+                <circle cx="28" cy="22" r="3.5" fill="#6366f1"/>
+                <circle cx="18" cy="34" r="2.5" fill="#6366f1" opacity="0.7"/>
+                <circle cx="38" cy="34" r="2.5" fill="#6366f1" opacity="0.7"/>
+                <circle cx="28" cy="42" r="2" fill="#6366f1" opacity="0.5"/>
+                <line x1="28" y1="25.5" x2="18" y2="31.5" stroke="#6366f1" stroke-width="1" opacity="0.5"/>
+                <line x1="28" y1="25.5" x2="38" y2="31.5" stroke="#6366f1" stroke-width="1" opacity="0.5"/>
+                <line x1="18" y1="36.5" x2="28" y2="40" stroke="#6366f1" stroke-width="1" opacity="0.35"/>
+                <line x1="38" y1="36.5" x2="28" y2="40" stroke="#6366f1" stroke-width="1" opacity="0.35"/>
+            </svg>
+        </div>
+        <h1 class="text-2xl font-bold text-white tracking-wide">Join the Network</h1>
+        <p class="text-sm text-gray-500 mt-1.5">Register your organization to start using the Agent Trust Network</p>
+    </div>
+
+    {% if error %}
+    <div class="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-md text-sm text-red-400">{{ error }}</div>
+    {% endif %}
+
+    {% if success %}
+    <div class="bg-gray-900/60 border border-emerald-500/30 rounded-xl p-6 backdrop-blur-sm text-center">
+        <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 mb-4">
+            <svg class="w-6 h-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+        </div>
+        <h2 class="text-lg font-semibold text-white mb-2">Request Submitted</h2>
+        <p class="text-sm text-gray-400 mb-4">Your organization <span class="text-white font-medium">{{ success }}</span> is pending approval.</p>
+        <p class="text-xs text-gray-500">The network administrator will review your request. Once approved, you can log in with your credentials.</p>
+        <a href="/dashboard/login" class="inline-block mt-6 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-md">Go to Login</a>
+    </div>
+    {% else %}
+    <div class="bg-gray-900/60 border border-gray-800 rounded-xl p-6 backdrop-blur-sm" style="box-shadow:0 0 40px rgba(99,102,241,0.04);">
+        <form method="post" action="/dashboard/register" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Organization ID</label>
+                <input type="text" name="org_id" required placeholder="e.g. electrostore" value="{{ form.org_id or '' }}"
+                       pattern="[a-z0-9\-]+"
+                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
+                <p class="text-xs text-gray-600 mt-1">Lowercase, no spaces. This will be your login ID.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Display Name</label>
+                <input type="text" name="display_name" required placeholder="e.g. ElectroStore S.r.l." value="{{ form.display_name or '' }}"
+                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Password</label>
+                <input type="password" name="secret" required placeholder="Choose a strong password"
+                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
+                <p class="text-xs text-gray-600 mt-1">You will use this to log in after approval.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Confirm Password</label>
+                <input type="password" name="secret_confirm" required placeholder="Confirm password"
+                       class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/30 transition-colors">
+            </div>
+            <button type="submit" class="w-full px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-md transition-colors">
+                Request to Join
+            </button>
+        </form>
+    </div>
+    <p class="text-center text-xs text-gray-600 mt-6">
+        Already registered? <a href="/dashboard/login" class="text-brand-500 hover:text-brand-400">Log in</a>
+    </p>
+    {% endif %}
+</div>
+</body>
+</html>

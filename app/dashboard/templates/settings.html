@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Organization Settings{% endblock %}
+{% block content %}
+<div class="max-w-2xl">
+    <h2 class="text-2xl font-bold text-white mb-6">Organization Settings</h2>
+
+    {% if error %}
+    <div class="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-md text-sm text-red-400">{{ error }}</div>
+    {% endif %}
+    {% if success %}
+    <div class="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-md text-sm text-emerald-400">{{ success }}</div>
+    {% endif %}
+
+    <!-- Org Info -->
+    <div class="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-6">
+        <h3 class="text-sm font-semibold text-white mb-3">Organization Info</h3>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+            <div>
+                <span class="text-gray-500">ID</span>
+                <p class="text-white font-mono">{{ org.org_id }}</p>
+            </div>
+            <div>
+                <span class="text-gray-500">Display Name</span>
+                <p class="text-white">{{ org.display_name }}</p>
+            </div>
+            <div>
+                <span class="text-gray-500">Status</span>
+                <p>
+                    {% if org.status == 'active' %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400">Active</span>
+                    {% else %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/10 text-yellow-400">{{ org.status }}</span>
+                    {% endif %}
+                </p>
+            </div>
+            <div>
+                <span class="text-gray-500">CA Certificate</span>
+                <p>
+                    {% if org.ca_certificate %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400">Uploaded</span>
+                    {% else %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400">Missing</span>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- CA Certificate Upload -->
+    <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+        <h3 class="text-sm font-semibold text-white mb-1">CA Certificate</h3>
+        <p class="text-xs text-gray-500 mb-4">Upload your organization's CA certificate. Agent certificates must be signed by this CA to authenticate with the broker.</p>
+
+        {% if ca_locked %}
+        <div class="p-3 bg-gray-800 border border-gray-700 rounded-md mb-4">
+            <div class="flex items-center gap-2 mb-2">
+                <svg class="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                <span class="text-sm text-yellow-400 font-medium">Certificate locked</span>
+            </div>
+            <p class="text-xs text-gray-400">Your CA certificate has been uploaded and locked. Contact the network administrator to unlock it if you need to rotate your CA.</p>
+            <pre class="mt-3 p-2 bg-gray-950 rounded text-xs text-gray-500 font-mono overflow-x-auto">{{ (org.ca_certificate or '')[:80] }}...</pre>
+        </div>
+        {% else %}
+        <form method="post" action="/dashboard/settings/ca" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div>
+                <textarea name="ca_certificate" required rows="10"
+                          placeholder="-----BEGIN CERTIFICATE-----&#10;Paste your CA certificate here...&#10;-----END CERTIFICATE-----"
+                          class="w-full bg-gray-950 border border-gray-700 rounded-md px-3 py-2 text-sm text-white placeholder-gray-600 font-mono focus:outline-none focus:border-brand-500">{{ org.ca_certificate or '' }}</textarea>
+            </div>
+            <button type="submit"
+                    class="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-md">
+                Upload CA Certificate
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

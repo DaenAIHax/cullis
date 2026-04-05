@@ -7,12 +7,16 @@ Two roles:
 
 Authentication via signed cookie set at /dashboard/login.
 """
+import io
 import re
+import json as _json
 import pathlib
+import zipfile
+import datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from starlette.responses import RedirectResponse
 from sqlalchemy import select, func, or_
@@ -70,39 +74,32 @@ async def login_submit(request: Request, db: AsyncSession = Depends(get_db)):
     await rate_limiter.check(client_ip, "dashboard.login")
 
     form = await request.form()
-    login_type = form.get("login_type", "")
+    user_id = form.get("user_id", "").strip()
+    password = form.get("password", "")
 
-    if login_type == "admin":
-        import hmac as _hmac
-        from app.config import get_settings
-        secret = form.get("admin_secret", "")
-        if not _hmac.compare_digest(secret, get_settings().admin_secret):
-            return templates.TemplateResponse("login.html", {
-                "request": request, "error": "Invalid admin secret.",
-            })
+    if not user_id or not password:
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "User and password are required.",
+        })
+
+    # Check if it's the admin
+    import hmac as _hmac
+    from app.config import get_settings
+    if user_id == "admin" and _hmac.compare_digest(password, get_settings().admin_secret):
         response = RedirectResponse(url="/dashboard", status_code=303)
         set_session(response, role="admin")
         return response
 
-    elif login_type == "org":
-        org_id = form.get("org_id", "").strip()
-        org_secret = form.get("org_secret", "")
-        if not org_id or not org_secret:
-            return templates.TemplateResponse("login.html", {
-                "request": request, "error": "Organization ID and secret are required.",
-            })
-        from app.registry.org_store import verify_org_credentials
-        org = await get_org_by_id(db, org_id)
-        if not verify_org_credentials(org, org_secret):
-            return templates.TemplateResponse("login.html", {
-                "request": request, "error": "Invalid organization credentials.",
-            })
+    # Otherwise try as org
+    from app.registry.org_store import verify_org_credentials
+    org = await get_org_by_id(db, user_id)
+    if verify_org_credentials(org, password):
         response = RedirectResponse(url="/dashboard", status_code=303)
-        set_session(response, role="org", org_id=org_id)
+        set_session(response, role="org", org_id=user_id)
         return response
 
     return templates.TemplateResponse("login.html", {
-        "request": request, "error": "Invalid login type.",
+        "request": request, "error": "Invalid credentials.",
     })
 
 
@@ -115,6 +112,157 @@ async def logout(request: Request):
     response = RedirectResponse(url="/dashboard/login", status_code=303)
     clear_session(response)
     return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public Organization Registration (no login required)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    return templates.TemplateResponse("register.html", {
+        "request": request, "error": None, "success": None, "form": {},
+    })
+
+
+@router.post("/register", response_class=HTMLResponse)
+async def register_submit(request: Request, db: AsyncSession = Depends(get_db)):
+    from app.rate_limit.limiter import rate_limiter
+    client_ip = request.client.host if request.client else "unknown"
+    await rate_limiter.check(client_ip, "dashboard.login")
+
+    form_data = await request.form()
+    org_id = form_data.get("org_id", "").strip().lower()
+    display_name = form_data.get("display_name", "").strip()
+    secret = form_data.get("secret", "")
+    secret_confirm = form_data.get("secret_confirm", "")
+
+    form = {"org_id": org_id, "display_name": display_name}
+
+    if not org_id or not display_name or not secret:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": "All fields are required.", "success": None,
+        })
+
+    if secret != secret_confirm:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": "Passwords do not match.", "success": None,
+        })
+
+    if len(secret) < 6:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": "Password must be at least 6 characters.", "success": None,
+        })
+
+    id_err = _validate_id(org_id, "Organization ID")
+    if id_err:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": id_err, "success": None,
+        })
+
+    existing = await get_org_by_id(db, org_id)
+    if existing:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": f"Organization '{org_id}' already exists.", "success": None,
+        })
+
+    await register_org(db, org_id=org_id, display_name=display_name,
+                       secret=secret, metadata={"source": "self-registration"},
+                       status="pending")
+    await log_event(db, "onboarding.self_registration", "ok", org_id=org_id,
+                    details={"display_name": display_name, "source": "dashboard"})
+
+    return templates.TemplateResponse("register.html", {
+        "request": request, "form": {}, "error": None,
+        "success": org_id,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Organization Settings (CA certificate upload)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    org = await get_org_by_id(db, session.org_id)
+    if not org:
+        return RedirectResponse(url="/dashboard/login", status_code=303)
+
+    meta = _json.loads(org.metadata_json or "{}")
+    ca_locked = bool(org.ca_certificate) and meta.get("ca_locked", False)
+
+    return templates.TemplateResponse("settings.html",
+        _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
+             error=None, success=None))
+
+
+@router.post("/settings/ca", response_class=HTMLResponse)
+async def settings_upload_ca(request: Request, db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    if not await verify_csrf(request, session):
+        org = await get_org_by_id(db, session.org_id)
+        return templates.TemplateResponse("settings.html",
+            _ctx(request, session, active="settings", org=org,
+                 error="Invalid CSRF token.", success=None))
+
+    form_data = await request.form()
+    ca_pem = form_data.get("ca_certificate", "").strip()
+
+    org = await get_org_by_id(db, session.org_id)
+    if not org:
+        return RedirectResponse(url="/dashboard/login", status_code=303)
+
+    # Check if already locked
+    meta = _json.loads(org.metadata_json or "{}")
+    if bool(org.ca_certificate) and meta.get("ca_locked", False):
+        return templates.TemplateResponse("settings.html",
+            _ctx(request, session, active="settings", org=org, ca_locked=True,
+                 error="CA certificate is locked. Contact admin to unlock.", success=None))
+
+    if not ca_pem or "-----BEGIN CERTIFICATE-----" not in ca_pem:
+        return templates.TemplateResponse("settings.html",
+            _ctx(request, session, active="settings", org=org, ca_locked=False,
+                 error="Invalid certificate. Paste a valid PEM certificate.", success=None))
+
+    # Validate the PEM
+    try:
+        from cryptography.x509 import load_pem_x509_certificate
+        load_pem_x509_certificate(ca_pem.encode())
+    except Exception:
+        return templates.TemplateResponse("settings.html",
+            _ctx(request, session, active="settings", org=org,
+                 error="Could not parse the certificate. Ensure it is valid PEM format.", success=None))
+
+    await update_org_ca_cert(db, session.org_id, ca_pem)
+
+    # Lock the CA field
+    meta["ca_locked"] = True
+    org.metadata_json = _json.dumps(meta)
+    await db.commit()
+
+    await log_event(db, "registry.ca_certificate_uploaded", "ok",
+                    org_id=session.org_id,
+                    details={"source": "dashboard"})
+
+    org = await get_org_by_id(db, session.org_id)
+    return templates.TemplateResponse("settings.html",
+        _ctx(request, session, active="settings", org=org, ca_locked=True,
+             error=None, success="CA certificate uploaded and locked."))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -785,6 +933,32 @@ async def org_reject(request: Request, org_id: str, db: AsyncSession = Depends(g
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Unlock CA Certificate (admin only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/orgs/{org_id}/unlock-ca", response_class=HTMLResponse)
+async def org_unlock_ca(request: Request, org_id: str, db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    if not await verify_csrf(request, session):
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+    org = await get_org_by_id(db, org_id)
+    if org:
+        meta = _json.loads(org.metadata_json or "{}")
+        meta["ca_locked"] = False
+        org.metadata_json = _json.dumps(meta)
+        await db.commit()
+        await log_event(db, "registry.ca_certificate_unlocked", "ok",
+                        org_id=org_id, details={"source": "dashboard"})
+
+    return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Register Agent
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -822,7 +996,6 @@ async def agent_register_submit(request: Request, db: AsyncSession = Depends(get
     agent_name  = form_data.get("agent_name", "").strip()
     display_name = form_data.get("display_name", "").strip()
     capabilities_raw = form_data.get("capabilities", "").strip()
-
     # Build full agent_id from org + name
     agent_id = f"{org_id}::{agent_name}" if org_id and agent_name else ""
     if not display_name:
@@ -929,6 +1102,188 @@ async def agent_delete(request: Request, agent_id: str, db: AsyncSession = Depen
                         details={"source": "dashboard"})
 
     return RedirectResponse(url="/dashboard/agents", status_code=303)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Download Agent Bundle (zip with cert, key, env, scripts, start.sh)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generate_agent_cert(agent_id: str, org_id: str, org_ca_key, org_ca_cert):
+    """Generate agent cert + key in memory. Returns (key_pem, cert_pem)."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    _, agent_name = agent_id.split("::", 1)
+    spiffe_id = f"spiffe://atn.local/{org_id}/{agent_name}"
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, agent_id),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_id),
+    ])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(org_ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.UniformResourceIdentifier(spiffe_id),
+            ]),
+            critical=False,
+        )
+        .sign(org_ca_key, hashes.SHA256())
+    )
+
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    return key_pem, cert_pem
+
+
+@router.post("/agents/{agent_id:path}/bundle")
+async def agent_bundle_download(request: Request, agent_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate and download a deploy bundle (zip) for an agent."""
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    # Load agent record
+    agent = (await db.execute(
+        select(AgentRecord).where(AgentRecord.agent_id == agent_id)
+    )).scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Org user can only download own agents
+    if not session.is_admin and agent.org_id != session.org_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    org_id = agent.org_id
+    caps = agent.capabilities
+
+    # Load org CA to sign agent cert
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from cryptography.x509 import load_pem_x509_certificate
+
+    certs_dir = pathlib.Path(__file__).parent.parent.parent / "certs"
+    org_ca_key_path = certs_dir / org_id / "ca-key.pem"
+    org_ca_cert_path = certs_dir / org_id / "ca.pem"
+
+    if not org_ca_key_path.exists() or not org_ca_cert_path.exists():
+        raise HTTPException(status_code=500,
+            detail=f"Org CA not found for '{org_id}'. Run join.py first.")
+
+    org_ca_key = load_pem_private_key(org_ca_key_path.read_bytes(), password=None)
+    org_ca_cert = load_pem_x509_certificate(org_ca_cert_path.read_bytes())
+
+    # Generate agent cert + key
+    key_pem, cert_pem = _generate_agent_cert(agent_id, org_id, org_ca_key, org_ca_cert)
+
+    # Pin cert in DB
+    from app.registry.store import rotate_agent_cert
+    await rotate_agent_cert(db, agent_id, cert_pem.decode())
+
+    # Determine broker URL from request
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.hostname)
+    port = request.url.port
+    if scheme == "https" and port and port != 443:
+        broker_url = f"{scheme}://{host}:{port}"
+    elif scheme == "http" and port and port != 80:
+        broker_url = f"{scheme}://{host}:{port}"
+    else:
+        broker_url = f"{scheme}://{host}"
+
+    # Build .env content
+    safe_name = agent_id.replace("::", "__")
+    env_content = (
+        f"# Agent Trust Network — deploy bundle\n"
+        f"# Generated: {datetime.datetime.now(datetime.timezone.utc).isoformat()}\n"
+        f"BROKER_URL={broker_url}\n"
+        f"AGENT_ID={agent_id}\n"
+        f"ORG_ID={org_id}\n"
+        f"DISPLAY_NAME={agent.display_name}\n"
+        f"AGENT_CERT_PATH=./{safe_name}.pem\n"
+        f"AGENT_KEY_PATH=./{safe_name}-key.pem\n"
+        f"ORG_SECRET={org_id}\n"
+        f"CAPABILITIES={','.join(caps)}\n"
+        f"POLL_INTERVAL=2\n"
+        f"MAX_TURNS=20\n"
+        f"\n"
+        f"# LLM backend\n"
+        f"LLM_MODEL=claude-sonnet-4-6\n"
+        f"ANTHROPIC_API_KEY=\n"
+    )
+
+    # Build start.sh — authenticates agent and connects to the network
+    start_sh = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'cd "$(dirname "$0")"\n'
+        'echo "Connecting agent to ATN broker..."\n'
+        "python agent_node.py --config agent.env \"$@\"\n"
+    )
+
+    # Read the demo scripts to include in bundle
+    demo_dir = pathlib.Path(__file__).parent.parent.parent / "demo"
+    sdk_path = pathlib.Path(__file__).parent.parent.parent / "agents" / "sdk.py"
+
+    # Build the zip
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Cert and key
+        zf.writestr(f"{safe_name}.pem", cert_pem)
+        zf.writestr(f"{safe_name}-key.pem", key_pem)
+
+        # Env
+        zf.writestr("agent.env", env_content)
+
+        # start.sh (executable)
+        info = zipfile.ZipInfo("start.sh")
+        info.external_attr = 0o755 << 16
+        zf.writestr(info, start_sh)
+
+        # SDK
+        if sdk_path.exists():
+            zf.writestr("agents/sdk.py", sdk_path.read_text())
+            zf.writestr("agents/__init__.py", "")
+
+        # All demo scripts — the user decides what to run
+        for name in ("agent_node.py", "buyer_agent.py", "supplier_agent.py",
+                      "inventory_watcher.py", "inventory.json"):
+            path = demo_dir / name
+            if path.exists():
+                zf.writestr(name, path.read_text())
+
+    buf.seek(0)
+    filename = f"{safe_name}-bundle.zip"
+
+    await log_event(db, "registry.agent_bundle_downloaded", "ok",
+                    agent_id=agent_id, org_id=org_id,
+                    details={"source": "dashboard"})
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

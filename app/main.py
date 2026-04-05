@@ -141,6 +141,12 @@ app.include_router(v1)
 app.include_router(dashboard_router)
 
 
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="/dashboard/login")
+
+
 @app.get("/health", tags=["infra"])
 async def health():
     return {"status": "ok", "version": settings.app_version}

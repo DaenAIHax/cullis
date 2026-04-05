@@ -293,6 +293,7 @@ def main():
     parser = argparse.ArgumentParser(description="Seed Odoo for enterprise demo")
     parser.add_argument("--url", default="http://localhost:8069", help="Odoo URL")
     parser.add_argument("--db", default="odoo", help="Odoo database name")
+    parser.add_argument("--user", default="admin", help="Admin username or email")
     parser.add_argument("--password", default="admin", help="Admin password")
     parser.add_argument("--wait", action="store_true", help="Wait for Odoo to be ready")
     args = parser.parse_args()
@@ -300,7 +301,7 @@ def main():
     if args.wait:
         wait_for_odoo(args.url)
 
-    seeder = OdooSeeder(args.url, args.db, "admin", args.password)
+    seeder = OdooSeeder(args.url, args.db, args.user, args.password)
     seeder.seed()
 
 

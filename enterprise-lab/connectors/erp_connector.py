@@ -44,6 +44,7 @@ class ERPNextConnector:
             "Authorization": f"token {api_key}:{api_secret}",
             "Content-Type": "application/json",
             "Host": site_name,
+            "X-Frappe-Site-Name": site_name,
         }
 
     def _get(self, path: str, params: dict | None = None) -> dict:
@@ -68,18 +69,15 @@ class ERPNextConnector:
 
     def get_stock_levels(self, warehouse: str | None = None) -> list[StockItem]:
         """Get current stock levels from Bin doctype, joined with reorder info."""
-        filters = []
-        if warehouse:
-            filters.append(["warehouse", "=", warehouse])
-
         bins = self._get("/api/resource/Bin", {
-            "filters": str(filters) if filters else "[]",
             "fields": '["item_code","warehouse","actual_qty","projected_qty"]',
             "limit_page_length": 500,
         })
 
         items = []
         for b in bins.get("data", []):
+            if warehouse and b.get("warehouse") != warehouse:
+                continue
             # Fetch item details for reorder info
             item_info = self._get_item_reorder(b["item_code"], b["warehouse"])
             items.append(StockItem(

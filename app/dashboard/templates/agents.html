@@ -81,6 +81,11 @@
                         {% endif %}
                     </td>
                     <td class="px-5 py-4 space-x-2">
+                        <form method="post" action="/dashboard/agents/{{ agent.agent_id }}/bundle" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit"
+                                    class="px-2 py-1 text-xs bg-brand-600 hover:bg-brand-700 text-white rounded">Download Bundle</button>
+                        </form>
                         <a href="/dashboard/agents/{{ agent.agent_id }}/rotate-cert"
                            class="px-2 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 text-white rounded">Rotate Cert</a>
                         <form method="post" action="/dashboard/agents/{{ agent.agent_id }}/delete" class="inline"

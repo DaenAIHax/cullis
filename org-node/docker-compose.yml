@@ -1,0 +1,33 @@
+# Organization Node — local Vault for certificate storage
+#
+# Each organization runs this on their VM.
+# Vault stores the org CA key and agent certificates.
+# No private keys are ever written to disk.
+#
+# Usage:
+#   docker compose up -d
+#   python join.py   (generates certs and stores them in Vault)
+#   ./start.sh       (reads certs from Vault, connects to broker)
+
+services:
+
+  vault:
+    image: hashicorp/vault:1.17
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-org-vault-token}
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_API_ADDR: "http://127.0.0.1:8200"
+    ports:
+      - "127.0.0.1:8200:8200"
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault-data:/vault/file
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  vault-data:
