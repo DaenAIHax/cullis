@@ -2,7 +2,7 @@
 Tests for the JWKS endpoint and kid in JWT header.
 """
 import pytest
-from jose import jwt as jose_jwt
+import jwt as jose_jwt
 
 from tests.conftest import ADMIN_HEADERS
 

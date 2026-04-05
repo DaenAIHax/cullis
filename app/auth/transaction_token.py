@@ -15,7 +15,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import jose.jwt as jwt
+import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

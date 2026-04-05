@@ -27,7 +27,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
-from jose import jwt
+import jwt
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Ephemeral broker CA (generated once per process)

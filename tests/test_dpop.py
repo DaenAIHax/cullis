@@ -37,7 +37,7 @@ import uuid
 import pytest
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException
-from jose import jwt as jose_jwt
+import jwt as jose_jwt
 
 from app.auth.dpop import compute_jkt, verify_dpop_proof, generate_dpop_nonce, _is_valid_nonce
 from app.auth.dpop_jti_store import reset_dpop_jti_store

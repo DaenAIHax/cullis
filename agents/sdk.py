@@ -21,7 +21,7 @@ import anthropic
 from cryptography import x509 as crypto_x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec as _ec
-from jose import jwt as jose_jwt
+import jwt as jose_jwt
 
 
 # ─────────────────────────────────────────────

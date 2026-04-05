@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import Depends, HTTPException, Request, status
-from jose import jwt
+import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, Settings

@@ -29,7 +29,7 @@ from fastapi import HTTPException, Request, Response, status
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-from jose import jwt as jose_jwt
+import jwt as jose_jwt
 
 from app.auth.dpop_jti_store import get_dpop_jti_store
 

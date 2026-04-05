@@ -31,7 +31,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import AsyncClient
-from jose import jwt as jose_jwt
+import jwt as jose_jwt
 
 from tests.cert_factory import (
     make_assertion, get_org_ca_pem,

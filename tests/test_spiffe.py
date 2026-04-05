@@ -5,7 +5,7 @@ claim spiffe_id nel JWT emesso dal broker e verifica SAN nell'autenticazione.
 import pytest
 from cryptography import x509 as cx509
 from httpx import AsyncClient
-from jose import jwt as jose_jwt
+import jwt as jose_jwt
 
 from app.spiffe import (
     agent_id_to_spiffe,
@@ -199,7 +199,7 @@ async def test_jwt_sub_e_spiffe_id(client: AsyncClient, dpop):
 
     token = resp.json()["access_token"]
     # Decoding senza verifica per controllare i claim
-    payload = jose_jwt.get_unverified_claims(token)
+    payload = jose_jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
 
     assert payload["sub"].startswith("spiffe://")
     assert payload["sub"] == f"spiffe://{trust_domain}/{org_id}/agent-1"
@@ -229,7 +229,7 @@ async def test_jwt_sub_senza_san_nel_cert(client: AsyncClient, dpop):
     assert resp.status_code == 200
 
     token = resp.json()["access_token"]
-    payload = jose_jwt.get_unverified_claims(token)
+    payload = jose_jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
 
     assert payload["sub"].startswith("spiffe://")
     assert payload["agent_id"] == agent_id
