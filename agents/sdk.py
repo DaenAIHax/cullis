@@ -1,5 +1,5 @@
 """
-Agent Trust Network — SDK condiviso
+Cullis — SDK condiviso
 
 Infrastruttura comune per gli agenti: autenticazione x509, BrokerClient,
 firma messaggi, WebSocket, polling, LLM, logging.

@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in Agent Trust Network
+about: Report a bug in Cullis
 title: "[Bug] "
 labels: bug
 assignees: ''
@@ -28,7 +28,7 @@ What actually happens.
 
 - OS: 
 - Python version: 
-- ATN version/commit: 
+- Cullis version/commit: 
 - Deployment: Docker / local / other
 
 ## Logs

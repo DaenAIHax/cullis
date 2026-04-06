@@ -1,7 +1,7 @@
 # OPA sidecar for the PDP template.
 #
 # Run alongside the PDP server or as a standalone policy engine.
-# The ATN broker can query OPA directly (POLICY_BACKEND=opa, OPA_URL=http://opa:8181)
+# The Cullis broker can query OPA directly (POLICY_BACKEND=opa, OPA_URL=http://opa:8181)
 # or the PDP server can forward to OPA (--opa-url http://opa:8181).
 #
 # Usage:

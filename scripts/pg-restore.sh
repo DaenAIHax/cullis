@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pg-restore.sh — Restore PostgreSQL backup for Agent Trust Network
+# pg-restore.sh — Restore PostgreSQL backup for Cullis
 # Usage: ./scripts/pg-restore.sh backups/atn_2026-04-06_030000.sql.gz
 #
 # Accepts a .sql.gz or .sql backup file and restores it into the

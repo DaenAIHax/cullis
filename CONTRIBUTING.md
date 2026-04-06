@@ -1,6 +1,6 @@
-# Contributing to Agent Trust Network
+# Contributing to Cullis
 
-Thank you for your interest in contributing to ATN! This guide will help you get started.
+Thank you for your interest in contributing to Cullis! This guide will help you get started.
 
 ## Development Setup
 

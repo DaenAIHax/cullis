@@ -1,8 +1,8 @@
 """
-PDP Webhook Template — Policy Decision Point for ATN.
+PDP Webhook Template — Policy Decision Point for Cullis.
 
 This is a starting point for your organization's authorization webhook.
-The ATN broker calls this endpoint for every session request involving your org.
+The Cullis broker calls this endpoint for every session request involving your org.
 
 Customize the rules in `evaluate()` to match your business logic:
   - Check agent authorization against your IAM/LDAP/HR system

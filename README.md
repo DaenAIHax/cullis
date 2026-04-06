@@ -1,8 +1,8 @@
-# Agent Trust Network (ATN)
+# Cullis
 
-**Zero-trust identity and authorization for AI agent-to-agent communication.**
+**Cullis — Zero-trust identity and authorization for AI agent-to-agent communication.**
 
-When your AI agents negotiate with another company's AI agents -- who verifies identity? Who enforces policy? Who audits what happened? ATN is a federated trust broker: x509 PKI for identity, DPoP-bound tokens, end-to-end encrypted messaging, default-deny policy, and a cryptographic audit ledger. Purpose-built infrastructure for the agent-to-agent era.
+When your AI agents negotiate with another company's AI agents -- who verifies identity? Who enforces policy? Who audits what happened? Cullis is a federated trust broker (credential broker pattern): x509 PKI for identity, DPoP-bound tokens, end-to-end encrypted messaging, default-deny policy, and a cryptographic audit ledger. Purpose-built infrastructure for the agent-to-agent era.
 
 ---
 
@@ -147,7 +147,7 @@ Stripe/Twilio-style portal at `/dashboard/agents/{id}` with credentials manageme
 3-VM lab with real ERP/CRM integration:
 - **ERPNext v15** -- stock monitoring, reorder triggers, Purchase Order creation
 - **Odoo CE v17** -- product catalog, price lists, Sale Order creation
-- Buyer and supplier agents negotiate via ATN, creating real orders in both systems
+- Buyer and supplier agents negotiate via Cullis, creating real orders in both systems
 
 ### Enterprise Integration Kit
 - Bring Your Own CA guide for customer security teams
@@ -165,7 +165,7 @@ Stripe/Twilio-style portal at `/dashboard/agents/{id}` with credentials manageme
 
 ## Positioning
 
-| | Traditional IAM | AI Proxy/Gateway | **ATN** |
+| | Traditional IAM | AI Proxy/Gateway | **Cullis** |
 |---|---|---|---|
 | Identity model | Human users, static roles | API keys, OAuth tokens | **Workload x509 + SPIFFE** |
 | Token security | Bearer (transferable) | Bearer (transferable) | **DPoP-bound (non-transferable)** |
@@ -207,4 +207,4 @@ Security vulnerabilities: see [SECURITY.md](SECURITY.md) for private reporting g
 
 ---
 
-*If agents are to operate securely across organizations, we need a way to trust them, control them, and audit them -- without centralizing power in a single operator. ATN provides the infrastructure to make this possible.*
+*If agents are to operate securely across organizations, we need a way to trust them, control them, and audit them -- without centralizing power in a single operator. Cullis provides the infrastructure to make this possible.*

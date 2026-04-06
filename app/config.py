@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     # OpenTelemetry — traces and metrics exported via OTLP/gRPC to Jaeger
     otel_enabled: bool = True
-    otel_service_name: str = "agent-trust-broker"
+    otel_service_name: str = "cullis-broker"
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
     otel_traces_sampler_arg: float = 1.0
     otel_metrics_export_interval_ms: int = 10000

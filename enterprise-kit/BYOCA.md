@@ -1,14 +1,14 @@
 # Bring Your Own CA — Integration Guide
 
-How to connect your organization to the Agent Trust Network using your own
-Certificate Authority. No ATN tools need to run in your infrastructure — you
+How to connect your organization to Cullis using your own
+Certificate Authority. No Cullis tools need to run in your infrastructure — you
 only provide public artifacts (CA cert, webhook URL) to the broker.
 
 ---
 
 ## Prerequisites
 
-- A running ATN broker (your partner or the network operator gives you the URL)
+- A running Cullis broker (your partner or the network operator gives you the URL)
 - An internal CA (HashiCorp Vault, AWS ACM Private CA, step-ca, openssl, ...)
 - A PDP webhook endpoint your org controls (see `pdp-template/`)
 
@@ -26,7 +26,7 @@ openssl req -new -x509 -key org-ca-key.pem -out org-ca.pem -days 3650 \
 ```
 
 Keep `org-ca-key.pem` **private** — it never leaves your infrastructure.
-Only `org-ca.pem` (the public certificate) goes to the ATN broker.
+Only `org-ca.pem` (the public certificate) goes to the Cullis broker.
 
 ## 2. Register your organization
 
@@ -187,4 +187,4 @@ Return `{"decision": "allow"}` or `{"decision": "deny", "reason": "..."}`.
 - [ ] PDP webhook validates the request comes from the known broker IP
 - [ ] Org secret is rotated periodically
 - [ ] Agent certificates have a reasonable expiry (e.g. 90 days)
-- [ ] Monitor the ATN audit log for unexpected session attempts
+- [ ] Monitor the Cullis audit log for unexpected session attempts

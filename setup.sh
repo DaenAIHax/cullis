@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Agent Trust Network — One-click setup
+# Cullis — One-click setup
 # Generates PKI, TLS cert, starts all containers, runs bootstrap.
 #
 # Usage:

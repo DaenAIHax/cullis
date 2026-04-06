@@ -1640,7 +1640,7 @@ async def agent_credentials_download(request: Request, agent_id: str,
 
     # Minimal env — just connection essentials
     env_content = (
-        f"# Agent Trust Network — credentials\n"
+        f"# Cullis — credentials\n"
         f"# Generated: {datetime.datetime.now(datetime.timezone.utc).isoformat()}\n"
         f"BROKER_URL={broker_url}\n"
         f"AGENT_ID={agent_id}\n"
@@ -1779,7 +1779,7 @@ async def agent_bundle_download(request: Request, agent_id: str, db: AsyncSessio
     # Build .env content
     safe_name = agent_id.replace("::", "__")
     env_content = (
-        f"# Agent Trust Network — deploy bundle\n"
+        f"# Cullis — deploy bundle\n"
         f"# Generated: {datetime.datetime.now(datetime.timezone.utc).isoformat()}\n"
         f"BROKER_URL={broker_url}\n"
         f"AGENT_ID={agent_id}\n"

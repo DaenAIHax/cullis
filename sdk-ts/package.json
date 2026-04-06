@@ -1,7 +1,7 @@
 {
   "name": "@agent-trust/sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for the Agent Trust Network",
+  "description": "TypeScript SDK for Cullis",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

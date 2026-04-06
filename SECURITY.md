@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Agent Trust Network, please report it responsibly.
+If you discover a security vulnerability in Cullis, please report it responsibly.
 
 **Do not open a public GitHub issue.**
 
@@ -33,7 +33,7 @@ Use [GitHub's private vulnerability reporting](https://github.com/DaenAIHax/Agen
 
 ## Security Design
 
-ATN is built with security as a core design principle:
+Cullis is built with security as a core design principle:
 
 - x509 PKI with 3-tier certificate chain
 - DPoP token binding (RFC 9449) — no plain Bearer tokens

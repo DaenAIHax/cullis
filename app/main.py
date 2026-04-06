@@ -68,10 +68,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Agent Trust Network — Broker",
+    title="Cullis — Federated Trust Broker",
     description=(
-        "Federated inter-organizational trust protocol for AI agents. "
-        "Week 1 MVP: registry + JWT authentication + session broker."
+        "Zero-trust identity for AI agents. "
+        "Federated inter-organizational trust protocol with registry, "
+        "JWT authentication, and session broker."
     ),
     version=settings.app_version,
     lifespan=lifespan,

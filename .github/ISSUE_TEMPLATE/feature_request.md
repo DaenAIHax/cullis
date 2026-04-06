@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest a new feature for Agent Trust Network
+about: Suggest a new feature for Cullis
 title: "[Feature] "
 labels: enhancement
 assignees: ''

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pg-backup.sh — Automated PostgreSQL backup for Agent Trust Network
+# pg-backup.sh — Automated PostgreSQL backup for Cullis
 # Usage: ./scripts/pg-backup.sh
 #
 # Runs pg_dump via the postgres container, compresses with gzip,

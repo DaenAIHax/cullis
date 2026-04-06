@@ -115,7 +115,7 @@ services:
       OPA_URL: ${OPA_URL:-}
       # OpenTelemetry
       OTEL_ENABLED: "true"
-      OTEL_SERVICE_NAME: "agent-trust-broker"
+      OTEL_SERVICE_NAME: "cullis-broker"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
       # Reverse proxy
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.16.0.0/12}  # restrict to Docker internal network

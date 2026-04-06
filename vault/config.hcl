@@ -1,5 +1,5 @@
 # =============================================================================
-# HashiCorp Vault — Production Server Configuration
+# Cullis — HashiCorp Vault Production Server Configuration
 # =============================================================================
 #
 # Used by docker-compose.prod.yml to run Vault in production mode

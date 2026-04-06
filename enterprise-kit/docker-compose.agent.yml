@@ -1,7 +1,7 @@
-# Agent Trust Network — Agent Deployment Template
+# Cullis — Agent Deployment Template
 #
-# This docker-compose runs your agent + PDP webhook alongside the remote ATN broker.
-# The broker is NOT included here — it runs in the ATN operator's infrastructure.
+# This docker-compose runs your agent + PDP webhook alongside the remote Cullis broker.
+# The broker is NOT included here — it runs in the Cullis operator's infrastructure.
 #
 # Usage:
 #   1. Copy this file to your project
@@ -17,7 +17,7 @@ services:
     image: python:3.11-slim
     working_dir: /app
     volumes:
-      # Mount the ATN SDK + your agent code
+      # Mount the Cullis SDK + your agent code
       - ./agent:/app
       # Mount secrets (cert + key) — in production use K8s secrets or Vault
       - ./secrets:/mnt/secrets:ro

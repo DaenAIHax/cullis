@@ -117,7 +117,7 @@ async def test_overview_renders(client: AsyncClient):
     c = await _admin_cookies(client)
     resp = await client.get("/dashboard", cookies=c)
     assert resp.status_code == 200
-    assert "Network Overview" in resp.text
+    assert "Overview" in resp.text
 
 
 async def test_orgs_page_renders(client: AsyncClient):

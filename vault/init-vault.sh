@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Vault Production Initialization Script
+# Cullis — Vault Production Initialization Script
 # =============================================================================
 #
 # Run ONCE after the first production deploy to initialize and unseal Vault.

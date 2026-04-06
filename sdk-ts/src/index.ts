@@ -1,5 +1,5 @@
 /**
- * @agent-trust/sdk — TypeScript SDK for the Agent Trust Network.
+ * @agent-trust/sdk — TypeScript SDK for Cullis.
  *
  * Main entry point: re-exports the public API.
  */

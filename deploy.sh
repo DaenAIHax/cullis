@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Agent Trust Network — One-command production deployment
+# Cullis — One-command production deployment
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Usage:
@@ -244,7 +244,7 @@ if [[ "${_REGEN_CA:-0}" == "1" ]]; then
             -keyout "$CERTS_DIR/broker-ca-key.pem" \
             -out "$CERTS_DIR/broker-ca.pem" \
             -days 3650 \
-            -subj "/CN=Agent Trust Network Root CA/O=Agent Trust Network" \
+            -subj "/CN=Cullis Root CA/O=Cullis" \
             2>/dev/null
         chmod 600 "$CERTS_DIR/broker-ca-key.pem"
         ok "Broker CA generated (via openssl)"

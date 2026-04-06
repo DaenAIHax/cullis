@@ -1,9 +1,9 @@
-# ATN Session Policy — OPA Rego
+# Cullis Session Policy — OPA Rego
 #
-# Evaluates session requests from the ATN broker.
+# Evaluates session requests from the Cullis broker.
 # Loaded by OPA and queried at: POST /v1/data/atn/session/allow
 #
-# Input document (from ATN broker):
+# Input document (from Cullis broker):
 #   {
 #     "initiator_agent_id": "org-a::buyer-agent",
 #     "initiator_org_id":   "org-a",
