@@ -68,7 +68,7 @@ async def _setup_agent(client: AsyncClient, dpop, agent_id: str, org_id: str) ->
 # ────────────────────────────────────────────────────────────────────────
 
 def test_session_nonce_capacity_limit():
-    """Verify that the nonce cache rejects new nonces after reaching its limit."""
+    """Verify that the nonce cache evicts old entries at capacity (H2 fix)."""
     session = Session(
         session_id="test-session",
         initiator_agent_id="org::a",
@@ -85,11 +85,20 @@ def test_session_nonce_capacity_limit():
         assert session.is_nonce_cached(f"nonce-{i}") is False
         session.cache_nonce(f"nonce-{i}")
 
-    # 6th nonce should be rejected by cache (capacity limit)
-    assert session.is_nonce_cached("nonce-new") is True
+    assert len(session.used_nonces) == 5
 
-    # Replayed nonces should still be detected by cache
-    assert session.is_nonce_cached("nonce-0") is True
+    # New nonce at capacity: not cached (DB is source of truth)
+    assert session.is_nonce_cached("nonce-new") is False
+
+    # Caching it evicts one old entry, stays at cap
+    session.cache_nonce("nonce-new")
+    assert len(session.used_nonces) == 5
+    assert "nonce-new" in session.used_nonces
+
+    # Replayed nonces still in cache should be detected
+    # (some old ones may have been evicted)
+    cached_count = sum(1 for i in range(5) if session.is_nonce_cached(f"nonce-{i}"))
+    assert cached_count == 4  # one was evicted to make room
 
 
 # ────────────────────────────────────────────────────────────────────────
