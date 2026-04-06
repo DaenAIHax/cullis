@@ -44,7 +44,7 @@ def _extract_csrf(cookies: dict) -> str:
 async def _admin_cookies(client: AsyncClient) -> dict:
     """Login as admin and return cookies dict."""
     resp = await client.post("/dashboard/login", data={
-        "login_type": "admin", "admin_secret": get_settings().admin_secret,
+        "user_id": "admin", "password": get_settings().admin_secret,
     }, follow_redirects=False)
     assert resp.status_code == 303
     return dict(resp.cookies)
@@ -94,7 +94,7 @@ async def test_admin_login_success(client: AsyncClient):
 
 async def test_admin_login_wrong_secret(client: AsyncClient):
     resp = await client.post("/dashboard/login", data={
-        "login_type": "admin", "admin_secret": "wrong",
+        "user_id": "admin", "password": "wrong",
     })
     assert resp.status_code == 200
     assert "Invalid" in resp.text
