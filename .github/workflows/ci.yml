@@ -39,6 +39,14 @@ jobs:
         run: |
           ruff check app/ agents/sdk.py tests/ --select E,F,W --ignore E501,E402
 
+      - name: Verify Alembic migrations
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./test_migrations.db"
+        run: |
+          alembic upgrade head
+          python -c "import sqlite3; c=sqlite3.connect('test_migrations.db'); tables=c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall(); print(f'{len(tables)} tables created'); assert len(tables) >= 10, f'Expected >=10 tables, got {len(tables)}'"
+          rm -f test_migrations.db
+
       - name: Run tests
         env:
           OTEL_ENABLED: "false"
