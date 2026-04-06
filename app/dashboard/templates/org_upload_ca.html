@@ -29,11 +29,14 @@
         <div>
             <label class="block text-sm font-medium text-gray-300 mb-1">CA Certificate (PEM)</label>
             <textarea name="ca_certificate" required rows="12" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
-                      class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-brand-500"></textarea>
+                      class="w-full bg-gray-950 border border-gray-600 rounded-md px-3 py-2.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30"></textarea>
             <p class="text-xs text-gray-600 mt-1">Must be a valid x509 CA certificate (BasicConstraints: CA=true). Agent certificates must be signed by this CA.</p>
         </div>
         <button type="submit"
-                class="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm rounded-md">
+                class="px-5 py-2.5 text-sm font-semibold rounded-md transition-all"
+                style="background: #00e5c7; color: #050508; letter-spacing: 0.03em;"
+                onmouseover="this.style.background='#fff'; this.style.boxShadow='0 8px 30px rgba(0,229,199,0.2)'"
+                onmouseout="this.style.background='#00e5c7'; this.style.boxShadow='none'">
             Upload CA Certificate
         </button>
     </form>
