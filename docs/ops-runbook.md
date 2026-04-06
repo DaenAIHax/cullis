@@ -25,8 +25,8 @@
 
 ```bash
 # 1. Clone and configure
-git clone https://github.com/DaenAIHax/Agent-Trust-Network.git
-cd Agent-Trust-Network
+git clone https://github.com/DaenAIHax/cullis.git
+cd cullis
 cp .env.example .env
 
 # 2. Generate secrets
@@ -90,7 +90,7 @@ cat backup_20260405_120000.sql | docker compose exec -T postgres psql -U atn age
 ### Automated backup (cron)
 ```bash
 # Add to crontab: daily at 3 AM
-0 3 * * * cd /path/to/Agent-Trust-Network && docker compose exec -T postgres pg_dump -U atn agent_trust | gzip > /backups/atn_$(date +\%Y\%m\%d).sql.gz
+0 3 * * * cd /path/to/cullis && docker compose exec -T postgres pg_dump -U atn agent_trust | gzip > /backups/atn_$(date +\%Y\%m\%d).sql.gz
 ```
 
 ### What to back up

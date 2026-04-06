@@ -31,8 +31,8 @@ from app.auth.models import TokenPayload
 from app.db.database import get_db
 from app.spiffe import internal_id_to_spiffe
 
-_TOKEN_ISSUER   = "agent-trust-broker"
-_TOKEN_AUDIENCE = "agent-trust-network"
+_TOKEN_ISSUER   = "cullis-broker"
+_TOKEN_AUDIENCE = "cullis"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test overrides — set by conftest to bypass KMS (no filesystem or Vault needed)

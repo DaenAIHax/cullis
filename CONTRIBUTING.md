@@ -6,8 +6,8 @@ Thank you for your interest in contributing to Cullis! This guide will help you 
 
 ```bash
 # Clone the repo
-git clone https://github.com/DaenAIHax/Agent-Trust-Network.git
-cd Agent-Trust-Network
+git clone https://github.com/DaenAIHax/cullis.git
+cd cullis
 
 # Create virtual environment
 python3.11 -m venv .venv
@@ -54,7 +54,7 @@ Before submitting, verify:
 
 ## What to Contribute
 
-Check out issues labeled [`good-first-issue`](https://github.com/DaenAIHax/Agent-Trust-Network/labels/good-first-issue) and [`help-wanted`](https://github.com/DaenAIHax/Agent-Trust-Network/labels/help-wanted).
+Check out issues labeled [`good-first-issue`](https://github.com/DaenAIHax/cullis/labels/good-first-issue) and [`help-wanted`](https://github.com/DaenAIHax/cullis/labels/help-wanted).
 
 Areas where contributions are especially welcome:
 - **SDKs:** TypeScript, Go, Java client libraries
@@ -69,7 +69,7 @@ Areas where contributions are especially welcome:
 
 ## Questions?
 
-Open a [GitHub Discussion](https://github.com/DaenAIHax/Agent-Trust-Network/discussions) in the Q&A category.
+Open a [GitHub Discussion](https://github.com/DaenAIHax/cullis/discussions) in the Q&A category.
 
 ## License
 

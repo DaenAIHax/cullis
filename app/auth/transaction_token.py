@@ -61,8 +61,8 @@ async def create_transaction_token(
     spiffe_id = internal_id_to_spiffe(agent_id, settings.trust_domain)
 
     claims = {
-        "iss": "agent-trust-broker",
-        "aud": "agent-trust-network",
+        "iss": "cullis-broker",
+        "aud": "cullis",
         "sub": spiffe_id,
         "agent_id": agent_id,
         "org": org_id,
