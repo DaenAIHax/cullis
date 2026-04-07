@@ -87,9 +87,8 @@ ok "Containers started"
 step "Waiting for services"
 
 PROXY_PORT="${MCP_PROXY_PORT:-9100}"
-PDP_PORT="${MCP_PROXY_PDP_PORT:-9200}"
 
-echo -n "  Proxy  "
+echo -n "  Proxy + PDP "
 for i in $(seq 1 30); do
     if curl -sf "http://localhost:${PROXY_PORT}/health" >/dev/null 2>&1; then
         echo -e " ${GREEN}ready${RESET}"
@@ -103,32 +102,18 @@ for i in $(seq 1 30); do
     fi
 done
 
-echo -n "  PDP    "
-for i in $(seq 1 15); do
-    if curl -sf "http://localhost:${PDP_PORT}/health" >/dev/null 2>&1; then
-        echo -e " ${GREEN}ready${RESET}"
-        break
-    fi
-    echo -n "."
-    sleep 1
-    if [[ $i -eq 15 ]]; then
-        echo -e " ${RED}timeout${RESET}"
-        warn "PDP did not become healthy"
-    fi
-done
-
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}MCP Proxy deployed!${RESET}"
 echo ""
 echo -e "  ${BOLD}Proxy Dashboard${RESET}  ${GRAY}http://localhost:${PROXY_PORT}/proxy/login${RESET}"
 echo -e "  ${BOLD}Proxy API${RESET}        ${GRAY}http://localhost:${PROXY_PORT}/v1/egress/${RESET}"
-echo -e "  ${BOLD}PDP Webhook${RESET}      ${GRAY}http://localhost:${PDP_PORT}/policy${RESET}"
+echo -e "  ${BOLD}PDP Webhook${RESET}      ${GRAY}http://mcp-proxy:${PROXY_PORT}/pdp/policy  (Docker internal)${RESET}"
 echo -e "  ${BOLD}Health${RESET}           ${GRAY}http://localhost:${PROXY_PORT}/health${RESET}"
 echo ""
 echo "  Next steps:"
 echo "    1. Open the proxy dashboard at http://localhost:${PROXY_PORT}/proxy/login"
-echo "    2. Enter the broker URL and your invite token"
+echo "    2. Broker URL: http://broker:8000 (same Docker network) + invite token"
 echo "    3. Register your organization (certificates auto-generated)"
 echo "    4. Wait for broker admin to approve your organization"
 echo "    5. Create agents and start communicating"

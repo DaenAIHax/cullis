@@ -1,21 +1,25 @@
 # =============================================================================
-# Cullis MCP Proxy — Standalone Docker Compose
+# Cullis MCP Proxy — Org-Level Gateway + Built-in PDP
 # =============================================================================
 #
-# The MCP Proxy is the org-level gateway that handles identity, certificates,
-# and broker communication on behalf of internal AI agents.
-#
-# Includes a built-in PDP (Policy Decision Point) that the broker calls
-# to authorize sessions. Default: allow all. Customize via rules.json
-# or connect to your own OPA instance.
+# Joins the broker's Docker network so the broker can call the PDP webhook
+# and the proxy can reach the broker directly.
 #
 # Usage:
 #   docker compose -f docker-compose.proxy.yml up -d
 #
+# Prerequisites:
+#   - Broker running: docker compose up -d (or ./deploy_broker.sh)
+#   - The broker's network "agent-trust_default" must exist
+#
 # On first run, open http://localhost:9100/proxy/login to:
-#   1. Connect to your Cullis broker (enter broker URL + invite token)
-#   2. Register your organization (PDP webhook auto-registered)
-#   3. Create agents
+#   1. Enter broker URL: http://broker:8000 (Docker internal)
+#   2. Enter your invite token (from broker admin)
+#   3. Register your organization (certs auto-generated)
+#   4. Create agents
+#
+# The PDP webhook URL is automatically set to http://mcp-proxy:9100/pdp/policy
+# which the broker can reach via the shared Docker network.
 # =============================================================================
 
 services:
@@ -30,17 +34,17 @@ services:
       MCP_PROXY_ENVIRONMENT: ${MCP_PROXY_ENVIRONMENT:-development}
       MCP_PROXY_ADMIN_SECRET: ${MCP_PROXY_ADMIN_SECRET:-change-me-in-production}
       MCP_PROXY_DATABASE_URL: sqlite+aiosqlite:////data/mcp_proxy.db
-      # PDP webhook URL — the proxy tells the broker to call this for policy decisions
-      MCP_PROXY_PDP_URL: http://pdp:9200/policy
+      # PDP webhook URL — the broker calls this for policy decisions
+      # Uses the Docker DNS name so the broker can reach it on the shared network
+      MCP_PROXY_PDP_URL: http://mcp-proxy:9100/pdp/policy
       # Vault (optional — uncomment to enable)
       # MCP_PROXY_SECRET_BACKEND: vault
       # MCP_PROXY_VAULT_ADDR: http://vault:8200
       # MCP_PROXY_VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
     volumes:
       - mcp_proxy_data:/data
-    depends_on:
-      pdp:
-        condition: service_healthy
+    networks:
+      - broker_net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
@@ -49,38 +53,10 @@ services:
       retries: 3
       start_period: 10s
 
-  # Built-in PDP — Policy Decision Point
-  # The broker calls this webhook to authorize sessions involving your org.
-  # Default: allow all sessions. Customize by mounting a rules.json file.
-  pdp:
-    build:
-      context: .
-      dockerfile: mcp_proxy/Dockerfile.pdp
-    ports:
-      - "${MCP_PROXY_PDP_PORT:-9200}:9200"
-    environment:
-      PDP_PORT: "9200"
-      PDP_RULES_PATH: /etc/pdp/rules.json
-    volumes:
-      - ./pdp-rules.json:/etc/pdp/rules.json:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9200/health')"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-
-  # Optional: HashiCorp Vault for secure key storage
-  # vault:
-  #   image: hashicorp/vault:1.17
-  #   ports:
-  #     - "8200:8200"
-  #   environment:
-  #     VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-dev-root-token}
-  #     VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
-  #   cap_add:
-  #     - IPC_LOCK
+networks:
+  broker_net:
+    external: true
+    name: agent-trust_default
 
 volumes:
   mcp_proxy_data:
