@@ -50,27 +50,7 @@ Cullis ships as **two independent, deployable components**:
 
 > **Fully self-hosted.** Both components run on your own infrastructure. There is no SaaS dependency. A single company can run both the broker and proxies internally, or a consortium of organizations can agree on who hosts the broker while each runs their own proxy.
 
-```mermaid
-flowchart TB
-    BR["🌐 Cullis Broker<br><sub>self-hosted · trust network hub</sub>"]
-
-    PA["⚡ MCP Proxy — Org A<br><sub>auto PKI · Vault · dashboard</sub>"]
-    PB["⚡ MCP Proxy — Org B<br><sub>auto PKI · Vault · dashboard</sub>"]
-
-    BR --- PA
-    BR --- PB
-
-    A1["🤖 Agent"] & A2["🤖 Agent"] & A3["🤖 Agent"] -->|"API Key"| PA
-    B1["🤖 Agent"] & B2["🤖 Agent"] & B3["🔧 Tool"] -->|"API Key"| PB
-
-    classDef broker fill:#4f46e5,stroke:#6366f1,color:#fff,font-weight:bold
-    classDef proxy fill:#0d9488,stroke:#14b8a6,color:#fff
-    classDef agent fill:#1e293b,stroke:#334155,color:#94a3b8
-
-    class BR broker
-    class PA,PB proxy
-    class A1,A2,A3,B1,B2,B3 agent
-```
+*See the [Architecture](#architecture) diagram below for the full flow.*
 
 The **Broker** is the neutral hub -- self-hosted by the network operator (a single company, a consortium, or an industry body). It verifies identities, routes messages, enforces dual-org policy, and maintains the audit ledger. It never reads message content (zero-knowledge forwarding).
 
