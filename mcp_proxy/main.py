@@ -71,6 +71,25 @@ async def lifespan(app: FastAPI):
     from mcp_proxy.auth.dpop import generate_dpop_nonce
     generate_dpop_nonce()
 
+    # 5. Initialize BrokerBridge for egress (if broker_url configured)
+    from mcp_proxy.db import get_config
+    broker_url = await get_config("broker_url") or settings.broker_url
+    org_id = await get_config("org_id") or settings.org_id
+    if broker_url:
+        from mcp_proxy.egress.agent_manager import AgentManager
+        from mcp_proxy.egress.broker_bridge import BrokerBridge
+        agent_mgr = AgentManager(org_id=org_id)
+        await agent_mgr.load_org_ca_from_config()
+        bridge = BrokerBridge(
+            broker_url=broker_url,
+            org_id=org_id,
+            agent_manager=agent_mgr,
+        )
+        app.state.broker_bridge = bridge
+        _log.info("BrokerBridge initialized (broker=%s, org=%s)", broker_url, org_id)
+    else:
+        _log.warning("No broker_url configured — egress endpoints will return 503")
+
     _log.info(
         "MCP Proxy started (host=%s, port=%d, env=%s)",
         settings.host, settings.port, settings.environment,
@@ -79,6 +98,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
+    if hasattr(app.state, "broker_bridge"):
+        await app.state.broker_bridge.shutdown()
     if _jwks_client:
         await _jwks_client.close()
     _log.info("MCP Proxy shutdown complete")

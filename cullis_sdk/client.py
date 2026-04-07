@@ -156,11 +156,11 @@ class CullisClient:
             self._update_nonce(resp)
             self.token = resp.json()["access_token"]
         except (httpx.ConnectError, httpx.TimeoutException) as e:
-            print(f"[{agent_id}] Broker unreachable: {e}", flush=True)
-            sys.exit(1)
+            raise ConnectionError(f"[{agent_id}] Broker unreachable: {e}") from e
         except httpx.HTTPStatusError as e:
-            print(f"[{agent_id}] Login failed (HTTP {e.response.status_code}): {e.response.text}", flush=True)
-            sys.exit(1)
+            raise PermissionError(
+                f"[{agent_id}] Login failed (HTTP {e.response.status_code}): {e.response.text}"
+            ) from e
 
     # ── Registry ────────────────────────────────────────────────────
 
@@ -315,8 +315,7 @@ class CullisClient:
                     print(f"[{self._label}] Broker unreachable — retry in 2s...", flush=True)
                     time.sleep(2)
                 else:
-                    print(f"[{self._label}] Broker unreachable after 3 attempts.", flush=True)
-                    sys.exit(1)
+                    raise ConnectionError(f"[{self._label}] Broker unreachable after 3 attempts.")
 
     def decrypt_payload(self, msg: dict, session_id: str | None = None) -> dict:
         """
@@ -363,8 +362,7 @@ class CullisClient:
                 if attempt < 4:
                     time.sleep(poll_interval)
                 else:
-                    print(f"[{self._label}] Broker unreachable.", flush=True)
-                    sys.exit(1)
+                    raise ConnectionError(f"[{self._label}] Broker unreachable.")
         return []
 
     # ── WebSocket ───────────────────────────────────────────────────
