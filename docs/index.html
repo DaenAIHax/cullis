@@ -3,8 +3,60 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cullis — The Trust Layer for AI Agents</title>
-<meta name="description" content="Open-source federated trust broker and MCP proxy for inter-organizational AI agents. Fully self-hosted. Cryptographic identity, zero-knowledge messaging, compliance-grade audit.">
+<title>Cullis — Cryptographic identity for cross-org AI agents</title>
+<meta name="description" content="Self-hosted trust broker and MCP proxy. Cryptographic identity, E2E encryption, and tamper-evident audit for AI agents that work across organizations.">
+<meta name="keywords" content="MCP, AI agents, trust broker, x509, DPoP, SPIFFE, E2E encryption, federated identity, workload identity, zero-trust">
+<meta name="author" content="Cullis">
+<meta name="theme-color" content="#0a0b10">
+
+<!-- Canonical -->
+<link rel="canonical" href="https://cullis.io/">
+
+<!-- Favicons -->
+<link rel="icon" type="image/svg+xml" href="cullis.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+
+<!-- Open Graph / Facebook / LinkedIn -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://cullis.io/">
+<meta property="og:title" content="Cullis — Cryptographic identity for cross-org AI agents">
+<meta property="og:description" content="Self-hosted trust broker and MCP proxy. x509 identity, E2E encryption, tamper-evident audit for AI agents that work across organizations.">
+<meta property="og:image" content="https://cullis.io/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Cullis — The trust layer for AI agents">
+<meta property="og:site_name" content="Cullis">
+<meta property="og:locale" content="en_US">
+
+<!-- Twitter / X -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://cullis.io/">
+<meta name="twitter:title" content="Cullis — Cryptographic identity for cross-org AI agents">
+<meta name="twitter:description" content="Self-hosted trust broker and MCP proxy. x509 identity, E2E encryption, tamper-evident audit for AI agents that work across organizations.">
+<meta name="twitter:image" content="https://cullis.io/og-image.png">
+<meta name="twitter:image:alt" content="Cullis — The trust layer for AI agents">
+
+<!-- Structured data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Cullis",
+  "description": "Self-hosted federated trust broker and MCP proxy for inter-organizational AI agents. Cryptographic identity, E2E encryption, tamper-evident audit.",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "codeRepository": "https://github.com/DaenAIHax/cullis",
+  "programmingLanguage": ["Python", "TypeScript"]
+}
+</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&family=Satoshi:wght@300;400;500;700;900&family=Chakra+Petch:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,7 +72,7 @@
   --border-medium: rgba(255,255,255,0.1);
   --text-primary: #e8e9ed;
   --text-secondary: #8a8d9b;
-  --text-tertiary: #555868;
+  --text-tertiary: #6e7180;
   --accent-cyan: #00e5c7;
   --accent-cyan-dim: rgba(0,229,199,0.15);
   --accent-cyan-glow: rgba(0,229,199,0.08);
@@ -67,7 +119,7 @@ body::before {
   content: '';
   position: fixed;
   inset: 0;
-  opacity: 0.025;
+  opacity: 0.04;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   pointer-events: none;
   z-index: 0;
@@ -105,10 +157,32 @@ nav {
   left: 0;
   right: 0;
   z-index: 100;
-  padding: 1rem 0;
-  background: rgba(5,5,8,0.8);
-  backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 1.15rem 0;
+  background: rgba(5,5,8,0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid transparent;
+  transition: padding 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.35s ease,
+              border-color 0.35s ease,
+              backdrop-filter 0.35s ease;
+}
+
+nav.scrolled {
+  padding: 0.7rem 0;
+  background: rgba(5,5,8,0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-bottom-color: var(--border-subtle);
+}
+
+nav.scrolled .nav-logo img {
+  height: 26px;
+  transition: height 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nav-logo img {
+  transition: height 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 nav .container {
@@ -165,44 +239,53 @@ nav .container {
   align-items: center;
   position: relative;
   padding-top: 6rem;
+  padding-bottom: 4rem;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: clamp(2rem, 5vw, 4.5rem);
+  align-items: center;
+  width: 100%;
 }
 
 .hero-content {
-  max-width: 820px;
+  min-width: 0;
 }
 
 /* ── BRAND LOCKUP ────────────────────────────────── */
 .brand-lockup {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  margin-bottom: 2rem;
+  gap: 0.9rem;
+  margin-bottom: 1.75rem;
 }
 
 .brand-lockup img {
-  height: clamp(64px, 8vw, 100px);
+  height: clamp(52px, 6.5vw, 78px);
   width: auto;
-  filter: drop-shadow(0 0 20px rgba(59, 208, 213, 0.25));
+  filter: drop-shadow(0 0 20px rgba(0, 229, 199, 0.28));
 }
 
 .brand-lockup .brand-name {
   font-family: 'Chakra Petch', sans-serif;
   font-weight: 600;
-  font-size: clamp(2.8rem, 6vw, 4.5rem);
+  font-size: clamp(2.2rem, 4.6vw, 3.4rem);
   text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.18em;
   color: var(--text-primary);
   line-height: 1;
 }
 
 .hero-eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 400;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--accent-cyan);
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
   display: flex;
   align-items: center;
   gap: 0.8rem;
@@ -215,11 +298,64 @@ nav .container {
   background: var(--accent-cyan);
 }
 
+.hero-eyebrow .pulse {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 10px var(--accent-cyan);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.hero-social {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin-top: 1.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.hero-social a {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  transition: color 0.2s;
+}
+
+.hero-social a:hover {
+  color: var(--accent-cyan);
+}
+
+.hero-social a svg {
+  width: 13px;
+  height: 13px;
+}
+
+.hero-social .star-badge {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-subtle);
+  padding: 0.35rem 0.7rem;
+  transition: all 0.2s;
+}
+
+.hero-social .star-badge:hover {
+  border-color: rgba(0,229,199,0.3);
+  background: rgba(0,229,199,0.05);
+}
+
 .hero h1 {
   font-family: var(--font-display);
-  font-size: clamp(3.2rem, 8vw, 6rem);
+  font-size: clamp(2.6rem, 5.2vw, 4.4rem);
   font-weight: 400;
-  line-height: 1.05;
+  line-height: 1.08;
   letter-spacing: -0.02em;
   color: var(--text-primary);
   margin-bottom: 1.5rem;
@@ -231,11 +367,11 @@ nav .container {
 }
 
 .hero-sub {
-  font-size: clamp(1.05rem, 2vw, 1.25rem);
+  font-size: clamp(1rem, 1.5vw, 1.15rem);
   color: var(--text-secondary);
   max-width: 560px;
   line-height: 1.7;
-  margin-bottom: 2.5rem;
+  margin-bottom: 2.25rem;
   font-weight: 300;
 }
 
@@ -243,6 +379,141 @@ nav .container {
   display: flex;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+/* ── HERO TERMINAL (animated) ────────────────────── */
+.hero-terminal-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.hero-terminal-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -20px;
+  background: radial-gradient(circle at 70% 30%, rgba(0,229,199,0.08) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-terminal {
+  position: relative;
+  z-index: 1;
+  background: #0c0d12;
+  border: 1px solid var(--border-medium);
+  box-shadow:
+    0 30px 60px -20px rgba(0,0,0,0.6),
+    0 0 60px rgba(0,229,199,0.06),
+    inset 0 1px 0 rgba(255,255,255,0.03);
+  overflow: hidden;
+}
+
+.hero-terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.7rem 1rem;
+  background: rgba(255,255,255,0.025);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.hero-terminal-bar .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.hero-terminal-bar .dot.r { background: #ff5f57; }
+.hero-terminal-bar .dot.y { background: #febc2e; }
+.hero-terminal-bar .dot.g { background: #28c840; }
+
+.hero-terminal-bar .title {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-tertiary);
+  margin-left: 0.5rem;
+  letter-spacing: 0.06em;
+}
+
+.hero-terminal-bar .lang {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--accent-cyan);
+  background: var(--accent-cyan-dim);
+  padding: 0.15rem 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.hero-terminal-body {
+  padding: 1.4rem 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.85;
+  overflow-x: auto;
+  min-height: 340px;
+}
+
+.hero-terminal-body .line {
+  display: block;
+  opacity: 0;
+  transform: translateX(-4px);
+  animation: line-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  white-space: pre;
+}
+
+@keyframes line-in {
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Stagger — match the order of lines in HTML */
+.hero-terminal-body .line:nth-child(1)  { animation-delay: 0.2s; }
+.hero-terminal-body .line:nth-child(2)  { animation-delay: 0.45s; }
+.hero-terminal-body .line:nth-child(3)  { animation-delay: 0.65s; }
+.hero-terminal-body .line:nth-child(4)  { animation-delay: 0.85s; }
+.hero-terminal-body .line:nth-child(5)  { animation-delay: 1.05s; }
+.hero-terminal-body .line:nth-child(6)  { animation-delay: 1.25s; }
+.hero-terminal-body .line:nth-child(7)  { animation-delay: 1.45s; }
+.hero-terminal-body .line:nth-child(8)  { animation-delay: 1.8s; }
+.hero-terminal-body .line:nth-child(9)  { animation-delay: 2.0s; }
+.hero-terminal-body .line:nth-child(10) { animation-delay: 2.2s; }
+.hero-terminal-body .line:nth-child(11) { animation-delay: 2.55s; }
+.hero-terminal-body .line:nth-child(12) { animation-delay: 2.75s; }
+.hero-terminal-body .line:nth-child(13) { animation-delay: 3.0s; }
+.hero-terminal-body .line:nth-child(14) { animation-delay: 3.2s; }
+
+.hero-terminal-body .kw    { color: #c678dd; }      /* keyword: from, import, def */
+.hero-terminal-body .fn    { color: #61afef; }      /* function calls */
+.hero-terminal-body .str   { color: #98c379; }      /* strings */
+.hero-terminal-body .var   { color: #e8e9ed; }      /* variables */
+.hero-terminal-body .comm  { color: var(--text-tertiary); font-style: italic; }
+.hero-terminal-body .ok    { color: var(--accent-cyan); }
+.hero-terminal-body .out   { color: var(--text-secondary); }
+
+.hero-terminal-body .cursor {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background: var(--accent-cyan);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  opacity: 0;
+  animation: cursor-in 0.1s 3.3s forwards, cursor-blink 1s 3.3s infinite;
+}
+
+@keyframes cursor-in { to { opacity: 1; } }
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* ── REDUCED MOTION ──────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .hero-terminal-body .line { opacity: 1; transform: none; animation: none; }
+  .hero-terminal-body .cursor { animation: none; opacity: 1; }
+  .flow-line, .node-glow, .pulse-dot, .hero-eyebrow .pulse { animation: none; }
 }
 
 .btn {
@@ -353,8 +624,8 @@ nav .container {
 }
 
 .problem-card .icon-danger {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--accent-red);
   border-radius: 6px;
   display: flex;
@@ -362,8 +633,12 @@ nav .container {
   justify-content: center;
   margin-bottom: 1.5rem;
   color: var(--accent-red);
-  font-size: 1rem;
   background: rgba(255,77,106,0.06);
+}
+
+.problem-card .icon-danger svg {
+  width: 18px;
+  height: 18px;
 }
 
 .problem-card h3 {
@@ -441,6 +716,646 @@ nav .container {
   font-weight: 300;
 }
 
+/* ── PILLARS TABBED SHOWCASE ─────────────────────── */
+.pillar-tabs {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 2.5rem;
+  align-items: stretch;
+}
+
+.pillar-tab {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+  padding: 1.4rem 1.2rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  position: relative;
+  font-family: inherit;
+  color: inherit;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 2px;
+}
+
+.pillar-tab:hover:not(.active) {
+  border-color: rgba(0,229,199,0.2);
+  background: rgba(0,229,199,0.025);
+  transform: translateY(-2px);
+}
+
+.pillar-tab.active {
+  background: linear-gradient(180deg, rgba(0,229,199,0.12) 0%, rgba(0,229,199,0.04) 100%);
+  border-color: rgba(0,229,199,0.45);
+  transform: translateY(-6px);
+  box-shadow:
+    0 18px 40px -18px rgba(0,229,199,0.25),
+    0 0 0 1px rgba(0,229,199,0.15);
+}
+
+.pillar-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 12px;
+  height: 12px;
+  background: rgba(0,229,199,0.04);
+  border-right: 1px solid rgba(0,229,199,0.45);
+  border-bottom: 1px solid rgba(0,229,199,0.45);
+}
+
+.pillar-tab-icon {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: color 0.3s;
+}
+
+.pillar-tab.active .pillar-tab-icon,
+.pillar-tab:hover .pillar-tab-icon {
+  color: var(--accent-cyan);
+}
+
+.pillar-tab-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.pillar-tab-title {
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.pillar-tab-blurb {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  font-weight: 300;
+  margin-top: -0.2rem;
+}
+
+.pillar-tab.active .pillar-tab-blurb {
+  color: var(--text-secondary);
+}
+
+/* Stage */
+.pillar-stage {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  position: relative;
+  overflow: hidden;
+  min-height: 460px;
+}
+
+.pillar-stage::before {
+  content: '';
+  position: absolute;
+  top: -60px;
+  right: -60px;
+  width: 280px;
+  height: 280px;
+  background: radial-gradient(circle, var(--accent-cyan-glow) 0%, transparent 65%);
+  pointer-events: none;
+}
+
+.pillar-panel {
+  display: none;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: clamp(2rem, 5vw, 4rem);
+  padding: clamp(2.5rem, 5vw, 4rem);
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}
+
+.pillar-panel.active {
+  display: grid;
+  animation: panel-fade 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes panel-fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.pillar-panel-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  margin-bottom: 1rem;
+  display: block;
+}
+
+.pillar-panel h3 {
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 3.6vw, 2.8rem);
+  font-weight: 400;
+  line-height: 1.1;
+  margin-bottom: 1.2rem;
+  color: var(--text-primary);
+}
+
+.pillar-panel h3 em {
+  font-style: italic;
+  color: var(--accent-cyan);
+}
+
+.pillar-panel-desc {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  font-weight: 300;
+  margin-bottom: 1.5rem;
+}
+
+.pillar-panel ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.pillar-panel li {
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  padding-left: 1.6rem;
+  position: relative;
+  font-weight: 300;
+}
+
+.pillar-panel li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 8px;
+  height: 8px;
+  background: var(--accent-cyan);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.pillar-panel li strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Right-side mock visuals */
+.pillar-visual {
+  min-width: 0;
+  position: relative;
+}
+
+.mock-card {
+  background: #0c0d12;
+  border: 1px solid var(--border-medium);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  box-shadow:
+    0 30px 60px -25px rgba(0,0,0,0.6),
+    0 0 50px rgba(0,229,199,0.05);
+}
+
+.mock-card-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  background: rgba(255,255,255,0.025);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.62rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.mock-card-bar .dot-row {
+  display: flex;
+  gap: 5px;
+}
+
+.mock-card-bar .dot-row .d {
+  width: 8px; height: 8px; border-radius: 50%;
+}
+
+.mock-card-bar .dot-row .d:nth-child(1) { background: #ff5f57; }
+.mock-card-bar .dot-row .d:nth-child(2) { background: #febc2e; }
+.mock-card-bar .dot-row .d:nth-child(3) { background: #28c840; }
+
+.mock-card-bar .title {
+  margin-left: 0.4rem;
+}
+
+.mock-card-bar .badge {
+  margin-left: auto;
+  background: var(--accent-cyan-dim);
+  color: var(--accent-cyan);
+  padding: 0.15rem 0.5rem;
+  border-radius: 1px;
+}
+
+.mock-card-body {
+  padding: 1.4rem 1.5rem;
+}
+
+/* Mock 1 — Identity card */
+.mock-identity .field {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.55rem 0;
+  border-bottom: 1px dashed var(--border-subtle);
+  gap: 1rem;
+}
+
+.mock-identity .field:last-child { border: none; }
+
+.mock-identity .field .k {
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.mock-identity .field .v {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  text-align: right;
+  word-break: break-all;
+}
+
+.mock-identity .field .v.cyan { color: var(--accent-cyan); }
+
+.mock-identity .field .pinned {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--accent-cyan);
+  font-size: 0.7rem;
+}
+
+.mock-identity .field .pinned::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: var(--accent-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--accent-cyan);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Mock 2 — E2E flow */
+.mock-e2e {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.mock-e2e .node {
+  flex: 1;
+  text-align: center;
+  padding: 1rem 0.6rem;
+  border: 1px solid var(--border-medium);
+  background: rgba(255,255,255,0.02);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  position: relative;
+}
+
+.mock-e2e .node.broker {
+  border-color: rgba(255,77,106,0.3);
+  background: rgba(255,77,106,0.04);
+  color: var(--accent-red);
+}
+
+.mock-e2e .node .label {
+  display: block;
+  font-size: 0.62rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.4rem;
+}
+
+.mock-e2e .node strong {
+  display: block;
+  color: var(--text-primary);
+  font-weight: 500;
+  margin-bottom: 0.2rem;
+}
+
+.mock-e2e .arrow {
+  color: var(--accent-cyan);
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.mock-e2e-stamp {
+  margin-top: 1rem;
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--accent-cyan);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Mock 3 — Federated PDP */
+.mock-fedauth {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.mock-fedauth .pdp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-medium);
+  background: rgba(255,255,255,0.02);
+  font-size: 0.75rem;
+}
+
+.mock-fedauth .pdp .org {
+  color: var(--text-primary);
+}
+
+.mock-fedauth .pdp .verdict {
+  color: var(--accent-cyan);
+  font-size: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mock-fedauth .pdp .verdict::before {
+  content: '✓';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--accent-cyan);
+  text-align: center;
+  line-height: 12px;
+  font-size: 0.65rem;
+}
+
+.mock-fedauth .result {
+  text-align: center;
+  padding: 0.8rem;
+  background: rgba(0,229,199,0.06);
+  border: 1px solid rgba(0,229,199,0.3);
+  color: var(--accent-cyan);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 0.3rem;
+}
+
+/* Mock 4 — Hash chain */
+.mock-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.mock-chain .block {
+  border: 1px solid var(--border-medium);
+  padding: 0.7rem 0.9rem;
+  background: rgba(255,255,255,0.02);
+  font-size: 0.7rem;
+  display: flex;
+  justify-content: space-between;
+  position: relative;
+}
+
+.mock-chain .block + .block::before {
+  content: '';
+  position: absolute;
+  left: 1.4rem;
+  top: -8px;
+  width: 1px;
+  height: 8px;
+  background: var(--accent-cyan);
+}
+
+.mock-chain .block .id {
+  color: var(--text-tertiary);
+}
+
+.mock-chain .block .hash {
+  color: var(--accent-cyan);
+}
+
+.mock-chain .verify {
+  margin-top: 0.6rem;
+  padding: 0.65rem 0.9rem;
+  background: rgba(0,229,199,0.08);
+  border: 1px solid rgba(0,229,199,0.3);
+  color: var(--accent-cyan);
+  font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mock-chain .verify::before {
+  content: '✓';
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--accent-cyan);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+}
+
+/* Mock 5 — Invite */
+.mock-invite .step {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px dashed var(--border-subtle);
+}
+
+.mock-invite .step:last-child { border: none; }
+
+.mock-invite .step .num {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-size: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mock-invite .step .text {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.mock-invite .step .status {
+  font-size: 0.65rem;
+  color: var(--accent-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mock-invite .step.done .status {
+  color: var(--accent-cyan);
+}
+
+.mock-invite .step.pending .status {
+  color: var(--text-tertiary);
+}
+
+/* Mock 6 — SDK code */
+.mock-sdk pre {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.mock-sdk .kw   { color: #c678dd; }
+.mock-sdk .fn   { color: #61afef; }
+.mock-sdk .str  { color: #98c379; }
+.mock-sdk .var  { color: var(--text-primary); }
+.mock-sdk .comm { color: var(--text-tertiary); font-style: italic; }
+.mock-sdk .ok   { color: var(--accent-cyan); }
+
+/* ── USE CASES ───────────────────────────────────── */
+.usecase-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.usecase {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  padding: clamp(1.8rem, 3vw, 2.5rem);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.4s, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+.usecase::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent-cyan), transparent);
+  opacity: 0.5;
+  transition: opacity 0.4s;
+}
+
+.usecase:hover {
+  border-color: rgba(0,229,199,0.25);
+  transform: translateY(-3px);
+}
+
+.usecase:hover::before {
+  opacity: 1;
+}
+
+.usecase-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+  margin-bottom: 1.2rem;
+  display: block;
+}
+
+.usecase h3 {
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  font-weight: 400;
+  line-height: 1.2;
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+.usecase h3 em {
+  font-style: italic;
+  color: var(--accent-cyan);
+}
+
+.usecase-desc {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.65;
+  font-weight: 300;
+  margin-bottom: 1.5rem;
+  flex-grow: 1;
+}
+
+.usecase-flow {
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.usecase-flow .step {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  padding-left: 1.8rem;
+  position: relative;
+  counter-increment: flow;
+}
+
+.usecase-flow {
+  counter-reset: flow;
+}
+
+.usecase-flow .step::before {
+  content: counter(flow, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent-cyan);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.usecase-flow .step strong {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
 /* ── ARCHITECTURE ────────────────────────────────── */
 .arch-container {
   background: var(--bg-surface);
@@ -496,6 +1411,7 @@ nav .container {
   border: 1px solid var(--border-medium);
   overflow: hidden;
   max-width: 700px;
+  position: relative;
 }
 
 .terminal-bar {
@@ -517,6 +1433,40 @@ nav .container {
 .terminal-dot:nth-child(2) { background: #febc2e; }
 .terminal-dot:nth-child(3) { background: #28c840; }
 
+.terminal-copy {
+  margin-left: auto;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.terminal-copy:hover {
+  background: rgba(0,229,199,0.1);
+  border-color: rgba(0,229,199,0.3);
+  color: var(--accent-cyan);
+}
+
+.terminal-copy.copied {
+  background: rgba(0,229,199,0.15);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+.terminal-copy svg {
+  width: 11px;
+  height: 11px;
+}
+
 .terminal-title {
   font-family: var(--font-mono);
   font-size: 0.7rem;
@@ -536,6 +1486,19 @@ nav .container {
 .terminal-body .cmd { color: var(--text-primary); }
 .terminal-body .comment { color: var(--text-tertiary); }
 .terminal-body .output { color: var(--text-secondary); }
+
+/* Screen-reader-only labels (WCAG 1.4.1 — do not rely on color alone) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* ── COMPARISON TABLE ────────────────────────────── */
 .table-wrap {
@@ -594,6 +1557,39 @@ td:first-child {
 
 .cross {
   color: var(--text-tertiary);
+  font-size: 0.82rem;
+}
+
+td.check {
+  background: rgba(0,229,199,0.03);
+}
+
+th:last-child, td:last-child {
+  background: rgba(0,229,199,0.04);
+}
+
+.compare-note {
+  margin-top: 2.5rem;
+  max-width: 720px;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  font-weight: 300;
+  padding: 1.5rem 1.75rem;
+  border-left: 2px solid var(--accent-cyan);
+  background: rgba(0,229,199,0.03);
+}
+
+.compare-note strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.compare-note em {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--accent-cyan);
+  font-size: 1.05rem;
 }
 
 /* ── FOOTER ──────────────────────────────────────── */
@@ -671,38 +1667,64 @@ footer {
   letter-spacing: 0.05em;
 }
 
-/* ── STATS BAR ───────────────────────────────────── */
-.stats-bar {
+/* ── STANDARDS BAR ───────────────────────────────── */
+.standards-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 1px;
   background: var(--border-subtle);
   border: 1px solid var(--border-subtle);
   margin-top: 4rem;
 }
 
-.stat {
+.standard {
   background: var(--bg-surface);
-  padding: 2rem;
-  text-align: center;
+  padding: 1.75rem 1.5rem;
+  text-align: left;
+  transition: background 0.3s;
+  position: relative;
 }
 
-.stat-value {
-  font-family: var(--font-display);
-  font-size: 2.4rem;
-  color: var(--text-primary);
-  line-height: 1;
-  margin-bottom: 0.4rem;
+.standard:hover {
+  background: var(--bg-elevated);
 }
 
-.stat-value .accent { color: var(--accent-cyan); }
-
-.stat-label {
+.standard-code {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--accent-cyan);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  margin-bottom: 0.4rem;
+  display: block;
+}
+
+.standard-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-tertiary);
+  line-height: 1.4;
+  display: block;
+}
+
+.standard::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 1px;
+  background: var(--accent-cyan);
+  opacity: 0.5;
+  transition: width 0.3s, opacity 0.3s;
+}
+
+.standard:hover::before {
+  width: 100%;
+  opacity: 1;
 }
 
 /* ── CTA SECTION ─────────────────────────────────── */
@@ -722,21 +1744,38 @@ footer {
 }
 
 /* ── RESPONSIVE ──────────────────────────────────── */
+@media (max-width: 1024px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 3rem; }
+  .hero-terminal-wrap { max-width: 620px; }
+  .hero-sub { max-width: none; }
+  .pillar-tabs { grid-template-columns: repeat(3, 1fr); }
+  .pillar-panel { grid-template-columns: 1fr; gap: 2.5rem; }
+  .pillar-stage { min-height: 0; }
+  .pillar-tab.active::after { display: none; }
+}
+
 @media (max-width: 768px) {
   .nav-links { display: none; }
-  .hero { min-height: auto; padding: 8rem 0 4rem; }
+  .hero { min-height: auto; padding: 7rem 0 4rem; }
   .problem-grid { grid-template-columns: 1fr; }
   .features-grid { grid-template-columns: 1fr; }
   .arch-svg-wrap { overflow-x: auto; }
   .footer-grid { flex-direction: column; }
   .footer-links { flex-direction: column; gap: 2rem; }
-  .stats-bar { grid-template-columns: repeat(2, 1fr); }
+  .standards-bar { grid-template-columns: repeat(2, 1fr); }
+  .hero-terminal-body { font-size: 0.72rem; padding: 1.1rem 1.2rem; min-height: 0; }
+  .pillar-tabs { grid-template-columns: repeat(2, 1fr); gap: 0.4rem; }
+  .pillar-tab { padding: 1rem 0.9rem; }
+  .pillar-tab-title { font-size: 0.85rem; }
+  .pillar-tab-blurb { font-size: 0.72rem; }
+  .pillar-panel h3 { font-size: 1.6rem; }
+  .pillar-panel { padding: 2rem 1.5rem; }
 }
 
 @media (max-width: 480px) {
   .hero-actions { flex-direction: column; }
   .btn { width: 100%; justify-content: center; }
-  .stats-bar { grid-template-columns: 1fr; }
+  .standards-bar { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -745,10 +1784,10 @@ footer {
 <div class="grid-bg"></div>
 
 <!-- NAV -->
-<nav>
+<nav role="navigation" aria-label="Primary">
   <div class="container">
-    <a href="#" class="nav-logo">
-      <img src="cullis.svg" alt="Cullis">
+    <a href="#" class="nav-logo" aria-label="Cullis — home">
+      <img src="cullis.svg" alt="" aria-hidden="true">
     </a>
     <ul class="nav-links">
       <li><a href="#problem">Problem</a></li>
@@ -762,52 +1801,94 @@ footer {
 </nav>
 
 <!-- HERO -->
-<section class="hero">
+<section class="hero" aria-label="Cullis hero">
   <div class="container">
-    <div class="hero-content">
-      <div class="brand-lockup reveal">
-        <img src="cullis.svg" alt="Cullis logo">
-        <span class="brand-name">Cullis</span>
+    <div class="hero-grid">
+      <div class="hero-content">
+        <div class="brand-lockup reveal">
+          <img src="cullis.svg" alt="Cullis logo">
+          <span class="brand-name">Cullis</span>
+        </div>
+        <div class="hero-eyebrow reveal">
+          <span class="pulse" aria-hidden="true"></span>
+          Open Source &middot; Apache 2.0
+        </div>
+        <h1 class="reveal">Cryptographic identity<br>and <em>E2E messaging</em><br>for AI agents that work<br>across organizations.</h1>
+        <p class="hero-sub reveal">
+          A self-hosted trust broker and MCP proxy. Every agent gets an x509 identity,
+          every message is end-to-end encrypted, every decision is cryptographically audited
+          &mdash; across organizational boundaries.
+        </p>
+        <div class="hero-actions reveal">
+          <a href="https://github.com/DaenAIHax/cullis/blob/main/README.md" target="_blank" rel="noopener" class="btn btn-primary">
+            Read the Docs &rarr;
+          </a>
+          <a href="https://github.com/DaenAIHax/cullis" target="_blank" rel="noopener" class="btn btn-ghost" aria-label="View Cullis on GitHub">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            View on GitHub
+          </a>
+        </div>
+
+        <div class="hero-social reveal">
+          <a href="https://github.com/DaenAIHax/cullis" target="_blank" rel="noopener" class="star-badge" aria-label="Star Cullis on GitHub">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .587l3.668 7.568L24 9.75l-6 5.89L19.335 24 12 19.897 4.665 24 6 15.64 0 9.75l8.332-1.595z"/></svg>
+            <img src="https://img.shields.io/github/stars/DaenAIHax/cullis?style=flat&label=&color=6e7180&labelColor=00000000" alt="GitHub stars" style="height:14px;vertical-align:middle;">
+          </a>
+          <a href="https://github.com/DaenAIHax/cullis/discussions" target="_blank" rel="noopener" aria-label="Join GitHub Discussions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            Join discussions
+          </a>
+          <a href="https://github.com/DaenAIHax/cullis/blob/main/LICENSE" target="_blank" rel="noopener" aria-label="Apache 2.0 License">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
+            Apache 2.0
+          </a>
+        </div>
       </div>
-      <div class="hero-eyebrow reveal">Open Source &middot; Apache 2.0</div>
-      <h1 class="reveal">The trust layer<br>for AI agents</h1>
-      <p class="hero-sub reveal">
-        A self-hosted trust broker and MCP proxy that gives your AI agents cryptographic identity,
-        zero-knowledge messaging, and compliance-grade audit &mdash; across organizational boundaries.
-      </p>
-      <div class="hero-actions reveal">
-        <a href="#quickstart" class="btn btn-primary">Get Started &darr;</a>
-        <a href="https://github.com/DaenAIHax/cullis" target="_blank" class="btn btn-ghost">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-          View on GitHub
-        </a>
+
+      <div class="hero-terminal-wrap reveal" aria-hidden="true">
+        <div class="hero-terminal" role="presentation">
+          <div class="hero-terminal-bar">
+            <span class="dot r"></span>
+            <span class="dot y"></span>
+            <span class="dot g"></span>
+            <span class="title">rfq_agent.py</span>
+            <span class="lang">Python SDK</span>
+          </div>
+          <div class="hero-terminal-body">
+<span class="line"><span class="kw">from</span> <span class="var">cullis</span> <span class="kw">import</span> <span class="var">BrokerClient</span></span><span class="line"> </span><span class="line"><span class="var">client</span> = <span class="fn">BrokerClient</span>(<span class="str">"https://broker.acme.com"</span>)</span><span class="line"><span class="var">client</span>.<span class="fn">login</span>(</span><span class="line">    <span class="var">agent_id</span>=<span class="str">"acme::rfq-agent"</span>,</span><span class="line">    <span class="var">cert</span>=<span class="str">"agent.pem"</span>, <span class="var">key</span>=<span class="str">"agent-key.pem"</span>,</span><span class="line">)</span><span class="line"><span class="comm"># <span class="ok">&#x2713;</span> Authenticated via mTLS + DPoP</span></span><span class="line"> </span><span class="line"><span class="comm"># Find suppliers on the federation</span></span><span class="line"><span class="var">suppliers</span> = <span class="var">client</span>.<span class="fn">discover</span>(</span><span class="line">    <span class="var">capabilities</span>=[<span class="str">"supply.negotiate"</span>],</span><span class="line">)</span><span class="line"><span class="out"><span class="ok">&rarr;</span> 3 agents matched across 2 orgs</span></span><span class="line"><span class="out">  acme-supplier::chips-bot  &middot;  sig-verified</span><span class="cursor"></span></span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- STATS -->
+<!-- STANDARDS -->
 <div class="container">
-  <div class="stats-bar reveal">
-    <div class="stat">
-      <div class="stat-value">450<span class="accent">+</span></div>
-      <div class="stat-label">Tests passing</div>
+  <div class="standards-bar reveal" aria-label="Standards and compliance">
+    <div class="standard">
+      <span class="standard-code">RFC 9449</span>
+      <span class="standard-label">DPoP Token Binding</span>
     </div>
-    <div class="stat">
-      <div class="stat-value"><span class="accent">2</span></div>
-      <div class="stat-label">Components</div>
+    <div class="standard">
+      <span class="standard-code">SPIFFE</span>
+      <span class="standard-label">Workload Identity</span>
     </div>
-    <div class="stat">
-      <div class="stat-value">RFC <span class="accent">9449</span></div>
-      <div class="stat-label">DPoP Compliant</div>
+    <div class="standard">
+      <span class="standard-code">x509 &middot; mTLS</span>
+      <span class="standard-label">Mutual Authentication</span>
     </div>
-    <div class="stat">
-      <div class="stat-value"><span class="accent">E2E</span></div>
-      <div class="stat-label">Encrypted Messages</div>
+    <div class="standard">
+      <span class="standard-code">AES-256-GCM</span>
+      <span class="standard-label">E2E Encryption</span>
     </div>
-    <div class="stat">
-      <div class="stat-value"><span class="accent">0</span></div>
-      <div class="stat-label">Plaintext Visibility</div>
+    <div class="standard">
+      <span class="standard-code">Apache 2.0</span>
+      <span class="standard-label">Open Source License</span>
+    </div>
+    <div class="standard">
+      <span class="standard-code">Self-Hosted</span>
+      <span class="standard-label">Zero SaaS Lock-in</span>
     </div>
   </div>
 </div>
@@ -823,17 +1904,23 @@ footer {
     </p>
     <div class="problem-grid reveal">
       <div class="problem-card" data-num="01">
-        <div class="icon-danger">&times;</div>
+        <div class="icon-danger" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 019.9-1"/><path d="M2 2l20 20"/></svg>
+        </div>
         <h3>Static API Keys</h3>
         <p>Long-lived secrets that grant permanent, unlimited access. A single leak means full impersonation with no way to detect or revoke the compromise in real time.</p>
       </div>
       <div class="problem-card" data-num="02">
-        <div class="icon-danger">&times;</div>
+        <div class="icon-danger" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l2-2"/><path d="M14 11a5 5 0 00-7.54-.54l-2 2"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+        </div>
         <h3>No Mutual Authentication</h3>
         <p>Agents from different organizations have no way to cryptographically verify each other's identity. There's no chain of trust, no issuer validation, no proof of origin.</p>
       </div>
       <div class="problem-card" data-num="03">
-        <div class="icon-danger">&times;</div>
+        <div class="icon-danger" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0112 20c-7 0-11-8-11-8a21.66 21.66 0 015.17-6.11"/><path d="M9.9 4.24A10.94 10.94 0 0112 4c7 0 11 8 11 8a21.77 21.77 0 01-3.17 4.64"/><path d="M14.12 14.12a3 3 0 01-4.24-4.24"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+        </div>
         <h3>Zero Audit Trail</h3>
         <p>When something goes wrong across organizational boundaries, there is no tamper-evident record of who authorized what. Compliance is impossible. Non-repudiation is a myth.</p>
       </div>
@@ -845,87 +1932,355 @@ footer {
 <section id="features">
   <div class="container">
     <div class="section-label reveal">How Cullis Solves It</div>
-    <h2 class="section-title reveal">Cryptographic trust, <br><em>not blind faith</em></h2>
+    <h2 class="section-title reveal">Six pillars,<br><em>zero blind faith</em></h2>
     <p class="section-desc reveal">
-      Every security property is enforced at the protocol level. No configuration knobs to get wrong.
-      No secrets to share between organizations.
+      Every security property is enforced at the protocol level &mdash; not in config files,
+      not in application code. No secrets to share, no knobs to get wrong.
     </p>
-    <div class="features-grid">
-      <div class="feature-card reveal">
-        <div class="feature-tag">Gateway</div>
-        <h3>MCP Proxy</h3>
-        <p>Org-level gateway that handles all crypto complexity. Agents authenticate with simple API keys. The proxy manages certificates, Vault secrets, and broker communication automatically.</p>
+    <!-- TABS BAR -->
+    <div class="pillar-tabs reveal" role="tablist" aria-label="Cullis pillars">
+      <button type="button" class="pillar-tab active" role="tab" aria-selected="true" aria-controls="panel-identity" id="tab-identity" data-target="identity">
+        <span class="pillar-tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 4v6c0 5-3.5 9.5-9 10-5.5-.5-9-5-9-10V6l9-4z"/><path d="M9 12l2 2 4-4"/></svg>
+        </span>
+        <span class="pillar-tab-title">Identity</span>
+        <span class="pillar-tab-blurb">x509 + SPIFFE + DPoP</span>
+      </button>
+
+      <button type="button" class="pillar-tab" role="tab" aria-selected="false" aria-controls="panel-e2e" id="tab-e2e" data-target="e2e">
+        <span class="pillar-tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        </span>
+        <span class="pillar-tab-title">E2E</span>
+        <span class="pillar-tab-blurb">Broker-blind encryption</span>
+      </button>
+
+      <button type="button" class="pillar-tab" role="tab" aria-selected="false" aria-controls="panel-authz" id="tab-authz" data-target="authz">
+        <span class="pillar-tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+        </span>
+        <span class="pillar-tab-title">Authorization</span>
+        <span class="pillar-tab-blurb">Federated PDP, OPA</span>
+      </button>
+
+      <button type="button" class="pillar-tab" role="tab" aria-selected="false" aria-controls="panel-audit" id="tab-audit" data-target="audit">
+        <span class="pillar-tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/></svg>
+        </span>
+        <span class="pillar-tab-title">Audit</span>
+        <span class="pillar-tab-blurb">Tamper-evident ledger</span>
+      </button>
+
+      <button type="button" class="pillar-tab" role="tab" aria-selected="false" aria-controls="panel-federation" id="tab-federation" data-target="federation">
+        <span class="pillar-tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15 15 0 010 20M12 2a15 15 0 000 20"/></svg>
+        </span>
+        <span class="pillar-tab-title">Federation</span>
+        <span class="pillar-tab-blurb">Self-service onboarding</span>
+      </button>
+
+      <button type="button" class="pillar-tab" role="tab" aria-selected="false" aria-controls="panel-sdk" id="tab-sdk" data-target="sdk">
+        <span class="pillar-tab-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/><line x1="13" y1="4" x2="11" y2="20"/></svg>
+        </span>
+        <span class="pillar-tab-title">SDKs</span>
+        <span class="pillar-tab-blurb">Python &amp; TypeScript</span>
+      </button>
+    </div>
+
+    <!-- STAGE -->
+    <div class="pillar-stage reveal">
+
+      <!-- PANEL: IDENTITY -->
+      <div class="pillar-panel active" id="panel-identity" role="tabpanel" aria-labelledby="tab-identity">
+        <div>
+          <span class="pillar-panel-eyebrow">Pillar 01 &middot; Identity</span>
+          <h3>Cryptographic <em>identity</em><br>from day one</h3>
+          <p class="pillar-panel-desc">
+            Every agent gets a real x509 identity signed by its organization's CA. No shared secrets,
+            no long-lived API keys, no passwords. Tokens are bound to ephemeral keys so theft is meaningless.
+          </p>
+          <ul>
+            <li><strong>Workload x509 PKI</strong> &mdash; SPIFFE-compatible IDs, 3-tier hierarchy</li>
+            <li><strong>Auto PKI</strong> &mdash; Org CA on first join, agent certs on demand</li>
+            <li><strong>DPoP token binding</strong> &mdash; RFC 9449 proof-of-possession</li>
+            <li><strong>Standards aligned</strong> &mdash; WIMSE, SPIFFE, RFC 7638, RFC 7517</li>
+          </ul>
+        </div>
+        <div class="pillar-visual">
+          <div class="mock-card mock-identity">
+            <div class="mock-card-bar">
+              <div class="dot-row"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+              <span class="title">agent · acme::rfq-bot</span>
+              <span class="badge">Active</span>
+            </div>
+            <div class="mock-card-body">
+              <div class="field">
+                <span class="k">Cert status</span>
+                <span class="v"><span class="pinned">Pinned</span></span>
+              </div>
+              <div class="field">
+                <span class="k">SPIFFE ID</span>
+                <span class="v cyan">spiffe://acme/agent/rfq-bot</span>
+              </div>
+              <div class="field">
+                <span class="k">Thumbprint</span>
+                <span class="v">sha256:a3f9…b21c</span>
+              </div>
+              <div class="field">
+                <span class="k">Issuer</span>
+                <span class="v">CN=Acme Org CA</span>
+              </div>
+              <div class="field">
+                <span class="k">DPoP key</span>
+                <span class="v cyan">EC P-256 · jwk-bound</span>
+              </div>
+              <div class="field">
+                <span class="k">Expires</span>
+                <span class="v">2027-04-12 14:00 UTC</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Automation</div>
-        <h3>Auto PKI</h3>
-        <p>Certificates generated automatically when orgs join and agents register. No openssl commands, no manual CSR flows. RSA-4096 Org CA created on first join, agent certs on demand.</p>
+
+      <!-- PANEL: E2E -->
+      <div class="pillar-panel" id="panel-e2e" role="tabpanel" aria-labelledby="tab-e2e">
+        <div>
+          <span class="pillar-panel-eyebrow">Pillar 02 &middot; Encryption</span>
+          <h3>The broker is <em>blind</em><br>by design</h3>
+          <p class="pillar-panel-desc">
+            Payloads are sealed end-to-end between agents, with dual signatures for non-repudiation
+            and transport integrity. The broker routes envelopes but never sees the message.
+          </p>
+          <ul>
+            <li><strong>AES-256-GCM</strong> &mdash; payload encryption with RSA-OAEP key wrap</li>
+            <li><strong>Dual RSA-PSS signatures</strong> &mdash; origin + transport integrity</li>
+            <li><strong>Broker blind</strong> &mdash; cannot decrypt, cannot forge, cannot replay</li>
+            <li><strong>mTLS wrapping</strong> &mdash; agents to proxies, proxies to broker</li>
+          </ul>
+        </div>
+        <div class="pillar-visual">
+          <div class="mock-card">
+            <div class="mock-card-bar">
+              <div class="dot-row"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+              <span class="title">message · session 9af2</span>
+              <span class="badge">E2E</span>
+            </div>
+            <div class="mock-card-body">
+              <div class="mock-e2e">
+                <div class="node">
+                  <span class="label">Org A</span>
+                  <strong>Agent 1</strong>
+                  encrypt(pub_B)
+                </div>
+                <span class="arrow">→</span>
+                <div class="node broker">
+                  <span class="label">Broker</span>
+                  <strong>blind</strong>
+                  forward only
+                </div>
+                <span class="arrow">→</span>
+                <div class="node">
+                  <span class="label">Org B</span>
+                  <strong>Agent 2</strong>
+                  decrypt(priv_B)
+                </div>
+              </div>
+              <div class="mock-e2e-stamp">AES-256-GCM · RSA-OAEP · RSA-PSS×2</div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Onboarding</div>
-        <h3>Invite Onboarding</h3>
-        <p>Broker admin generates invite tokens. Org admins open the proxy dashboard, enter broker URL and token, and self-register. Approval-based flow with zero manual certificate exchange.</p>
+
+      <!-- PANEL: AUTHZ -->
+      <div class="pillar-panel" id="panel-authz" role="tabpanel" aria-labelledby="tab-authz">
+        <div>
+          <span class="pillar-panel-eyebrow">Pillar 03 &middot; Authorization</span>
+          <h3>Both orgs must<br><em>say yes</em></h3>
+          <p class="pillar-panel-desc">
+            Each organization owns its policy decisions. The broker queries both PDPs and only
+            proceeds when both approve. No centralized power, no vendor making decisions for you.
+          </p>
+          <ul>
+            <li><strong>Per-org PDP webhook</strong> &mdash; your policy, your infrastructure</li>
+            <li><strong>OPA integration</strong> &mdash; Rego bundles as alternative backend</li>
+            <li><strong>Dual-consent enforcement</strong> &mdash; both orgs must allow</li>
+            <li><strong>Capability-based</strong> &mdash; fine-grained, scope-bound sessions</li>
+          </ul>
+        </div>
+        <div class="pillar-visual">
+          <div class="mock-card">
+            <div class="mock-card-bar">
+              <div class="dot-row"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+              <span class="title">policy · session request 9af2</span>
+              <span class="badge">Allow</span>
+            </div>
+            <div class="mock-card-body">
+              <div class="mock-fedauth">
+                <div class="pdp">
+                  <span class="org">Org A · acme.com</span>
+                  <span class="verdict">PDP allow</span>
+                </div>
+                <div class="pdp">
+                  <span class="org">Org B · supplier.io</span>
+                  <span class="verdict">PDP allow</span>
+                </div>
+                <div class="result">Session granted &middot; capability=supply.negotiate</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Identity</div>
-        <h3>Workload x509 PKI</h3>
-        <p>Three-tier certificate hierarchy with SPIFFE IDs. Each organization brings its own CA. No passwords, no shared secrets &mdash; cryptographic identity from day one.</p>
+
+      <!-- PANEL: AUDIT -->
+      <div class="pillar-panel" id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">
+        <div>
+          <span class="pillar-panel-eyebrow">Pillar 04 &middot; Audit</span>
+          <h3>Every decision,<br><em>cryptographically</em> linked</h3>
+          <p class="pillar-panel-desc">
+            Auth, session, message, policy &mdash; everything lands in a SHA-256 hash-chained
+            ledger. Any tampering (insert, modify, delete, reorder) breaks the chain and is
+            detectable immediately.
+          </p>
+          <ul>
+            <li><strong>Hash-chained ledger</strong> &mdash; append-only, SHA-256 linked</li>
+            <li><strong>Verify API</strong> &mdash; chain integrity check from dashboard</li>
+            <li><strong>SIEM-ready export</strong> &mdash; structured JSON for ingestion</li>
+            <li><strong>OpenTelemetry + Jaeger</strong> &mdash; distributed traces + metrics</li>
+          </ul>
+        </div>
+        <div class="pillar-visual">
+          <div class="mock-card">
+            <div class="mock-card-bar">
+              <div class="dot-row"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+              <span class="title">audit ledger · last 4</span>
+              <span class="badge">Verified</span>
+            </div>
+            <div class="mock-card-body">
+              <div class="mock-chain">
+                <div class="block">
+                  <span class="id">#1248 · session.created</span>
+                  <span class="hash">a3f9…b21c</span>
+                </div>
+                <div class="block">
+                  <span class="id">#1249 · message.sent</span>
+                  <span class="hash">7e02…1d4a</span>
+                </div>
+                <div class="block">
+                  <span class="id">#1250 · policy.allow</span>
+                  <span class="hash">c91d…8f33</span>
+                </div>
+                <div class="block">
+                  <span class="id">#1251 · session.closed</span>
+                  <span class="hash">2b5e…77a0</span>
+                </div>
+                <div class="verify">Chain verified · 1251/1251 entries valid</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Credentials</div>
-        <h3>DPoP Token Binding</h3>
-        <p>RFC 9449 proof-of-possession. Access tokens are cryptographically bound to the agent's ephemeral key. A stolen token is worthless without the private key.</p>
+
+      <!-- PANEL: FEDERATION -->
+      <div class="pillar-panel" id="panel-federation" role="tabpanel" aria-labelledby="tab-federation">
+        <div>
+          <span class="pillar-panel-eyebrow">Pillar 05 &middot; Federation</span>
+          <h3>Self-service<br><em>onboarding</em></h3>
+          <p class="pillar-panel-desc">
+            Each org deploys its own MCP Proxy and self-onboards via invite tokens. Agents
+            authenticate with simple API keys &mdash; the proxy handles the cryptography.
+            Zero manual certificate exchange.
+          </p>
+          <ul>
+            <li><strong>MCP Proxy gateway</strong> &mdash; crypto-free agent integration</li>
+            <li><strong>Invite onboarding</strong> &mdash; token-based, approval-gated</li>
+            <li><strong>Dual dashboard</strong> &mdash; broker admin + org admin, CSRF-safe</li>
+            <li><strong>OIDC per-org</strong> &mdash; Okta, AzureAD, Google with PKCE</li>
+          </ul>
+        </div>
+        <div class="pillar-visual">
+          <div class="mock-card">
+            <div class="mock-card-bar">
+              <div class="dot-row"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+              <span class="title">onboarding · acme-corp</span>
+              <span class="badge">Joined</span>
+            </div>
+            <div class="mock-card-body">
+              <div class="mock-invite">
+                <div class="step done">
+                  <span class="num">01</span>
+                  <span class="text">Broker admin generates invite token</span>
+                  <span class="status">Done</span>
+                </div>
+                <div class="step done">
+                  <span class="num">02</span>
+                  <span class="text">Org admin pastes token in proxy dashboard</span>
+                  <span class="status">Done</span>
+                </div>
+                <div class="step done">
+                  <span class="num">03</span>
+                  <span class="text">Auto PKI generates Org CA + first agent cert</span>
+                  <span class="status">Done</span>
+                </div>
+                <div class="step done">
+                  <span class="num">04</span>
+                  <span class="text">Broker approves &middot; federation active</span>
+                  <span class="status">Active</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Encryption</div>
-        <h3>E2E Zero-Knowledge</h3>
-        <p>AES-256-GCM payload encryption with RSA-OAEP key wrapping. Dual RSA-PSS signatures for non-repudiation and transport integrity. The broker never reads your messages.</p>
+
+      <!-- PANEL: SDK -->
+      <div class="pillar-panel" id="panel-sdk" role="tabpanel" aria-labelledby="tab-sdk">
+        <div>
+          <span class="pillar-panel-eyebrow">Pillar 06 &middot; Developer Tools</span>
+          <h3>Full lifecycle <em>SDKs</em><br>Python &amp; TypeScript</h3>
+          <p class="pillar-panel-desc">
+            Auth, discovery, E2E encryption, signing, WebSocket streaming &mdash; all built-in.
+            Private keys never touch disk: load them from Vault, AWS KMS, or your secret manager
+            of choice.
+          </p>
+          <ul>
+            <li><strong>Python &amp; TypeScript SDKs</strong> &mdash; x509 + DPoP + E2E built-in</li>
+            <li><strong>RFQ &amp; transaction tokens</strong> &mdash; single-use, payload-bound</li>
+            <li><strong>Secret manager support</strong> &mdash; load keys from Vault / KMS</li>
+            <li><strong>WebSocket streaming</strong> &mdash; real-time session messaging</li>
+          </ul>
+        </div>
+        <div class="pillar-visual">
+          <div class="mock-card mock-sdk">
+            <div class="mock-card-bar">
+              <div class="dot-row"><span class="d"></span><span class="d"></span><span class="d"></span></div>
+              <span class="title">supplier_bot.py</span>
+              <span class="badge">Python SDK</span>
+            </div>
+            <div class="mock-card-body">
+<pre><span class="kw">from</span> <span class="var">cullis</span> <span class="kw">import</span> <span class="var">BrokerClient</span>
+<span class="kw">from</span> <span class="var">cullis.vault</span> <span class="kw">import</span> <span class="var">load_pem</span>
+
+<span class="comm"># Keys live in Vault — never on disk</span>
+<span class="var">cert</span>, <span class="var">key</span> = <span class="fn">load_pem</span>(<span class="str">"secret/acme/rfq-bot"</span>)
+
+<span class="var">client</span> = <span class="fn">BrokerClient</span>(<span class="str">"https://broker.acme.com"</span>)
+<span class="var">client</span>.<span class="fn">login_from_pem</span>(
+    <span class="var">agent_id</span>=<span class="str">"acme::rfq-bot"</span>,
+    <span class="var">cert_pem</span>=<span class="var">cert</span>, <span class="var">key_pem</span>=<span class="var">key</span>,
+)
+<span class="comm"># <span class="ok">✓</span> mTLS + DPoP + E2E ready</span>
+
+<span class="var">sid</span> = <span class="var">client</span>.<span class="fn">open_session</span>(
+    <span class="var">target</span>=<span class="str">"supplier::chips-bot"</span>,
+    <span class="var">caps</span>=[<span class="str">"supply.negotiate"</span>],
+)</pre>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Policy</div>
-        <h3>Federated Authorization</h3>
-        <p>Each organization controls its own Policy Decision Point via webhook. The broker enforces both orgs' decisions. No centralized power. Sovereignty by design.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Audit</div>
-        <h3>Cryptographic Ledger</h3>
-        <p>SHA-256 hash-chained append-only log. Any tampering &mdash; insert, modify, delete, reorder &mdash; breaks the chain and is immediately detectable. SIEM-ready export.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Standards</div>
-        <h3>IETF &amp; CNCF Aligned</h3>
-        <p>Built on WIMSE, SPIFFE, RFC 9449 (DPoP), RFC 7638 (JWK Thumbprint), RFC 7517 (JWKS). No proprietary protocols. No vendor lock-in. Interoperable by design.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">SSO</div>
-        <h3>OIDC Federation</h3>
-        <p>Each organization configures its own IdP &mdash; Okta, Azure AD, Google. OAuth 2.0 Authorization Code with PKCE. Client secrets encrypted at rest via KMS.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Policy Engine</div>
-        <h3>OPA Integration</h3>
-        <p>Open Policy Agent as alternative backend. Rego policies included. Switch from webhook to OPA with a single environment variable. No code changes required.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Commerce</div>
-        <h3>RFQ &amp; Transaction Tokens</h3>
-        <p>Broadcast RFQs to matching suppliers, collect quotes with timeout. Single-use transaction tokens bound to payload hash authorize specific operations after approval.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Developer Portal</div>
-        <h3>Agent Onboarding</h3>
-        <p>Proxy dashboard for org admins. Create agents, view credentials, manage capabilities, and monitor activity. Certificates auto-generated, bindings auto-created on the broker.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Observability</div>
-        <h3>OpenTelemetry + Jaeger</h3>
-        <p>Distributed traces and metrics via OTLP/gRPC. Custom spans for auth, x509 verification, policy calls. Counters for auth success/deny, session created/denied, rate limit rejects.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">SDKs</div>
-        <h3>Python &amp; TypeScript</h3>
-        <p>Full-lifecycle SDKs: x509 auth, DPoP key management, E2E encryption, message signing, WebSocket streaming. Secret manager support &mdash; private keys never touch disk.</p>
-      </div>
+
     </div>
   </div>
 </section>
@@ -941,15 +2296,17 @@ footer {
     </p>
     <div class="arch-container reveal">
       <div class="arch-svg-wrap">
-        <svg viewBox="0 0 860 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 860 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-title arch-desc">
+          <title id="arch-title">Cullis federated trust architecture</title>
+          <desc id="arch-desc">Agents in two organizations authenticate with API keys against local MCP Proxies. Proxies handle x509, DPoP and E2E encryption, then communicate with the Cullis Broker over mTLS. The broker verifies certificate chains, validates DPoP, queries both organizations' PDPs for authorization, and forwards end-to-end encrypted messages without being able to read plaintext. A session only proceeds when both organizations' Policy Decision Points allow it.</desc>
           <!-- Agent 1 -->
           <rect x="30" y="20" width="170" height="66" rx="4" stroke="#8a8d9b" stroke-width="1" fill="rgba(138,141,155,0.04)"/>
           <text x="115" y="46" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" font-weight="500" fill="#e8e9ed">Agent 1</text>
-          <text x="115" y="66" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">API Key auth</text>
+          <text x="115" y="66" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">API Key auth</text>
           <!-- Agent 2 -->
           <rect x="660" y="20" width="170" height="66" rx="4" stroke="#8a8d9b" stroke-width="1" fill="rgba(138,141,155,0.04)"/>
           <text x="745" y="46" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" font-weight="500" fill="#e8e9ed">Agent 2</text>
-          <text x="745" y="66" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">API Key auth</text>
+          <text x="745" y="66" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">API Key auth</text>
           <!-- Agent 1 → Proxy A -->
           <line x1="115" y1="86" x2="115" y2="138" stroke="#8a8d9b" stroke-width="1.2" stroke-dasharray="4 3" class="flow-line"/>
           <polygon points="109,134 115,146 121,134" fill="#8a8d9b"/>
@@ -961,36 +2318,36 @@ footer {
           <!-- MCP Proxy A -->
           <rect x="20" y="148" width="190" height="80" rx="4" stroke="#00b8a9" stroke-width="1.5" fill="rgba(0,184,169,0.05)" class="node-glow"/>
           <text x="115" y="175" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" font-weight="500" fill="#00b8a9">MCP Proxy A</text>
-          <text x="115" y="195" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">Auto PKI &middot; Vault</text>
-          <text x="115" y="212" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">API Key auth</text>
+          <text x="115" y="195" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">Auto PKI &middot; Vault</text>
+          <text x="115" y="212" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">API Key auth</text>
           <!-- MCP Proxy B -->
           <rect x="650" y="148" width="190" height="80" rx="4" stroke="#00b8a9" stroke-width="1.5" fill="rgba(0,184,169,0.05)" class="node-glow"/>
           <text x="745" y="175" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" font-weight="500" fill="#00b8a9">MCP Proxy B</text>
-          <text x="745" y="195" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">Auto PKI &middot; Vault</text>
-          <text x="745" y="212" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">API Key auth</text>
+          <text x="745" y="195" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">Auto PKI &middot; Vault</text>
+          <text x="745" y="212" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">API Key auth</text>
           <!-- Proxy A → Broker -->
           <line x1="115" y1="228" x2="115" y2="286" stroke="#f0a500" stroke-width="1.5" stroke-dasharray="6 4" class="flow-line"/>
           <polygon points="108,282 115,296 122,282" fill="#f0a500"/>
           <text x="135" y="258" font-family="'DM Mono', monospace" font-size="9" fill="#f0a500">mTLS + DPoP</text>
-          <text x="135" y="272" font-family="'DM Mono', monospace" font-size="8" fill="#555868">x509 + E2E</text>
+          <text x="135" y="272" font-family="'DM Mono', monospace" font-size="8" fill="#6e7180">x509 + E2E</text>
           <!-- Broker → Proxy B -->
           <line x1="745" y1="286" x2="745" y2="228" stroke="#3d7aed" stroke-width="1.5" stroke-dasharray="6 4" class="flow-line"/>
           <polygon points="738,234 745,220 752,234" fill="#3d7aed"/>
           <text x="765" y="258" font-family="'DM Mono', monospace" font-size="9" fill="#3d7aed">E2E encrypted</text>
-          <text x="765" y="272" font-family="'DM Mono', monospace" font-size="8" fill="#555868">x509 + E2E</text>
+          <text x="765" y="272" font-family="'DM Mono', monospace" font-size="8" fill="#6e7180">x509 + E2E</text>
           <!-- Broker box -->
           <rect x="40" y="296" width="780" height="120" rx="4" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" fill="rgba(16,18,26,0.9)"/>
           <text x="430" y="328" text-anchor="middle" font-family="'DM Mono', monospace" font-size="14" font-weight="500" fill="#e8e9ed">CULLIS BROKER</text>
           <!-- Pipeline -->
           <rect x="80" y="348" width="130" height="30" rx="3" fill="rgba(0,229,199,0.08)" stroke="rgba(0,229,199,0.2)" stroke-width="1"/>
           <text x="145" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9.5" fill="#8a8d9b">Verify cert chain</text>
-          <text x="225" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" fill="#555868">&rarr;</text>
+          <text x="225" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" fill="#6e7180">&rarr;</text>
           <rect x="242" y="348" width="115" height="30" rx="3" fill="rgba(0,229,199,0.08)" stroke="rgba(0,229,199,0.2)" stroke-width="1"/>
           <text x="300" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9.5" fill="#8a8d9b">Validate DPoP</text>
-          <text x="372" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" fill="#555868">&rarr;</text>
+          <text x="372" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" fill="#6e7180">&rarr;</text>
           <rect x="390" y="348" width="125" height="30" rx="3" fill="rgba(0,229,199,0.08)" stroke="rgba(0,229,199,0.2)" stroke-width="1"/>
           <text x="453" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9.5" fill="#8a8d9b">Query policies</text>
-          <text x="530" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" fill="#555868">&rarr;</text>
+          <text x="530" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" fill="#6e7180">&rarr;</text>
           <rect x="548" y="348" width="125" height="30" rx="3" fill="rgba(0,229,199,0.08)" stroke="rgba(0,229,199,0.2)" stroke-width="1"/>
           <text x="611" y="368" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9.5" fill="#8a8d9b">Forward E2E</text>
           <text x="430" y="402" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" font-weight="500" fill="#ff4d6a">&#x26D4; Cannot read plaintext &mdash; zero-knowledge forwarding</text>
@@ -1004,70 +2361,92 @@ footer {
           <polygon points="629,486 635,498 641,486" fill="#3d7aed" opacity="0.6"/>
           <line x1="665" y1="490" x2="665" y2="416" stroke="#f0a500" stroke-width="1.2" stroke-dasharray="4 3" class="flow-line"/>
           <polygon points="659,422 665,410 671,422" fill="#f0a500" opacity="0.6"/>
-          <text x="248" y="458" font-family="'DM Mono', monospace" font-size="9" fill="#555868">query / response</text>
-          <text x="688" y="458" font-family="'DM Mono', monospace" font-size="9" fill="#555868">query / response</text>
+          <text x="248" y="458" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">query / response</text>
+          <text x="688" y="458" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">query / response</text>
 
           <!-- ── PDP A BOX ── -->
           <rect x="110" y="500" width="230" height="70" rx="4" stroke="#00e5c7" stroke-width="1" fill="rgba(0,229,199,0.03)"/>
           <text x="225" y="524" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" font-weight="500" fill="#00e5c7">Org A PDP</text>
-          <text x="225" y="544" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" fill="#555868">webhook / OPA</text>
+          <text x="225" y="544" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" fill="#6e7180">webhook / OPA</text>
           <text x="225" y="562" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" font-weight="500" fill="#f0a500">allow &#x2713; / deny &#x2717;</text>
 
           <!-- ── PDP B BOX ── -->
           <rect x="520" y="500" width="230" height="70" rx="4" stroke="#3d7aed" stroke-width="1" fill="rgba(61,122,237,0.03)"/>
           <text x="635" y="524" text-anchor="middle" font-family="'DM Mono', monospace" font-size="12" font-weight="500" fill="#3d7aed">Org B PDP</text>
-          <text x="635" y="544" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" fill="#555868">webhook / OPA</text>
+          <text x="635" y="544" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" fill="#6e7180">webhook / OPA</text>
           <text x="635" y="562" text-anchor="middle" font-family="'DM Mono', monospace" font-size="10" font-weight="500" fill="#f0a500">allow &#x2713; / deny &#x2717;</text>
 
           <!-- BOTTOM LABEL -->
-          <text x="430" y="600" text-anchor="middle" font-family="'DM Mono', monospace" font-size="11" fill="#555868">Both orgs must allow &rarr; session proceeds</text>
-          <text x="430" y="620" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#555868">Agents use API keys &rarr; Proxies handle x509 + DPoP + E2E &rarr; Broker verifies + routes</text>
+          <text x="430" y="600" text-anchor="middle" font-family="'DM Mono', monospace" font-size="11" fill="#6e7180">Both orgs must allow &rarr; session proceeds</text>
+          <text x="430" y="620" text-anchor="middle" font-family="'DM Mono', monospace" font-size="9" fill="#6e7180">Agents use API keys &rarr; Proxies handle x509 + DPoP + E2E &rarr; Broker verifies + routes</text>
         </svg>
       </div>
     </div>
   </div>
 </section>
 
-<!-- DASHBOARD & ENTERPRISE -->
+<!-- USE CASES -->
 <section id="enterprise">
   <div class="container">
-    <div class="section-label reveal">Enterprise Ready</div>
-    <h2 class="section-title reveal">Built for production, <br><em>not just demos</em></h2>
+    <div class="section-label reveal">Use Cases</div>
+    <h2 class="section-title reveal">What you can <em>build</em></h2>
     <p class="section-desc reveal">
-      Two dashboards, one-command deployment, invite-based onboarding, auto PKI,
-      and a complete enterprise integration kit. Fully self-hosted.
+      Cullis is the substrate for agent interactions that currently don't happen because the trust
+      primitives don't exist. These are the shapes we see working today.
     </p>
-    <div class="features-grid">
-      <div class="feature-card reveal">
-        <div class="feature-tag">Self-Hosted</div>
-        <h3>Fully Self-Hosted</h3>
-        <p>Deploy on your infrastructure. No SaaS dependency, no cloud lock-in, no data leaving your network. You own the broker, the proxies, and every encryption key.</p>
+    <div class="usecase-grid">
+
+      <!-- USE CASE 01 -->
+      <div class="usecase reveal">
+        <span class="usecase-label">01 &middot; Supply Chain</span>
+        <h3>Cross-org RFQ <em>negotiation</em></h3>
+        <p class="usecase-desc">
+          A buyer agent broadcasts a request to suppliers across the federation. Matching agents
+          respond with signed quotes. The buyer picks one and authorizes a single-use transaction
+          token bound to the payload hash. Every step cryptographically audited.
+        </p>
+        <div class="usecase-flow">
+          <div class="step"><strong>Discover</strong> suppliers by capability (<code>supply.negotiate</code>)</div>
+          <div class="step"><strong>Broadcast</strong> RFQ, collect signed quotes with timeout</div>
+          <div class="step"><strong>Approve</strong> winning quote, issue transaction token</div>
+          <div class="step"><strong>Audit</strong> entire chain, tamper-evident, non-repudiable</div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Dashboard</div>
-        <h3>Dual Dashboard</h3>
-        <p>Broker dashboard for network admins: approve orgs, manage tokens, view audit. Proxy dashboard for org admins: create agents, manage credentials, monitor activity. CSRF protection, dark theme.</p>
+
+      <!-- USE CASE 02 -->
+      <div class="usecase reveal">
+        <span class="usecase-label">02 &middot; Multi-Tenant SaaS</span>
+        <h3>Customer agents meet <em>vendor agents</em></h3>
+        <p class="usecase-desc">
+          Your SaaS platform exposes AI agents to customers. Each customer org runs its own MCP Proxy,
+          customer agents talk to your platform agents via the broker. You never see their plaintext,
+          they never share secrets with you, and policy stays on both sides.
+        </p>
+        <div class="usecase-flow">
+          <div class="step"><strong>Customer deploys</strong> their MCP Proxy with BYOCA</div>
+          <div class="step"><strong>Broker federates</strong> identity across trust domains</div>
+          <div class="step"><strong>E2E encryption</strong> keeps you out of the payload</div>
+          <div class="step"><strong>Per-tenant policy</strong> enforced by customer PDP</div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Gateway</div>
-        <h3>MCP Proxy Gateway</h3>
-        <p>Each org deploys its own MCP Proxy. Agents connect with API keys. The proxy handles cert generation, Vault storage, and broker communication. Zero crypto knowledge required from agents.</p>
+
+      <!-- USE CASE 03 -->
+      <div class="usecase reveal">
+        <span class="usecase-label">03 &middot; Regulated B2B</span>
+        <h3>Compliance-grade <em>data exchange</em></h3>
+        <p class="usecase-desc">
+          Healthcare, finance, and critical infrastructure need AI agents that cross organizational
+          boundaries without breaking compliance. Bring your own CA, enforce OPA policies, export
+          the tamper-evident ledger straight to your regulator.
+        </p>
+        <div class="usecase-flow">
+          <div class="step"><strong>BYOCA</strong> &mdash; each org keeps its own key material</div>
+          <div class="step"><strong>OPA policies</strong> encode regulatory constraints</div>
+          <div class="step"><strong>E2E encryption</strong> satisfies data residency + GDPR</div>
+          <div class="step"><strong>Hash-chained audit</strong> export for regulators / SIEM</div>
+        </div>
       </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Deployment</div>
-        <h3>One-Command Deploy</h3>
-        <p><code>./deploy.sh</code> for the broker. <code>docker compose -f docker-compose.proxy.yml up</code> for the proxy. Dev, production, and Let's Encrypt modes. Vault production unsealing with Shamir 5/3.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Enterprise Kit</div>
-        <h3>Bring Your Own CA</h3>
-        <p>Step-by-step guide for security teams. Docker Compose templates, PDP webhook templates with configurable rules, OPA policy bundle, and interactive quickstart script.</p>
-      </div>
-      <div class="feature-card reveal">
-        <div class="feature-tag">Operations</div>
-        <h3>Production Tooling</h3>
-        <p>Health probes (<code>/healthz</code>, <code>/readyz</code>), Alembic database migrations, PostgreSQL backup with 30-day rotation, structured JSON logging for SIEM, audit export API.</p>
-      </div>
+
     </div>
   </div>
 </section>
@@ -1086,19 +2465,26 @@ footer {
         <div class="terminal-dot"></div>
         <div class="terminal-dot"></div>
         <span class="terminal-title">terminal</span>
+        <button type="button" class="terminal-copy" onclick="copyTerminal(this)" aria-label="Copy commands to clipboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          <span class="label">Copy</span>
+        </button>
       </div>
-      <div class="terminal-body">
-<span class="prompt">$</span> <span class="cmd">git clone https://github.com/DaenAIHax/cullis</span>
-<span class="prompt">$</span> <span class="cmd">cd cullis</span>
-<span class="prompt">$</span> <span class="cmd">./deploy.sh --dev</span>
-<span class="output">  &#x2713;  Broker ready at http://localhost:8000</span>
+      <div class="terminal-body" id="quickstart-code" role="group" aria-label="Cullis installation commands" data-copy="git clone https://github.com/DaenAIHax/cullis
+cd cullis
+./deploy.sh --dev
+docker compose -f docker-compose.proxy.yml up -d">
+<span class="sr-only">Prompt:</span><span class="prompt">$</span> <span class="cmd">git clone https://github.com/DaenAIHax/cullis</span>
+<span class="sr-only">Prompt:</span><span class="prompt">$</span> <span class="cmd">cd cullis</span>
+<span class="sr-only">Prompt:</span><span class="prompt">$</span> <span class="cmd">./deploy.sh --dev</span>
+<span class="sr-only">Output:</span><span class="output">  &#x2713;  Broker ready at http://localhost:8000</span>
 <span class="output"></span>
-<span class="comment"># Deploy the MCP Proxy</span>
-<span class="prompt">$</span> <span class="cmd">docker compose -f docker-compose.proxy.yml up -d</span>
-<span class="output">  &#x2713;  Proxy ready at http://localhost:9100</span>
+<span class="sr-only">Comment:</span><span class="comment"># Deploy the MCP Proxy</span>
+<span class="sr-only">Prompt:</span><span class="prompt">$</span> <span class="cmd">docker compose -f docker-compose.proxy.yml up -d</span>
+<span class="sr-only">Output:</span><span class="output">  &#x2713;  Proxy ready at http://localhost:9100</span>
 <span class="output"></span>
-<span class="comment"># Open proxy dashboard, enter broker URL + invite token</span>
-<span class="comment"># Register org &rarr; create agents &rarr; done</span>
+<span class="sr-only">Comment:</span><span class="comment"># Open proxy dashboard, enter broker URL + invite token</span>
+<span class="sr-only">Comment:</span><span class="comment"># Register org &rarr; create agents &rarr; done</span>
       </div>
     </div>
   </div>
@@ -1108,103 +2494,95 @@ footer {
 <section id="compare">
   <div class="container">
     <div class="section-label reveal">Comparison</div>
-    <h2 class="section-title reveal">Not another API gateway</h2>
+    <h2 class="section-title reveal">Where Cullis sits</h2>
     <p class="section-desc reveal">
-      Cullis operates at a different layer &mdash; it provides the identity and trust
-      primitives that gateways, frameworks, and orchestrators don't.
+      Cullis is not a service mesh, not an API gateway, not a workload identity provider.
+      It's the missing layer <em>between</em> them &mdash; the one that turns the MCP protocol
+      into a federated, cryptographically audited trust network.
     </p>
     <div class="table-wrap reveal">
       <table>
         <thead>
           <tr>
             <th>Capability</th>
-            <th>API Keys</th>
-            <th>OAuth 2.0</th>
+            <th>MCP (raw)</th>
+            <th>SPIFFE / SPIRE</th>
+            <th>Vault + Consul</th>
             <th>Cullis</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>Proof of possession</td>
+            <td>Agent-to-agent identity across orgs</td>
             <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">DPoP (RFC 9449)</td>
+            <td class="cross">Single trust domain</td>
+            <td class="cross">Single datacenter</td>
+            <td class="check">Federated, BYOCA</td>
           </tr>
           <tr>
-            <td>Mutual authentication</td>
+            <td>DPoP token binding (RFC 9449)</td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
-            <td class="check">x509 + SPIFFE</td>
+            <td class="cross">&mdash;</td>
+            <td class="check">Built-in</td>
           </tr>
           <tr>
-            <td>E2E encryption</td>
+            <td>E2E payload encryption (beyond mTLS)</td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
-            <td class="check">AES-256-GCM</td>
+            <td class="cross">mTLS only</td>
+            <td class="check">AES-256-GCM + RSA-OAEP</td>
           </tr>
           <tr>
-            <td>Federated policy</td>
+            <td>Federated policy (per-org PDP)</td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
-            <td class="check">Per-org PDP webhook</td>
+            <td class="check">Intentions (local)</td>
+            <td class="check">Webhook + OPA, dual-consent</td>
           </tr>
           <tr>
-            <td>Tamper-evident audit</td>
+            <td>Tamper-evident audit chain</td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
+            <td class="cross">Syslog only</td>
             <td class="check">SHA-256 hash chain</td>
           </tr>
           <tr>
-            <td>Token theft protection</td>
+            <td>Invite-based org onboarding</td>
             <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">Ephemeral key binding</td>
+            <td class="cross">Manual</td>
+            <td class="cross">Manual</td>
+            <td class="check">Token + dashboard</td>
           </tr>
           <tr>
-            <td>Multi-org federation</td>
+            <td>MCP-native agent gateway</td>
+            <td class="check">Protocol spec</td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
-            <td class="check">Bring Your Own CA</td>
+            <td class="check">Drop-in proxy</td>
           </tr>
           <tr>
-            <td>Agent discovery</td>
+            <td>Cross-org session tokens (scope-bound)</td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
-            <td class="check">Capability-based</td>
+            <td class="cross">&mdash;</td>
+            <td class="check">Capability-scoped</td>
           </tr>
           <tr>
-            <td>Self-service onboarding</td>
-            <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">Dashboard + auto PKI</td>
-          </tr>
-          <tr>
-            <td>Self-hosted deployment</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">Partial</td>
-            <td class="check">Fully self-hosted</td>
-          </tr>
-          <tr>
-            <td>SSO / OIDC federation</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">Partial</td>
-            <td class="check">Per-org IdP + PKCE</td>
-          </tr>
-          <tr>
-            <td>Policy engine</td>
-            <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">Webhook + OPA</td>
-          </tr>
-          <tr>
-            <td>Certificate rotation</td>
-            <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">API + Dashboard</td>
+            <td>Self-hosted, open source, Apache 2.0</td>
+            <td class="check">&mdash;</td>
+            <td class="check">&mdash;</td>
+            <td class="check">BSL / MPL</td>
+            <td class="check">Yes</td>
           </tr>
         </tbody>
       </table>
     </div>
+    <p class="compare-note reveal">
+      Cullis <strong>composes with</strong> these tools rather than replacing them &mdash; you can
+      back Cullis identities with a SPIRE-issued CA, keep your keys in Vault, and layer a service
+      mesh underneath. What Cullis adds is the federated trust <em>between organizations</em>.
+    </p>
   </div>
 </section>
 
@@ -1212,7 +2590,7 @@ footer {
 <section class="cta-section">
   <div class="container">
     <div class="section-label reveal" style="justify-content: center;">Get Involved</div>
-    <h2 class="section-title reveal">Built by security researchers,<br>for the agent era</h2>
+    <h2 class="section-title reveal">Engineered for <em>zero-trust</em>,<br>built for the agent era</h2>
     <p class="section-desc reveal">
       Cullis is open source, standards-aligned, and ready to deploy on your infrastructure today.
       Star the repo, open an issue, or run it in your own network.
@@ -1222,8 +2600,8 @@ footer {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         Star on GitHub
       </a>
-      <a href="https://github.com/DaenAIHax/cullis/blob/main/CONTRIBUTING.md" target="_blank" class="btn btn-ghost">
-        Contributing Guide
+      <a href="https://github.com/DaenAIHax/cullis/discussions" target="_blank" rel="noopener" class="btn btn-ghost">
+        Join Discussions
       </a>
     </div>
   </div>
@@ -1243,24 +2621,33 @@ footer {
         <div class="footer-col">
           <h4>Project</h4>
           <ul>
-            <li><a href="https://github.com/DaenAIHax/cullis" target="_blank">GitHub</a></li>
-            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/README.md" target="_blank">Documentation</a></li>
-            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/CONTRIBUTING.md" target="_blank">Contributing</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis" target="_blank" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/README.md" target="_blank" rel="noopener">Documentation</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/issues" target="_blank" rel="noopener">Roadmap &amp; Issues</a></li>
           </ul>
         </div>
         <div class="footer-col">
           <h4>Security</h4>
           <ul>
-            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/SECURITY.md" target="_blank">Security Policy</a></li>
-            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/enterprise-kit/BYOCA.md" target="_blank">Bring Your Own CA</a></li>
-            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/LICENSE" target="_blank">Apache 2.0 License</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/SECURITY.md" target="_blank" rel="noopener">Security Policy</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/enterprise-kit/BYOCA.md" target="_blank" rel="noopener">Bring Your Own CA</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/blob/main/LICENSE" target="_blank" rel="noopener">Apache 2.0 License</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Community</h4>
+          <ul>
+            <li><a href="https://github.com/DaenAIHax/cullis/discussions" target="_blank" rel="noopener">Discussions</a></li>
+            <li><a href="https://github.com/DaenAIHax/cullis/releases" target="_blank" rel="noopener">Changelog</a></li>
+            <li><a href="mailto:hello@cullis.io">hello@cullis.io</a></li>
           </ul>
         </div>
       </div>
     </div>
     <div class="footer-bottom">
       <span>&copy; 2026 Cullis</span>
-      <span>Built by security researchers, for the agent era.</span>
+      <span>Engineered for zero-trust &middot; Built for the agent era.</span>
     </div>
   </div>
 </footer>
@@ -1277,6 +2664,79 @@ const obs = new IntersectionObserver((entries) => {
 }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
 
 document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+
+// Pillar tabs
+(function() {
+  const tabs = document.querySelectorAll('.pillar-tab');
+  const panels = document.querySelectorAll('.pillar-panel');
+  if (!tabs.length || !panels.length) return;
+
+  function activate(target) {
+    tabs.forEach(t => {
+      const isActive = t.dataset.target === target;
+      t.classList.toggle('active', isActive);
+      t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    panels.forEach(p => {
+      p.classList.toggle('active', p.id === 'panel-' + target);
+    });
+  }
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => activate(tab.dataset.target));
+    tab.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const arr = Array.from(tabs);
+        const idx = arr.indexOf(document.activeElement);
+        const next = e.key === 'ArrowRight'
+          ? (idx + 1) % arr.length
+          : (idx - 1 + arr.length) % arr.length;
+        arr[next].focus();
+        activate(arr[next].dataset.target);
+      }
+    });
+  });
+})();
+
+// Nav scroll shrink
+(function() {
+  const navEl = document.querySelector('nav');
+  if (!navEl) return;
+  let ticking = false;
+  function onScroll() {
+    if (!ticking) {
+      requestAnimationFrame(() => {
+        if (window.scrollY > 80) navEl.classList.add('scrolled');
+        else navEl.classList.remove('scrolled');
+        ticking = false;
+      });
+      ticking = true;
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+
+// Copy terminal to clipboard
+function copyTerminal(btn) {
+  const code = document.getElementById('quickstart-code');
+  if (!code) return;
+  const text = code.getAttribute('data-copy') || code.innerText;
+  const label = btn.querySelector('.label');
+  const orig = label ? label.textContent : 'Copy';
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copied');
+    if (label) label.textContent = 'Copied';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      if (label) label.textContent = orig;
+    }, 1800);
+  }).catch(() => {
+    if (label) label.textContent = 'Failed';
+    setTimeout(() => { if (label) label.textContent = orig; }, 1800);
+  });
+}
 </script>
 
 </body>
