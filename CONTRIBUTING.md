@@ -19,8 +19,12 @@ pip install -r requirements.txt
 # Run tests
 pytest tests/ -v
 
-# Full setup (Docker + PKI + Vault)
-./deploy.sh
+# Full broker deployment (Docker + PKI + Vault) — development profile
+./deploy_broker.sh --dev
+
+# Or boot the entire scripted demo (broker + 2 proxies + 2 agents):
+./deploy_demo.sh up
+python scripts/demo/sender.py
 ```
 
 ## Code Conventions

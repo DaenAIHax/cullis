@@ -590,11 +590,11 @@ if [[ -f "$CERTS_DIR/broker-ca-key.pem" && -f "$CERTS_DIR/broker-ca.pem" ]]; the
         ok "Broker CA key stored in Vault at ${VAULT_SECRET_PATH}"
     else
         err "Failed to store broker key in Vault (HTTP ${HTTP_STATUS})"
-        warn "You can load it manually: bash setup.sh --no-build"
+        warn "Re-run this script (idempotent) or load the key manually with the Vault CLI"
     fi
 else
     warn "Broker CA key not found at $CERTS_DIR/broker-ca-key.pem — skipping Vault load"
-    warn "Run setup.sh or generate certs first"
+    warn "Generate it first: python generate_certs.py"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════

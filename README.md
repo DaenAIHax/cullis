@@ -187,8 +187,8 @@ flowchart TB
 ### 1. Deploy the Broker
 
 ```bash
-# One-command setup: PKI + Docker + Vault + bootstrap
-./deploy.sh --dev
+# One-command setup: PKI + Docker + Vault + bootstrap (development)
+./deploy_broker.sh --dev
 
 # Services:
 #   Broker + Dashboard   http://localhost:8000
@@ -196,6 +196,10 @@ flowchart TB
 #   Vault                http://localhost:8200
 #   Jaeger UI            http://localhost:16686
 ```
+
+> **Just want to see it work?** `./deploy_demo.sh up` boots the broker, two MCP
+> proxies and two agents on a single host, then `python scripts/demo/sender.py`
+> routes one cross-org message. See `scripts/demo/README.md` for details.
 
 ### 2. Deploy the MCP Proxy
 

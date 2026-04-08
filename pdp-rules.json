@@ -1,7 +1,0 @@
-{
-  "allowed_initiator_orgs": [],
-  "allowed_target_orgs": [],
-  "allowed_capabilities": [],
-  "blocked_agents": [],
-  "max_sessions_per_org": 0
-}

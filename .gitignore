@@ -41,8 +41,10 @@ join.py
 join_agent.py
 policy.py
 revoke.py
-generate_certs.py
 generate_demo_certs.py
+# generate_certs.py is INTENTIONALLY tracked — it is a runtime dependency
+# of both deploy_broker.sh and deploy_demo.sh (they invoke it on a fresh
+# clone to bootstrap the broker CA).
 agents/*.env
 agents/buyer.py
 agents/manufacturer.py
