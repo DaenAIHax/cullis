@@ -80,6 +80,15 @@
                     </div>
                     <div id="connection-result" class="mt-2 text-xs"></div>
                 </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Invite Token</label>
+                    <input type="text" name="invite_token" value="{{ invite_token }}"
+                           placeholder="Paste invite token from the broker admin"
+                           autocomplete="off"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 transition-all"
+                           style="font-family: 'JetBrains Mono', monospace;">
+                    <p class="text-[10px] text-gray-600 mt-1">One-time token issued by the broker network admin. Used once to register this organization.</p>
+                </div>
             </div>
         </div>
 
@@ -101,15 +110,30 @@
                     <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Organization ID</label>
                     <input type="text" name="org_id" value="{{ org_id }}"
                            placeholder="acme-corp"
+                           pattern="[a-z][a-z0-9_-]*"
                            class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 font-mono transition-all">
+                    <p class="text-[10px] text-gray-600 mt-1">Lowercase letters, digits, hyphens, underscores. Must start with a letter.</p>
                 </div>
                 <div>
-                    <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Organization Secret</label>
-                    <input type="password" name="org_secret"
-                           placeholder="Shared secret for broker authentication"
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Display Name</label>
+                    <input type="text" name="display_name" value="{{ display_name }}"
+                           placeholder="Acme Corporation"
                            class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 transition-all">
-                    <p class="text-[10px] text-gray-600 mt-1">This secret authenticates the proxy to the broker on behalf of your organization.</p>
                 </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Contact Email</label>
+                    <input type="email" name="contact_email" value="{{ contact_email }}"
+                           placeholder="admin@acme-corp.com"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 transition-all">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Webhook URL <span class="text-gray-600 normal-case tracking-normal">(optional)</span></label>
+                    <input type="url" name="webhook_url" value="{{ webhook_url }}"
+                           placeholder="https://your-server.com/pdp/webhook"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 transition-all">
+                    <p class="text-[10px] text-gray-600 mt-1">Policy Decision Point callback. Leave blank to use this proxy's built-in PDP.</p>
+                </div>
+                <p class="text-[10px] text-gray-600 pt-1">An organization secret is generated automatically and stored locally &mdash; you do not need to choose one.</p>
 
                 <!-- Org CA section -->
                 <div class="pt-3 border-t border-gray-800/40">
@@ -208,21 +232,26 @@
             </div>
         </div>
 
-        <!-- Step 4: Confirm -->
+        <!-- Step 4: Register on Broker -->
         <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-6 card-glow backdrop-blur-sm">
             <div class="flex items-center gap-3 mb-5">
                 <div class="w-6 h-6 rounded bg-gray-800 flex items-center justify-center">
                     <span class="text-xs font-mono font-bold text-gray-500">4</span>
                 </div>
-                <h3 class="text-sm font-semibold text-white uppercase tracking-wider">Confirm</h3>
+                <h3 class="text-sm font-semibold text-white uppercase tracking-wider">Register on Broker</h3>
             </div>
-            <p class="text-xs text-gray-500 mb-4">Review the above configuration and save. You can re-run this wizard at any time from the sidebar.</p>
+            <p class="text-xs text-gray-500 mb-4 leading-relaxed">
+                Submitting calls the broker's <span class="text-gray-300" style="font-family: 'JetBrains Mono', monospace;">/v1/onboarding/join</span>
+                endpoint with the invite token, your org details, and the CA certificate.
+                After this the broker network admin must approve the organization before agents can connect.
+                You can re-run this wizard from the sidebar later to update the broker URL or re-import a CA.
+            </p>
             <button type="submit"
                     class="px-6 py-2.5 text-sm font-semibold rounded transition-all"
                     style="font-family: 'Chakra Petch', sans-serif; background: #00e5c7; color: #0a0f1a; letter-spacing: 0.05em; text-transform: uppercase;"
                     onmouseover="this.style.background='#fff'; this.style.boxShadow='0 0 20px rgba(0,229,199,0.15)'"
                     onmouseout="this.style.background='#00e5c7'; this.style.boxShadow='none'">
-                Complete Setup
+                Register on Broker
             </button>
         </div>
     </form>

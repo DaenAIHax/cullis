@@ -1,13 +1,18 @@
 """
-Dashboard session management — HMAC-SHA256 signed cookies.
+Dashboard session management — HMAC-SHA256 signed cookies + bcrypt admin password.
 
 Single role for the MCP Proxy dashboard: admin.
 The session is stored in a signed cookie (HMAC-SHA256). No server-side
 session store needed — the cookie contains the role and CSRF token,
 verified on every request.
 
+The admin password is hashed with bcrypt and stored in proxy_config under
+the key 'admin_password_hash'. The very first visit to /proxy/register
+sets it; from then on /proxy/login verifies it before issuing a session.
+
 CSRF protection: a per-session token is embedded in the cookie and must
 be present as a hidden form field on every state-changing POST request.
+Login and register are pre-session and therefore CSRF-exempt.
 """
 import hashlib
 import hmac
@@ -17,6 +22,7 @@ import os
 import time
 from dataclasses import dataclass
 
+import bcrypt
 from fastapi import Request, Response
 from starlette.responses import RedirectResponse
 
@@ -133,3 +139,47 @@ async def verify_csrf(request: Request, session: ProxyDashboardSession) -> bool:
     if not session.csrf_token or not token:
         return False
     return hmac.compare_digest(str(token), session.csrf_token)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin password (bcrypt, stored in proxy_config.admin_password_hash)
+# ─────────────────────────────────────────────────────────────────────────────
+
+ADMIN_PASSWORD_KEY = "admin_password_hash"
+MIN_PASSWORD_LENGTH = 8
+
+
+async def is_admin_password_set() -> bool:
+    """Return True if an admin password has been set on this proxy instance."""
+    from mcp_proxy.db import get_config
+    return bool(await get_config(ADMIN_PASSWORD_KEY))
+
+
+async def set_admin_password(plaintext: str) -> None:
+    """Hash the password with bcrypt and persist it.
+
+    Caller is responsible for length / confirm validation. This function
+    only enforces the absolute minimum to avoid storing junk.
+    """
+    if not plaintext or len(plaintext) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+
+    from mcp_proxy.db import set_config
+    hashed = bcrypt.hashpw(plaintext.encode(), bcrypt.gensalt(rounds=12))
+    await set_config(ADMIN_PASSWORD_KEY, hashed.decode())
+
+
+async def verify_admin_password(plaintext: str) -> bool:
+    """Constant-time bcrypt verify against the stored hash. False if no hash set."""
+    if not plaintext:
+        return False
+
+    from mcp_proxy.db import get_config
+    stored = await get_config(ADMIN_PASSWORD_KEY)
+    if not stored:
+        return False
+
+    try:
+        return bcrypt.checkpw(plaintext.encode(), stored.encode())
+    except (ValueError, TypeError):
+        return False

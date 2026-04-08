@@ -2,23 +2,22 @@
 MCP Proxy Dashboard — admin control plane for managing agents, tools, and policies.
 
 Routes:
-  /proxy/login          — Login with broker URL + invite token
-  /proxy/logout         — Clear session
-  /proxy/register       — Org registration (CA generation, broker onboarding)
-  /proxy/setup          — First-time setup wizard (broker URL, org ID, org secret, CA, Vault)
-  /proxy/agents         — Internal agent management
-  /proxy/tools          — Tool registry viewer
-  /proxy/policies       — Policy editor
-  /proxy/audit          — Audit log viewer
-  /proxy/pki            — PKI overview (Org CA info, agent cert stats)
-  /proxy/vault          — Vault connection management
-  /proxy/org-status     — HTMX org status polling
+  /proxy/                — Smart entry point (redirects based on state)
+  /proxy/login           — Sign in with the admin password
+  /proxy/logout          — Clear session
+  /proxy/register        — One-shot: set the admin password (first run only)
+  /proxy/setup           — Broker uplink wizard (URL + invite token, org details, CA, Vault)
+  /proxy/agents          — Internal agent management
+  /proxy/tools           — Tool registry viewer
+  /proxy/policies        — Policy editor
+  /proxy/audit           — Audit log viewer
+  /proxy/pki             — PKI overview (Org CA info, agent cert stats)
+  /proxy/vault           — Vault connection management
+  /proxy/org-status      — HTMX org status polling
 """
 import json
 import logging
 import pathlib
-import re
-import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -39,6 +38,10 @@ from mcp_proxy.dashboard.session import (
     clear_session,
     require_login,
     verify_csrf,
+    is_admin_password_set,
+    set_admin_password,
+    verify_admin_password,
+    MIN_PASSWORD_LENGTH,
 )
 
 _log = logging.getLogger("mcp_proxy.dashboard")
@@ -134,65 +137,95 @@ async def _store_ca_key_in_vault(vault_addr: str, vault_token: str, org_id: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Auth
+# Auth — admin password (bcrypt) + smart entry point
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# State machine:
+#
+#   no admin_password_hash      -> /proxy/register   (one-shot account creation)
+#   hash set, no session        -> /proxy/login      (sign in)
+#   hash set, session, no org   -> /proxy/setup      (broker uplink wizard)
+#   hash set, session, org      -> /proxy/agents     (operational dashboard)
+#
+# Login and register are pre-session: no CSRF (no cookie to read the token from).
+# Every other state-changing endpoint enforces CSRF via verify_csrf().
+
+
+async def _post_login_redirect() -> str:
+    """Where to send a freshly-authenticated admin: setup if no broker, agents otherwise."""
+    from mcp_proxy.db import get_config
+    org_id = await get_config("org_id")
+    return "/proxy/agents" if org_id else "/proxy/setup"
+
+
+@router.get("/", response_class=HTMLResponse)
+async def proxy_root(request: Request):
+    """Smart entry point — route based on registration + session + broker state."""
+    if not await is_admin_password_set():
+        return RedirectResponse(url="/proxy/register", status_code=303)
+
+    session = get_session(request)
+    if not session.logged_in:
+        return RedirectResponse(url="/proxy/login", status_code=303)
+
+    return RedirectResponse(url=await _post_login_redirect(), status_code=303)
+
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    # Pristine proxy: send the user to set an admin password first.
+    if not await is_admin_password_set():
+        return RedirectResponse(url="/proxy/register", status_code=303)
+
+    # Already authenticated? Skip the form.
     session = get_session(request)
     if session.logged_in:
-        from mcp_proxy.db import get_config
-        org_id = await get_config("org_id")
-        if org_id:
-            return RedirectResponse(url="/proxy/agents", status_code=303)
-        return RedirectResponse(url="/proxy/register", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+        return RedirectResponse(url=await _post_login_redirect(), status_code=303)
+
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "error": None,
+    })
 
 
 @router.post("/login")
 async def login_submit(request: Request):
-    from mcp_proxy.db import set_config, get_config
+    # State guard: if no password is set, you can't sign in — go register first.
+    if not await is_admin_password_set():
+        return RedirectResponse(url="/proxy/register", status_code=303)
 
     form = await request.form()
-    broker_url = str(form.get("broker_url", "")).strip().rstrip("/")
-    invite_token = str(form.get("invite_token", "")).strip()
+    password = str(form.get("password", ""))
 
-    if not broker_url:
-        return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Broker URL is required.",
-        })
-    if not invite_token:
-        return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Invite token is required.",
-        })
-
-    # Test broker connectivity
-    try:
-        async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
-            resp = await client.get(f"{broker_url}/.well-known/jwks.json")
-            if resp.status_code != 200:
-                return templates.TemplateResponse("login.html", {
-                    "request": request,
-                    "error": f"Broker returned HTTP {resp.status_code}. Check the URL.",
-                })
-    except Exception:
+    if not password:
         return templates.TemplateResponse("login.html", {
             "request": request,
-            "error": "Cannot reach broker at this URL.",
-        })
+            "error": "Password is required.",
+        }, status_code=400)
 
-    # Save broker config
-    await set_config("broker_url", broker_url)
-    await set_config("invite_token", invite_token)
+    if not await verify_admin_password(password):
+        # Audit the failure but keep the message vague (don't leak whether the
+        # account exists, the username is wrong, etc.).
+        from mcp_proxy.db import log_audit
+        await log_audit(
+            agent_id="admin",
+            action="auth.login",
+            status="error",
+            detail="invalid password",
+        )
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "error": "Invalid password.",
+        }, status_code=401)
 
-    # Set session
-    org_id = await get_config("org_id")
-    if org_id:
-        redirect_url = "/proxy/agents"
-    else:
-        redirect_url = "/proxy/register"
+    from mcp_proxy.db import log_audit
+    await log_audit(
+        agent_id="admin",
+        action="auth.login",
+        status="success",
+    )
 
-    response = RedirectResponse(url=redirect_url, status_code=303)
+    response = RedirectResponse(url=await _post_login_redirect(), status_code=303)
     set_session(response, role="admin")
     return response
 
@@ -205,149 +238,72 @@ async def logout(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Organization Registration
+# Register — one-shot admin password creation
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
+    # Already registered? Send them to login.
+    if await is_admin_password_set():
+        return RedirectResponse(url="/proxy/login", status_code=303)
 
-    from mcp_proxy.db import get_config
-    # Already registered? Go to agents.
-    org_id = await get_config("org_id")
-    if org_id:
-        return RedirectResponse(url="/proxy/agents", status_code=303)
-
-    return templates.TemplateResponse("register.html", _ctx(
-        request, session,
-        error=None,
-    ))
+    return templates.TemplateResponse("register.html", {
+        "request": request,
+        "error": None,
+        "min_length": MIN_PASSWORD_LENGTH,
+    })
 
 
 @router.post("/register")
 async def register_submit(request: Request):
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    if not await verify_csrf(request, session):
-        raise HTTPException(status_code=403, detail="Invalid CSRF token")
-
-    from mcp_proxy.db import set_config, get_config, log_audit
+    # Cannot re-register: someone already set the password.
+    if await is_admin_password_set():
+        return RedirectResponse(url="/proxy/login", status_code=303)
 
     form = await request.form()
-    org_id = str(form.get("org_id", "")).strip().lower()
-    display_name = str(form.get("display_name", "")).strip()
-    contact_email = str(form.get("contact_email", "")).strip()
-    webhook_url = str(form.get("webhook_url", "")).strip()
+    password = str(form.get("password", ""))
+    confirm = str(form.get("confirm_password", ""))
 
-    # If no webhook URL provided, use the built-in PDP endpoint on this proxy
-    if not webhook_url:
-        import os
-        # Try explicit PDP URL from env, then proxy's own public URL + /pdp/policy
-        webhook_url = os.environ.get("MCP_PROXY_PDP_URL", "")
-        if not webhook_url:
-            webhook_url = await get_config("pdp_webhook_url") or ""
-        if not webhook_url:
-            # Auto-construct from proxy's public URL
-            proxy_public = get_settings().proxy_public_url
-            if proxy_public:
-                webhook_url = f"{proxy_public.rstrip('/')}/pdp/policy"
+    if not password or not confirm:
+        return templates.TemplateResponse("register.html", {
+            "request": request,
+            "error": "Both fields are required.",
+            "min_length": MIN_PASSWORD_LENGTH,
+        }, status_code=400)
 
-    # Validate
-    errors: list[str] = []
-    if not org_id:
-        errors.append("Organization ID is required.")
-    elif not re.match(r"^[a-z][a-z0-9_-]*$", org_id):
-        errors.append("Org ID must start with a letter and contain only lowercase letters, digits, hyphens, underscores.")
-    if not display_name:
-        errors.append("Display name is required.")
-    if not contact_email:
-        errors.append("Contact email is required.")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return templates.TemplateResponse("register.html", {
+            "request": request,
+            "error": f"Password must be at least {MIN_PASSWORD_LENGTH} characters long.",
+            "min_length": MIN_PASSWORD_LENGTH,
+        }, status_code=400)
 
-    if errors:
-        return templates.TemplateResponse("register.html", _ctx(
-            request, session,
-            error=" ".join(errors),
-            form_org_id=org_id,
-            form_display_name=display_name,
-            form_contact_email=contact_email,
-            form_webhook_url=webhook_url,
-        ))
-
-    # Generate org secret and CA
-    org_secret = secrets.token_urlsafe(32)
-    ca_cert_pem, ca_key_pem = generate_org_ca(org_id)
-
-    # Save locally first
-    await set_config("org_id", org_id)
-    await set_config("org_secret", org_secret)
-    await set_config("org_ca_cert", ca_cert_pem)
-    await set_config("org_ca_key", ca_key_pem)
-
-    await log_audit(
-        agent_id="admin",
-        action="ca.generate",
-        status="success",
-        detail=f"org_id={org_id}, self-signed RSA-4096, valid 10 years",
-    )
-
-    # Call broker /onboarding/join
-    broker_url = await get_config("broker_url")
-    invite_token = await get_config("invite_token")
-
-    if not broker_url or not invite_token:
-        return templates.TemplateResponse("register.html", _ctx(
-            request, session,
-            error="Broker URL or invite token not configured. Please log in again.",
-        ))
+    if password != confirm:
+        return templates.TemplateResponse("register.html", {
+            "request": request,
+            "error": "The two passwords do not match.",
+            "min_length": MIN_PASSWORD_LENGTH,
+        }, status_code=400)
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=10.0) as http:
-            resp = await http.post(f"{broker_url}/v1/onboarding/join", json={
-                "org_id": org_id,
-                "display_name": display_name,
-                "secret": org_secret,
-                "ca_certificate": ca_cert_pem,
-                "contact_email": contact_email,
-                "webhook_url": webhook_url,
-                "invite_token": invite_token,
-            })
+        await set_admin_password(password)
+    except ValueError as exc:
+        return templates.TemplateResponse("register.html", {
+            "request": request,
+            "error": str(exc),
+            "min_length": MIN_PASSWORD_LENGTH,
+        }, status_code=400)
 
-            if resp.status_code == 202:
-                await set_config("org_status", "pending")
-                await log_audit(
-                    agent_id="admin",
-                    action="org.register",
-                    status="success",
-                    detail=f"org_id={org_id}, broker={broker_url}, status=pending",
-                )
-                return RedirectResponse(url="/proxy/agents", status_code=303)
-            elif resp.status_code == 403:
-                error_msg = "Invalid or expired invite token."
-            elif resp.status_code == 409:
-                error_msg = "Organization already registered on this broker."
-            else:
-                error_msg = f"Broker returned HTTP {resp.status_code}: {resp.text[:200]}"
-    except Exception as exc:
-        error_msg = f"Cannot reach broker: {exc}"
-
+    from mcp_proxy.db import log_audit
     await log_audit(
         agent_id="admin",
-        action="org.register",
-        status="error",
-        detail=f"org_id={org_id}, error={error_msg}",
+        action="auth.register",
+        status="success",
+        detail="admin password initialized",
     )
 
-    return templates.TemplateResponse("register.html", _ctx(
-        request, session,
-        error=error_msg,
-        form_org_id=org_id,
-        form_display_name=display_name,
-        form_contact_email=contact_email,
-        form_webhook_url=webhook_url,
-    ))
+    # Force a clean sign-in for the very first session.
+    return RedirectResponse(url="/proxy/login", status_code=303)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -446,17 +402,25 @@ async def setup_page(request: Request):
         return session
 
     from mcp_proxy.db import get_config
-    broker_url = await get_config("broker_url") or ""
-    org_id = await get_config("org_id") or ""
-    has_ca = bool(await get_config("org_ca_cert"))
-    vault_addr = await get_config("vault_addr") or ""
+    broker_url    = await get_config("broker_url") or ""
+    invite_token  = await get_config("invite_token") or ""
+    org_id        = await get_config("org_id") or ""
+    display_name  = await get_config("display_name") or ""
+    contact_email = await get_config("contact_email") or ""
+    webhook_url   = await get_config("webhook_url") or ""
+    has_ca        = bool(await get_config("org_ca_cert"))
+    vault_addr    = await get_config("vault_addr") or ""
     vault_enabled = bool(vault_addr)
 
     return templates.TemplateResponse("setup.html", _ctx(
         request, session,
         active="setup",
         broker_url=broker_url,
+        invite_token=invite_token,
         org_id=org_id,
+        display_name=display_name,
+        contact_email=contact_email,
+        webhook_url=webhook_url,
         has_ca=has_ca,
         vault_addr=vault_addr,
         vault_enabled=vault_enabled,
@@ -471,26 +435,51 @@ async def setup_submit(request: Request):
     if not await verify_csrf(request, session):
         raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
+    import re as _re
+    import secrets as _secrets
+
     from mcp_proxy.db import set_config, get_config, log_audit
 
     form = await request.form()
-    broker_url = str(form.get("broker_url", "")).strip()
-    org_id = str(form.get("org_id", "")).strip()
-    org_secret = str(form.get("org_secret", "")).strip()
-    org_ca_mode = str(form.get("org_ca_mode", "skip")).strip()
-    ca_key_pem = str(form.get("ca_key_pem", "")).strip()
-    ca_cert_pem = str(form.get("ca_cert_pem", "")).strip()
+    broker_url    = str(form.get("broker_url", "")).strip().rstrip("/")
+    invite_token  = str(form.get("invite_token", "")).strip()
+    org_id        = str(form.get("org_id", "")).strip().lower()
+    display_name  = str(form.get("display_name", "")).strip()
+    contact_email = str(form.get("contact_email", "")).strip()
+    webhook_url   = str(form.get("webhook_url", "")).strip()
+    org_ca_mode   = str(form.get("org_ca_mode", "skip")).strip()
+    ca_key_pem    = str(form.get("ca_key_pem", "")).strip()
+    ca_cert_pem   = str(form.get("ca_cert_pem", "")).strip()
     vault_enabled = bool(form.get("vault_enabled"))
-    vault_addr = str(form.get("vault_addr", "")).strip()
-    vault_token = str(form.get("vault_token", "")).strip()
+    vault_addr    = str(form.get("vault_addr", "")).strip()
+    vault_token   = str(form.get("vault_token", "")).strip()
+
+    # If no webhook URL provided, fall back to env or auto-construct
+    # this proxy's built-in PDP endpoint.
+    if not webhook_url:
+        import os as _os
+        from mcp_proxy.config import get_settings as _get_settings
+        webhook_url = _os.environ.get("MCP_PROXY_PDP_URL", "")
+        if not webhook_url:
+            webhook_url = await get_config("pdp_webhook_url") or ""
+        if not webhook_url:
+            proxy_public = _get_settings().proxy_public_url
+            if proxy_public:
+                webhook_url = f"{proxy_public.rstrip('/')}/pdp/policy"
 
     errors: list[str] = []
     if not broker_url:
         errors.append("Broker URL is required.")
+    if not invite_token:
+        errors.append("Invite token is required (paste the one from the broker admin).")
     if not org_id:
         errors.append("Organization ID is required.")
-    if not org_secret:
-        errors.append("Organization secret is required.")
+    elif not _re.match(r"^[a-z][a-z0-9_-]*$", org_id):
+        errors.append("Org ID must start with a letter and contain only lowercase letters, digits, hyphens, underscores.")
+    if not display_name:
+        errors.append("Display name is required.")
+    if not contact_email:
+        errors.append("Contact email is required.")
 
     # Validate CA import PEMs
     if org_ca_mode == "import":
@@ -506,6 +495,12 @@ async def setup_submit(request: Request):
             except Exception:
                 errors.append("CA certificate is not valid PEM.")
 
+    # The proxy needs a CA to sign agent certs. The broker also requires
+    # a CA in the join request. So 'skip' is only acceptable if a CA was
+    # already configured on a previous run.
+    if org_ca_mode == "skip" and not await get_config("org_ca_cert"):
+        errors.append("This proxy has no CA yet — choose 'Generate new' or 'Import existing'.")
+
     # Validate Vault config
     if vault_enabled:
         if not vault_addr:
@@ -519,7 +514,11 @@ async def setup_submit(request: Request):
             request, session,
             active="setup",
             broker_url=broker_url,
+            invite_token=invite_token,
             org_id=org_id,
+            display_name=display_name,
+            contact_email=contact_email,
+            webhook_url=webhook_url,
             has_ca=has_ca,
             vault_addr=vault_addr,
             vault_enabled=vault_enabled,
@@ -528,8 +527,19 @@ async def setup_submit(request: Request):
 
     # Save broker + org config
     await set_config("broker_url", broker_url)
+    await set_config("invite_token", invite_token)
     await set_config("org_id", org_id)
-    await set_config("org_secret", org_secret)
+    await set_config("display_name", display_name)
+    await set_config("contact_email", contact_email)
+    await set_config("webhook_url", webhook_url)
+
+    # Auto-generate the org secret if we don't already have one. The admin
+    # never has to choose it — it is opaque material used by the proxy to
+    # authenticate to the broker on behalf of the organization.
+    org_secret = await get_config("org_secret")
+    if not org_secret:
+        org_secret = _secrets.token_urlsafe(32)
+        await set_config("org_secret", org_secret)
 
     # Handle Org CA
     ca_generated = False
@@ -589,21 +599,108 @@ async def setup_submit(request: Request):
 
     await log_audit(
         agent_id="admin",
-        action="setup.complete",
+        action="setup.local_save",
         status="success",
         detail=f"broker_url={broker_url}, org_id={org_id}, ca_mode={org_ca_mode}, vault={'yes' if vault_enabled else 'no'}",
     )
 
-    has_ca = bool(await get_config("org_ca_cert"))
+    # ── Register the org on the broker ──────────────────────────────────────
+    # This is the actual point of no return: it consumes the invite token on
+    # the broker side and creates a pending Organization record there. If the
+    # broker rejects, the local config is still good (so the admin can fix
+    # invite_token / broker_url and retry without losing CA / Vault settings).
+    org_ca_cert_pem = await get_config("org_ca_cert") or ""
+    if not org_ca_cert_pem:
+        # Should not happen — the validator above blocks this — but be defensive.
+        return _setup_error_response(
+            request, session,
+            "Cannot register on broker: no CA certificate available.",
+            broker_url, invite_token, org_id, display_name, contact_email, webhook_url,
+            vault_addr, vault_enabled,
+        )
+
+    error_msg: str | None = None
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=10.0) as http:
+            resp = await http.post(f"{broker_url}/v1/onboarding/join", json={
+                "org_id": org_id,
+                "display_name": display_name,
+                "secret": org_secret,
+                "ca_certificate": org_ca_cert_pem,
+                "contact_email": contact_email,
+                "webhook_url": webhook_url,
+                "invite_token": invite_token,
+            })
+
+            if resp.status_code == 202:
+                await set_config("org_status", "pending")
+                await log_audit(
+                    agent_id="admin",
+                    action="org.register",
+                    status="success",
+                    detail=f"org_id={org_id}, broker={broker_url}, status=pending",
+                )
+                return RedirectResponse(url="/proxy/agents", status_code=303)
+            elif resp.status_code == 200:
+                # Some brokers may approve immediately and return 200. Treat as success.
+                await set_config("org_status", "active")
+                await log_audit(
+                    agent_id="admin",
+                    action="org.register",
+                    status="success",
+                    detail=f"org_id={org_id}, broker={broker_url}, status=active",
+                )
+                return RedirectResponse(url="/proxy/agents", status_code=303)
+            elif resp.status_code == 403:
+                error_msg = "Invalid or expired invite token. Ask the broker admin for a fresh one."
+            elif resp.status_code == 409:
+                error_msg = "An organization with this ID is already registered on the broker."
+            else:
+                error_msg = f"Broker rejected the registration (HTTP {resp.status_code}): {resp.text[:200]}"
+    except Exception as exc:
+        error_msg = f"Cannot reach broker: {exc}"
+
+    await log_audit(
+        agent_id="admin",
+        action="org.register",
+        status="error",
+        detail=f"org_id={org_id}, error={error_msg}",
+    )
+
+    return _setup_error_response(
+        request, session, error_msg,
+        broker_url, invite_token, org_id, display_name, contact_email, webhook_url,
+        vault_addr, vault_enabled,
+    )
+
+
+def _setup_error_response(
+    request: Request,
+    session: ProxyDashboardSession,
+    error_msg: str,
+    broker_url: str,
+    invite_token: str,
+    org_id: str,
+    display_name: str,
+    contact_email: str,
+    webhook_url: str,
+    vault_addr: str,
+    vault_enabled: bool,
+):
+    """Re-render setup.html with an error and the previously-typed values."""
     return templates.TemplateResponse("setup.html", _ctx(
         request, session,
         active="setup",
         broker_url=broker_url,
+        invite_token=invite_token,
         org_id=org_id,
-        has_ca=has_ca,
-        vault_addr=vault_addr if vault_enabled else "",
+        display_name=display_name,
+        contact_email=contact_email,
+        webhook_url=webhook_url,
+        has_ca=True,  # we only get here after CA setup succeeded
+        vault_addr=vault_addr,
         vault_enabled=vault_enabled,
-        success=True,
+        errors=[error_msg],
     ))
 
 
