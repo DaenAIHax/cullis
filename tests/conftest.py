@@ -1,5 +1,22 @@
 import os
-os.environ.setdefault("OTEL_ENABLED", "false")
+
+# ── Test environment overrides ─────────────────────────────────────────────
+# Pydantic Settings reads .env after OS env vars. We force every variable
+# that would otherwise leak from a developer's local .env into the test
+# process. CI runs without a .env so it does not need this — but locally
+# the .env (with BROKER_PUBLIC_URL, KMS_BACKEND=vault, postgres URL, etc.)
+# breaks ~111 tests with cryptic 401s and "no such table" errors.
+#
+# Explicit assignments (not setdefault) because some keys must override
+# values from the .env. The shell environment is not affected — only the
+# Python process for this test run.
+os.environ["OTEL_ENABLED"] = "false"
+os.environ["BROKER_PUBLIC_URL"] = ""           # let build_htu use request.url
+os.environ["KMS_BACKEND"] = "local"            # local provider (also overridden by fixture)
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["REDIS_URL"] = ""                   # in-memory fallback for all stores
+os.environ["VAULT_TOKEN"] = "test-not-used"    # silence the dev-token warning
+os.environ["ALLOWED_ORIGINS"] = ""             # disable CORS in tests
 os.environ.setdefault("ADMIN_SECRET", "test-secret-not-default")
 os.environ["SKIP_ALEMBIC"] = "1"
 
