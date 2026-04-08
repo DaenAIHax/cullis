@@ -10,12 +10,11 @@ Import from cullis_sdk for production use:
 """
 import json
 import os
-import sys
 import time
 
 # Re-export SDK infrastructure for backward compatibility
-from cullis_sdk import CullisClient, load_env_file, cfg, log, log_msg
-from cullis_sdk._logging import RESET, BOLD, CYAN, GREEN, YELLOW, RED, GRAY
+from cullis_sdk import CullisClient, cfg, log, log_msg
+from cullis_sdk._logging import CYAN, GREEN, YELLOW, RED, GRAY
 
 # Keep BrokerClient as alias for existing demo agents
 BrokerClient = CullisClient

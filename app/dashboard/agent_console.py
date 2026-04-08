@@ -12,7 +12,6 @@ import logging
 import os
 import sys
 import time
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -491,7 +490,7 @@ async def agent_console_start(request: Request, db: AsyncSession = Depends(get_d
 
     try:
         broker.login_from_pem(agent_id, org_id, cert_pem, key_pem)
-    except Exception as e:
+    except Exception:
         _log.exception("Agent console login failed for %s", agent_id)
         return RedirectResponse(url="/dashboard/agent-console", status_code=303)
 

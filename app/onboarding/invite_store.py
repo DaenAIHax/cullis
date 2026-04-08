@@ -75,8 +75,8 @@ async def validate_and_consume(
     result = await db.execute(
         select(InviteToken).where(
             InviteToken.token_hash == h,
-            InviteToken.used == False,
-            InviteToken.revoked == False,
+            ~InviteToken.used,
+            ~InviteToken.revoked,
         )
     )
     record = result.scalar_one_or_none()

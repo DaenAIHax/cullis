@@ -11,7 +11,6 @@ The `not e2e` marker filter in pytest.ini skips them otherwise.
 import os
 import pathlib
 import shutil
-import stat
 import subprocess
 import time
 from typing import Iterator

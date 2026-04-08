@@ -27,7 +27,7 @@ async def test_metrics_endpoint_does_not_require_auth(client: AsyncClient):
 
 async def test_metrics_endpoint_when_enabled(client: AsyncClient, monkeypatch):
     """When PROMETHEUS_ENABLED=true, /metrics returns the Prometheus text format."""
-    from app.config import get_settings, Settings
+    from app.config import get_settings
 
     # Patch the cached settings to enable Prometheus for this test only.
     s = get_settings()

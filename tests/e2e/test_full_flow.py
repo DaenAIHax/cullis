@@ -179,8 +179,6 @@ async def test_full_two_org_message_exchange(e2e_stack):
 @pytest.mark.timeout(60)
 async def test_invite_token_invalid_is_rejected(e2e_stack):
     """A garbage invite token must be rejected by /v1/onboarding/join."""
-    broker_host_url = e2e_stack["broker_url"]
-
     # The proxy script exits 2 if /onboarding/join returns non-2xx.
     with pytest.raises(RuntimeError, match="setup_proxy_org.py failed"):
         register_org(

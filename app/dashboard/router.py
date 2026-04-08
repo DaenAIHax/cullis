@@ -933,7 +933,7 @@ async def orgs_list(request: Request, db: AsyncSession = Depends(get_db)):
         })
 
     # Load invite tokens for admin
-    from app.onboarding.invite_store import list_invites, InviteToken
+    from app.onboarding.invite_store import list_invites
     invites_raw = await list_invites(db)
     invites = [
         {
