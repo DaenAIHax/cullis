@@ -1,128 +1,132 @@
-# Cullis E2E Test — Full-Stack Integration
+# Cullis E2E Test — full-stack integration
 
-Automatizza il flusso end-to-end che facevamo a mano: deploy del broker, due
-MCP proxy, registrazione di due org, creazione di due agent, scambio di un
-messaggio E2E criptato fra le due org, decifratura verificata.
+Automates the end-to-end flow that used to be a manual click-through:
+deploy the broker, two MCP proxies, register two organizations, create
+one agent in each, exchange one E2E-encrypted message between them, and
+verify the recipient can decrypt it.
 
-In una sola parola: **se questo test passa, sappiamo che la demo manuale
-del 7-8 aprile continua a funzionare.**
-
----
-
-## Quando lo usi
-
-- **Prima di un PR su `main`** che tocca broker, mcp_proxy, auth, broker
-  bridge, AgentManager, o anything graceful-shutdown / persistence
-- **Dopo un upgrade di dipendenze** (cryptography, fastapi, sqlalchemy)
-- **Prima di un deploy in produzione** se il rilascio include cambiamenti
-  al protocollo (DPoP, AAD, signing)
-- **Quando ricordi che esiste e ti senti in colpa di non averlo lanciato**
-
-Non è in CI di default — gira ~3 minuti, non ha senso bloccare ogni push.
-L'idea è che tu (o un cron notturno) lo lanci esplicitamente.
+In one sentence: **if this test passes, the cross-org demo flow still
+works end to end.**
 
 ---
 
-## Come si lancia
+## When to run it
 
-### Modo veloce — wrapper
+- **Before opening a PR against `main`** that touches the broker, the
+  MCP proxy, auth, the broker bridge, the AgentManager, anything in
+  graceful-shutdown / persistence, or any of the egress endpoints.
+- **After bumping a dependency** (cryptography, fastapi, sqlalchemy,
+  httpx).
+- **Before a production release** if the changeset includes a protocol
+  change (DPoP, AAD layout, message signing).
+- **Whenever you remember it exists and feel guilty for not having run it.**
+
+It is not part of CI by default — a full run takes ~40 seconds and we
+do not want to gate every push on it. Run it explicitly, or wire it
+into a nightly cron.
+
+---
+
+## How to run it
+
+### The fast way — wrapper
 
 ```bash
 tests/e2e/run.sh
 ```
 
-Lo script:
-1. Verifica che `docker` e `pytest` siano disponibili
-2. Pulisce qualsiasi stack `cullis-e2e` lasciato in giro
-3. Builda i container (broker + 2 proxy)
-4. Avvia tutto, aspetta che `/healthz` di ogni servizio sia 200
-5. Esegue i test pytest con `-m e2e -s -v`
-6. Smonta tutto (anche se i test falliscono)
+The wrapper:
+1. Verifies that `docker` and `pytest` are available
+2. Tears down any leftover `cullis-e2e` stack from a previous run
+3. Builds the broker + 2 proxy images
+4. Brings the stack up and waits for `/healthz` and `/readyz` on every service
+5. Runs the e2e suite with `pytest -m e2e -s -v`
+6. Tears the stack down (even on failure — no zombie containers)
 
-### Tempi attesi
+### Expected timings
 
-| Fase | Prima volta | Run successivi |
-|---|---|---|
-| 1. Cleanup stack vecchi | ~5s | ~5s |
-| 2. **Build immagini Docker** | **60-180s** (pip install in container) | ~5s (cache) |
-| 3. Boot containers (postgres → vault → redis → broker → 2 proxy) | ~30-60s | ~30-60s |
-| 4. Health polling | ~10-30s | ~10-30s |
-| 5. Esecuzione 3 test | ~30-60s | ~30-60s |
-| 6. Teardown | ~5-10s | ~5-10s |
-| **Totale** | **~3-5 min** | **~2 min** |
+| Phase                                              | Cold start          | Warm run        |
+|----------------------------------------------------|---------------------|-----------------|
+| 1. Cleanup of any previous stack                   | ~5 s                | ~5 s            |
+| 2. **Docker image build** (broker + 2 proxies)     | **60–180 s** (pip)  | ~5 s (cached)   |
+| 3. Container boot (postgres → redis → broker → 2 proxies) | ~15–30 s     | ~15–30 s        |
+| 4. Health polling                                  | ~5–15 s             | ~5–15 s         |
+| 5. Run the 3 e2e tests                             | ~25–35 s            | ~25–35 s        |
+| 6. Teardown                                        | ~5–10 s             | ~5–10 s         |
+| **Total**                                          | **~3–5 min**        | **~40 s**       |
 
-### Sembra bloccato — è normale?
+### "It looks stuck — is that normal?"
 
-Il `run.sh` passa `-s -v` a pytest, quindi vedi i print live del fixture
-(`[e2e] Booting stack...`, `[e2e] Stack is healthy. Yielding to tests.`).
+`run.sh` passes `-s -v` to pytest, so the conftest's progress messages
+are visible live (`[e2e] Booting stack...`, `[e2e] Stack is healthy.
+Yielding to tests.`).
 
-Se non vedi niente da > 30s, apri un secondo terminale e ispeziona:
+If you see no output for more than 30 s, open a second terminal and
+inspect the stack directly:
 
 ```bash
-# Quali container ci sono e in che stato (healthy/starting/unhealthy)
+# Container state (healthy / starting / unhealthy)
 docker compose --project-name cullis-e2e \
   -f tests/e2e/docker-compose.e2e.yml ps
 
-# Logs del broker (se /healthz non risponde, qui vedi perché)
+# Broker logs — if /healthz is not responding, the reason shows up here
 docker compose --project-name cullis-e2e \
   -f tests/e2e/docker-compose.e2e.yml logs -f broker
 
-# Logs di un proxy
+# Proxy logs
 docker compose --project-name cullis-e2e \
   -f tests/e2e/docker-compose.e2e.yml logs -f proxy-alpha
 ```
 
-Cause comuni di "sembra bloccato":
-- **Build pip lenta**: la prima volta `pip install` dei requirements del
-  broker scarica ~200MB di wheel. Pazienza.
-- **Vault non si sigilla**: il broker aspetta che vault sia healthy. Se
-  vault crasha (`logs vault`), il broker resta in `starting`.
-- **Network broker_net già esistente** con la stessa subnet: scarica
-  questa eventualità con `docker network ls | grep cullis_e2e`.
+Common causes of "looks stuck":
+- **Slow first-time pip build**: the broker requirements pull ~200 MB
+  of wheels on the first build. Be patient.
+- **Postgres health timeout**: the broker waits for postgres to be
+  `healthy` before starting; if postgres misbehaves the broker stays
+  in `starting`.
+- **Stale `cullis_e2e_net` network**: rare, but `docker network ls |
+  grep cullis_e2e` then `docker network rm` if leftover.
 
-Il fixture ha un timeout di **180 secondi** per ogni health check. Se
-nemmeno dopo 3 minuti il broker risponde a `/healthz`, il test fallisce
-con `TimeoutError: broker did not become healthy within 180s` e i
-container vengono smontati. Mai zombie.
+The fixture has a **180-second timeout** per health check. If the
+broker still does not respond after 3 minutes, the test fails with
+`TimeoutError: broker did not become healthy within 180s` and the
+stack is torn down. No zombies.
 
-### Modo manuale — pytest diretto
+### The manual way — pytest directly
 
 ```bash
-# Lancia tutta la suite e2e
+# Run the whole e2e suite
 pytest -m e2e -o addopts="" tests/e2e/
 
-# Filtra per nome
+# Filter by test name
 pytest -m e2e -o addopts="" tests/e2e/ -k full_two_org
 ```
 
-L'`-o addopts=""` serve a sovrascrivere il filtro `-m "not e2e"` impostato
-in `pytest.ini`. Senza quello, pytest skippa tutti i test col marker e2e.
+The `-o addopts=""` overrides the default `-m "not e2e"` filter set in
+`pytest.ini`. Without it, pytest skips every test marked `@pytest.mark.e2e`.
 
-### Tenere lo stack su per debug
+### Keeping the stack up for inspection
 
 ```bash
 KEEP_E2E_STACK=1 tests/e2e/run.sh
 ```
 
-Dopo il run, lo stack resta acceso. Puoi ispezionare:
+After the run the stack is left running. You can poke at it:
 
 ```bash
 docker compose --project-name cullis-e2e \
                -f tests/e2e/docker-compose.e2e.yml ps
 
-docker compose --project-name cullis-e2e \
-               -f tests/e2e/docker-compose.e2e.yml logs broker
-
-# Apri il broker direttamente:
+# Hit the broker directly:
 curl http://localhost:18000/healthz
 curl http://localhost:18000/readyz
 
-# Apri i proxy:
-curl http://localhost:19100/health  # alpha
-curl http://localhost:19101/health  # beta
+# Hit the proxies:
+curl http://localhost:19100/health   # alpha
+curl http://localhost:19101/health   # beta
 ```
 
-Quando hai finito:
+When you are done:
 
 ```bash
 docker compose --project-name cullis-e2e \
@@ -131,162 +135,189 @@ docker compose --project-name cullis-e2e \
 
 ---
 
-## Cosa testa precisamente
+## What it tests, exactly
 
 `tests/e2e/test_full_flow.py::test_full_two_org_message_exchange`:
 
-| Step | Operazione | Endpoint reale |
-|---|---|---|
-| 1 | Genera invite token alpha | `POST /v1/admin/invites` (X-Admin-Secret) |
-| 2 | Genera invite token beta  | idem |
-| 3 | proxy-alpha registra org "alpha" + crea agent "buyer" | `setup_proxy_org.py` (in container) → `POST /v1/onboarding/join` + `AgentManager.create_agent` + binding auto-approve |
-| 4 | proxy-beta registra org "beta" + crea agent "seller"  | idem |
-| 5 | Admin approva entrambe le org                          | `POST /v1/admin/orgs/alpha/approve` + idem beta |
-| 6 | alpha-buyer fa discovery cross-org per "procurement.read" | `POST /v1/egress/discover` su proxy-alpha |
-| 7 | Verifica che beta-seller sia visibile                  | assert `beta.agent_id in discovered_ids` |
-| 8 | alpha-buyer apre sessione verso beta-seller            | `POST /v1/egress/sessions` su proxy-alpha |
-| 9 | beta-seller accetta la sessione pending                | `POST /v1/egress/sessions/{id}/accept` su proxy-beta |
-| 10 | alpha-buyer manda un messaggio E2E con marker noto    | `POST /v1/egress/send` su proxy-alpha |
-| 11 | beta-seller poll per il messaggio                     | `GET /v1/egress/messages/{id}` su proxy-beta |
-| 12 | Verifica che il payload decriptato sia identico       | assert su `payload["marker"]`, `payload["items"]` |
+| Step | Operation                                                      | Real endpoint                                                           |
+|------|----------------------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Generate invite token for alpha                                | `POST /v1/admin/invites` (X-Admin-Secret)                               |
+| 2    | Generate invite token for beta                                 | same                                                                    |
+| 3    | proxy-alpha registers org `alpha` (status=pending)             | `setup_proxy_org.py --phase=org` in container → `POST /v1/onboarding/join` |
+| 4    | proxy-beta registers org `beta` (status=pending)               | same                                                                    |
+| 5    | Network admin approves both orgs                               | `POST /v1/admin/orgs/{id}/approve` for alpha and beta                   |
+| 6    | proxy-alpha creates agent `alpha::buyer` (cert + API key + binding) | `setup_proxy_org.py --phase=agent` in container → `AgentManager.create_agent` + binding auto-approve |
+| 7    | proxy-beta creates agent `beta::seller`                        | same                                                                    |
+| 8    | alpha::buyer discovers beta::seller cross-org                  | `POST /v1/egress/discover` on proxy-alpha                               |
+| 9    | Assert beta::seller is visible from alpha                      | `assert beta.agent_id in discovered_ids`                                |
+| 10   | alpha::buyer opens a session to beta::seller                   | `POST /v1/egress/sessions` on proxy-alpha                               |
+| 11   | beta::seller accepts the pending session                       | `POST /v1/egress/sessions/{id}/accept` on proxy-beta                    |
+| 12   | alpha::buyer sends an E2E message with a known marker          | `POST /v1/egress/send` on proxy-alpha                                   |
+| 13   | beta::seller polls for the message                             | `GET /v1/egress/messages/{id}` on proxy-beta                            |
+| 14   | Assert the decrypted payload matches the marker exactly        | `assert payload["marker"] == ... and payload["items"] == ...`           |
 
-Altri test inclusi:
+The split between phase=org (steps 3–4), admin approval (step 5) and
+phase=agent (steps 6–7) is **intentional**: the broker rejects any
+agent registration call while the org is still `pending`, so the
+admin approval has to land between the two phases.
 
-- `test_invite_token_invalid_is_rejected` — invite token finto deve fallire
-- `test_admin_invite_requires_admin_secret` — admin endpoint deve respingere
-  chiamate senza header `X-Admin-Secret` valido
+Other tests in the suite:
+
+- `test_invite_token_invalid_is_rejected` — a garbage invite token
+  must be rejected by `/v1/onboarding/join`.
+- `test_admin_invite_requires_admin_secret` — the admin endpoint must
+  reject calls without a valid `X-Admin-Secret` header.
 
 ---
 
-## Cosa NON testa (ancora)
+## What it does NOT test (yet)
 
-Cose lasciate fuori dall'MVP, da aggiungere se ti servono per coprire
-regression specifiche:
+Things deliberately left out of the MVP. Add them if you need
+coverage for a specific regression class:
 
-- **Reply path**: oggi è solo monodirezionale (alpha → beta). Se rompi il
-  flusso beta → alpha non te ne accorgi.
-- **Audit log hash chain verification**: il test non chiama `verify_chain()`
-  alla fine.
+- **Reply path**: today the test is one-way (alpha → beta). If you
+  break the beta → alpha path you will not notice here.
+- **Audit log hash chain verification**: the test does not call
+  `verify_chain()` at the end.
 - **RFQ broadcast** (`POST /v1/broker/rfq`).
 - **Transaction tokens** (`POST /v1/auth/token/transaction`).
-- **Graceful shutdown**: il fixture fa `down -v` brutale, non testa il drain
-  watcher dell'item 4.
+- **Graceful shutdown / drain watcher**: the fixture does a hard
+  `down -v`, it does not exercise the SIGTERM drain path.
 - **Cert rotation**.
-- **OIDC role mapping** (item 1) — quello è coperto dai test mock-based.
+- **OIDC role mapping**: covered by mock-based unit tests instead.
 
 ---
 
-## Architettura (perché è scritto così)
+## Why it is wired the way it is
 
-### Scelta 1 — script Python `setup_proxy_org.py` dentro al container
+### Decision 1 — `setup_proxy_org.py` runs *inside* the proxy container
 
-Il modo intuitivo per registrare un'org tramite il proxy sarebbe usare la
-dashboard HTML del proxy. Ma significa fare scraping del CSRF token, gestire
-form-encoded POST con cookie session, parsare l'HTML della response per
-estrarre l'API key — tutto fragile.
+The intuitive way to register an org through the proxy would be to
+drive its HTML dashboard. That means scraping the CSRF token,
+form-encoded POSTs with session cookies, and parsing HTML to extract
+the issued API key. All fragile.
 
-L'alternativa scelta: uno script Python (`tests/e2e/scripts/setup_proxy_org.py`)
-che viene **mountato come volume** nei container proxy e invocato via
-`docker compose exec`. Riusa direttamente le funzioni Python del proxy
-(`set_config`, `generate_org_ca`, `AgentManager.create_agent`) — gli stessi
-moduli che chiama la dashboard. Il test runner lo invoca e parsa il JSON
-che lo script stampa su stdout.
+The actual setup: a Python script (`tests/e2e/scripts/setup_proxy_org.py`)
+is bind-mounted into the proxy containers and invoked via
+`docker compose exec`. It calls the real proxy modules directly
+(`set_config`, `generate_org_ca`, `AgentManager.create_agent`) — the
+same ones the dashboard calls. The test runner reads the JSON the
+script prints on stdout.
 
-Pro:
-- Niente HTML scraping
-- Esercita il **vero** path produzione (stessi moduli, stesso DB, stessa CA)
-- Se cambia il dashboard HTML il test continua a funzionare
+Pros:
+- No HTML scraping.
+- Exercises the **real** production code path (same modules, same DB,
+  same CA logic).
+- The dashboard HTML can change without breaking the test.
 
-Contro:
-- Lo script vive in `tests/e2e/scripts/` e va tenuto allineato con
-  l'evoluzione di `mcp_proxy.dashboard.router.generate_org_ca` e
-  `mcp_proxy.egress.agent_manager.AgentManager.create_agent`. Se cambi la
-  signature di una di queste funzioni, lo script va aggiornato.
+Cons:
+- The script lives in `tests/e2e/scripts/` and has to stay aligned
+  with the signatures of `mcp_proxy.dashboard.router.generate_org_ca`
+  and `mcp_proxy.egress.agent_manager.AgentManager.create_agent`.
+  Rename either function and the script needs an update.
 
-### Scelta 2 — porte alte (18xxx / 19xxx) e project name dedicato
+### Decision 2 — high port range (18xxx / 19xxx) and a dedicated project name
 
-Lo stack e2e usa porte completamente separate dal compose principale per
-non confliggere col tuo dev environment:
+The e2e stack uses port mappings completely separate from the dev
+compose file so it never collides with a developer's running stack:
 
-| Servizio   | Porta dev (compose principale) | Porta e2e |
-|---|---|---|
-| broker     | 8000                            | 18000     |
-| proxy A    | 9100                            | 19100     |
-| proxy B    | n/a                             | 19101     |
-| nginx HTTPS| 8443                            | (non esposto) |
+| Service     | Dev compose port | E2E port      |
+|-------------|------------------|---------------|
+| broker      | 8000             | 18000         |
+| proxy alpha | 9100             | 19100         |
+| proxy beta  | n/a              | 19101         |
+| nginx HTTPS | 8443             | (not exposed) |
 
-Più `--project-name cullis-e2e`: tutti i container, volumi e network sono
-prefissati `cullis-e2e_*` e cancellati interamente da `down -v`. Niente
-collisione né con un dev stack già in esecuzione né con un altro test e2e
-parallelo (anche se non lo facciamo, almeno è isolato).
+Plus `--project-name cullis-e2e`: every container, volume and network
+is prefixed `cullis-e2e_*` and removed by `down -v`. No collision with
+a dev stack already running, no collision with another e2e run.
 
-### Scelta 3 — niente nginx HTTPS davanti al broker
+### Decision 3 — no nginx in front of the broker
 
-Lo stack e2e parla con il broker su `http://localhost:18000` direttamente.
-Niente nginx, niente self-signed cert, niente `verify=False`. Motivo: il
-test verifica il flusso applicativo (auth, sessione, messaggio E2E), non
-la terminazione TLS. E significa anche che `BROKER_PUBLIC_URL` è vuoto
-nel `.env` del broker, quindi `build_htu()` deriva l'URL dalla request →
-zero rischio del foot-gun `htu mismatch`.
+The e2e stack talks to the broker on `http://localhost:18000` directly.
+No nginx, no self-signed cert, no `verify=False` workarounds. The test
+verifies the application flow (auth, session, E2E message), not TLS
+termination. As a side effect, `BROKER_PUBLIC_URL` is empty so
+`build_htu()` derives the URL from the request itself — zero risk of
+the htu-mismatch foot-gun documented in `docs/ops-runbook.md`.
 
-### Scelta 4 — `BROKER_PUBLIC_URL=""` esplicito
+### Decision 4 — `KMS_BACKEND=local` instead of Vault
 
-Documentato sopra, ma vale ribadirlo: nel compose e2e settiamo
-`BROKER_PUBLIC_URL: ""`. Questo è la stessa difesa applicata in
-`tests/conftest.py` per i test unit. Senza, un dev con
-`BROKER_PUBLIC_URL=https://localhost:8443` nel `.env` locale vedrebbe il
-test fallire con `Invalid DPoP proof: htu mismatch`.
+`deploy_broker.sh` runs the broker against an in-stack Vault and has
+an explicit "load broker key into Vault" bootstrap step. Reproducing
+that bootstrap inside an ephemeral compose was fragile: the broker
+would come up before the key was loaded and `/readyz` would fail
+forever on the KMS check.
+
+The e2e stack uses `KMS_BACKEND=local` instead. The conftest fixture
+generates a broker CA (via `generate_certs.py` if needed), copies it
+into `tests/e2e/.fixtures/broker_certs/` with permissions the
+container's `appuser` can read AND write (the lifespan persists
+`.admin_secret_hash` there on first boot), and bind-mounts that
+directory into the broker as `/app/certs`. Same code path the unit
+tests already exercise.
+
+### Decision 5 — `POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=true`
+
+The broker has an SSRF guard that rejects any PDP webhook URL
+resolving to a private/loopback/link-local/reserved IP. In the e2e
+stack the PDP webhooks live at `http://proxy-alpha:9100/pdp/policy`
+and `http://proxy-beta:9100/pdp/policy` — both private docker IPs.
+Production behaviour is unchanged: the flag defaults to `False`,
+the e2e compose sets it to `True` explicitly.
 
 ---
 
 ## Troubleshooting
 
-**`pytest` skippa tutti i test e2e**
+**`pytest` skips every e2e test.**
+You forgot the marker override. Use `tests/e2e/run.sh` or
+`pytest -m e2e -o addopts="" tests/e2e/`.
 
-Stai dimenticando il flag. Usa `tests/e2e/run.sh` o `pytest -m e2e -o addopts=""`.
-
-**`docker compose up` fallisce con "port already allocated"**
-
-Hai un altro stack `cullis-e2e` lasciato in piedi (KEEP_E2E_STACK), oppure
-qualcuno sta usando 18000/19100/19101. Diagnostica:
+**`docker compose up` fails with "port already allocated".**
+A leftover `cullis-e2e` stack (likely from a `KEEP_E2E_STACK` run) is
+still bound, or something else on your host is using 18000 / 19100 /
+19101. Diagnose:
 
 ```bash
 docker compose --project-name cullis-e2e -f tests/e2e/docker-compose.e2e.yml ps
 docker compose --project-name cullis-e2e -f tests/e2e/docker-compose.e2e.yml down -v
 ```
 
-**`broker did not become healthy within 180s`**
-
-Il broker non sta passando il proprio `/healthz`. Logs:
+**`broker did not become healthy within 180s`.**
+The broker is failing its own `/readyz`. Check the logs:
 
 ```bash
 docker compose --project-name cullis-e2e -f tests/e2e/docker-compose.e2e.yml logs broker
 ```
 
-Cause comuni: postgres health timeout, vault sealed, KMS bootstrap failure.
+Common causes: postgres health timeout, KMS broker CA fixture not
+readable by `appuser`, alembic migration failure.
 
-**`setup_proxy_org.py failed in proxy-alpha`**
+**`setup_proxy_org.py failed in proxy-alpha`.**
+The provisioning helper failed inside the container. The Python
+exception, including stdout and stderr, is included in the test
+output. Common causes:
 
-Lo script helper ha fallito dentro al container. Il messaggio di errore
-include sia stdout che stderr. Cause comuni:
-- Broker non raggiungibile via DNS interno (`http://broker:8000`) → controlla
-  che proxy-alpha sia sulla rete `cullis_e2e_net`
-- Invite token già usato (DB persistente da run precedente) → assicurati di
-  fare `down -v` prima
-- `mcp_proxy.dashboard.router.generate_org_ca` ha cambiato signature →
-  aggiorna lo script
+- The broker is unreachable via internal DNS (`http://broker:8000`)
+  → check that `proxy-alpha` is on the `cullis_e2e_net` network.
+- An invite token is already used (persistent DB from a previous run)
+  → make sure to `down -v` before re-running.
+- `mcp_proxy.dashboard.router.generate_org_ca` or
+  `mcp_proxy.egress.agent_manager.AgentManager.create_agent` changed
+  signature — update the script.
 
-**`htu mismatch`**
-
-Non dovrebbe più succedere visto che `BROKER_PUBLIC_URL=""` nel compose
-e2e. Se succede, vedi `docs/ops-runbook.md` sezione "Common pitfalls".
+**`htu mismatch`.**
+Should not happen any more because `BROKER_PUBLIC_URL=""` is set
+explicitly in the e2e compose. If it does, see the "Common pitfalls"
+section in `docs/ops-runbook.md`.
 
 ---
 
-## Estendere il test
+## Extending the test
 
-Vuoi coprire il reply path beta → alpha? Aggiungi questi step in fondo a
-`test_full_two_org_message_exchange` dopo lo step 12:
+To cover the reply path beta → alpha, append these steps to
+`test_full_two_org_message_exchange` after step 14:
 
 ```python
 reply_payload = {"kind": "purchase_order_ack", "marker": "e2e-mvp-002", "ok": True}
@@ -305,8 +336,8 @@ ack = await wait_for_message_with_payload(
 assert ack["payload"]["ok"] is True
 ```
 
-Per RFQ broadcast e transaction tokens devi aggiungere un endpoint
-helper analogo a quelli in `tests/e2e/helpers/e2e_messaging.py` — il
-proxy egress non li espone ancora come API "interna", quindi serve
-chiamare gli endpoint del broker direttamente o aggiungere wrapper
-nel proxy.
+For RFQ broadcast and transaction tokens you need to add helper
+endpoints similar to the ones in `tests/e2e/helpers/e2e_messaging.py`
+— the proxy egress API does not yet expose those as "internal" calls,
+so you either hit the broker endpoints directly or add wrapper
+endpoints in the proxy.
