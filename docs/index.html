@@ -197,8 +197,13 @@ nav.scrolled {
 }
 
 nav.scrolled .nav-logo img {
-  height: 26px;
+  height: 24px;
   transition: height 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+nav.scrolled .nav-logo .wordmark {
+  font-size: 0.92rem;
+  transition: font-size 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .nav-logo img {
@@ -216,13 +221,24 @@ nav .container {
   text-decoration: none;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.7rem;
 }
 
 .nav-logo img {
-  height: 32px;
+  height: 30px;
   width: auto;
   filter: drop-shadow(0 0 8px rgba(59, 208, 213, 0.2));
+}
+
+.nav-logo .wordmark {
+  font-family: 'Chakra Petch', sans-serif;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  line-height: 1;
+  transition: font-size 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .nav-logo .dot {
@@ -272,30 +288,6 @@ nav .container {
 
 .hero-content {
   min-width: 0;
-}
-
-/* ── BRAND LOCKUP ────────────────────────────────── */
-.brand-lockup {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  margin-bottom: 1.75rem;
-}
-
-.brand-lockup img {
-  height: clamp(52px, 6.5vw, 78px);
-  width: auto;
-  filter: drop-shadow(0 0 20px rgba(0, 229, 199, 0.28));
-}
-
-.brand-lockup .brand-name {
-  font-family: 'Chakra Petch', sans-serif;
-  font-weight: 600;
-  font-size: clamp(2.2rem, 4.6vw, 3.4rem);
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--text-primary);
-  line-height: 1;
 }
 
 .hero-eyebrow {
@@ -2094,6 +2086,7 @@ footer {
   <div class="container">
     <a href="#" class="nav-logo" aria-label="Cullis — home">
       <img src="cullis.svg" alt="" aria-hidden="true">
+      <span class="wordmark">Cullis</span>
     </a>
     <ul class="nav-links">
       <li><a href="#problem">Problem</a></li>
@@ -2111,10 +2104,6 @@ footer {
   <div class="container">
     <div class="hero-grid">
       <div class="hero-content">
-        <div class="brand-lockup reveal">
-          <img src="cullis.svg" alt="Cullis logo">
-          <span class="brand-name">Cullis</span>
-        </div>
         <div class="hero-eyebrow reveal">
           <span class="pulse" aria-hidden="true"></span>
           Open Source &middot; Apache 2.0
@@ -2988,6 +2977,7 @@ footer {
       <div class="footer-brand">
         <a href="#" class="nav-logo">
           <img src="cullis.svg" alt="Cullis">
+          <span class="wordmark">Cullis</span>
         </a>
         <p>Self-hosted federated trust broker and MCP proxy for inter-organizational AI agents. Cryptographic identity, zero-knowledge messaging, compliance-grade audit. Deploy on your infrastructure.</p>
       </div>
