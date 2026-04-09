@@ -101,8 +101,7 @@ async def log_event(
             details_json, previous_hash,
         )
         await db.commit()
-
-    await db.refresh(entry)
+        await db.refresh(entry)
 
     # Notify connected dashboard clients via SSE
     try:
