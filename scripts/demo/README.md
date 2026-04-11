@@ -56,17 +56,26 @@ The wrapper auto-detects a `.venv/bin/python` in the repo root, so a
 project venv is the easiest path:
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install httpx
+python3 -m venv .venv
+.venv/bin/pip install httpx cryptography
+```
+
+On **Ubuntu Server 24.04** (fresh install), `pip` and `venv` are not included:
+
+```bash
+sudo apt update && sudo apt install -y python3-pip python3-venv
+python3 -m venv .venv
+.venv/bin/pip install httpx cryptography
 ```
 
 If you would rather not create a venv:
 
 ```bash
 # user-wide
-python3 -m pip install --user httpx
+python3 -m pip install --user httpx cryptography
 
 # Debian/Ubuntu/macOS Homebrew with PEP 668:
-python3 -m pip install --user --break-system-packages httpx
+python3 -m pip install --user --break-system-packages httpx cryptography
 ```
 
 ### Supported operating systems
@@ -86,7 +95,7 @@ From the repo root:
 
 ```bash
 ./deploy_demo.sh up               # build, bootstrap, start checker daemon  (~1 min cold)
-python scripts/demo/sender.py     # one-shot: sender → checker, ~1 s round-trip
+./deploy_demo.sh send             # one-shot: sender → checker, ~1 s round-trip
 ./deploy_demo.sh checker-log      # tail the checker daemon log to watch routes arrive
 ./deploy_demo.sh info             # reprint dashboard URLs + credentials
 ./deploy_demo.sh down             # stop containers + checker daemon, keep volumes

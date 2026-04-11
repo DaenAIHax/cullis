@@ -59,25 +59,45 @@ Boot the full architecture (broker + 2 MCP proxies + 2 agents in 2 organizations
 |------------------------------------------------------|----------------------------------------------------------------------|
 | **Docker Engine** with the **Compose v2** plugin     | The demo runs five containers (broker, 2 MCP proxies, postgres, redis) |
 | **Python 3.10+** on the host                         | The orchestrator + sender + checker scripts run on the host, not in containers |
-| **`httpx`** Python package                           | The only host-side Python dependency the demo touches                |
+| **`httpx`** + **`cryptography`** Python packages     | Host-side dependencies (orchestrator + broker CA generation)         |
 | Free TCP ports **8800**, **9800**, **9801**          | The script fails fast with a clear message if any of them is taken   |
 | ~2 GB free disk + outbound network                   | First-time build pulls the broker + proxy images                     |
 
 Supported hosts: Linux native, macOS with Docker Desktop / OrbStack / Colima, Windows via WSL2 + Docker Desktop. No Nix required (Nix is only used by the maintainer's dev loop).
 
-Installing `httpx` if you do not already have it:
+#### Host Python setup
+
+The demo wrapper auto-detects `.venv/bin/python` if present, so you never need to activate the venv.
 
 ```bash
 # Recommended: a project venv (works on every OS, never collides with system Python)
-python3 -m venv .venv && .venv/bin/pip install httpx
-# the wrapper auto-detects .venv/bin/python, no need to activate it
-
-# Or user-wide
-python3 -m pip install --user httpx
-
-# Debian/Ubuntu/macOS Homebrew with PEP 668 ("externally-managed-environment"):
-python3 -m pip install --user --break-system-packages httpx
+python3 -m venv .venv
+.venv/bin/pip install httpx cryptography
 ```
+
+<details>
+<summary>Ubuntu Server 24.04 (fresh install)</summary>
+
+Ubuntu Server does not ship `pip` or `venv` out of the box and has no `python` alias (only `python3`).
+
+```bash
+sudo apt update && sudo apt install -y python3-pip python3-venv
+python3 -m venv .venv
+.venv/bin/pip install httpx cryptography
+```
+
+</details>
+
+<details>
+<summary>Debian/Ubuntu/macOS with PEP 668 ("externally-managed-environment")</summary>
+
+If you prefer a user-wide install instead of a venv:
+
+```bash
+python3 -m pip install --user --break-system-packages httpx cryptography
+```
+
+</details>
 
 ### Run it
 
@@ -85,10 +105,10 @@ python3 -m pip install --user --break-system-packages httpx
 git clone https://github.com/cullis-security/cullis
 cd cullis
 ./deploy_demo.sh up
-python scripts/demo/sender.py
+./deploy_demo.sh send
 ```
 
-Three commands after the clone, including a full Docker build on first run. See [`scripts/demo/README.md`](scripts/demo/README.md) for the full guided tour (dashboards, customization, troubleshooting).
+Four commands after the clone, including a full Docker build on first run. See [`scripts/demo/README.md`](scripts/demo/README.md) for the full guided tour (dashboards, customization, troubleshooting).
 
 > [!CAUTION]
 > **The demo deliberately disables production security features to let you explore the routing and architecture with two simple scripts.**
