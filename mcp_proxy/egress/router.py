@@ -22,6 +22,18 @@ logger = logging.getLogger("mcp_proxy.egress.router")
 
 router = APIRouter(prefix="/v1/egress", tags=["egress"])
 
+import re as _re
+_UUID_RE = _re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    _re.IGNORECASE,
+)
+
+
+def _validate_session_id(session_id: str) -> None:
+    """Reject non-UUID session IDs to prevent log injection."""
+    if not _UUID_RE.match(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Request / Response models
@@ -146,6 +158,7 @@ async def accept_session(
     agent: InternalAgent = Depends(get_agent_from_api_key),
 ):
     """Accept a pending broker session."""
+    _validate_session_id(session_id)
     bridge = _get_bridge(request)
     try:
         await bridge.accept_session(agent.agent_id, session_id)
@@ -177,6 +190,7 @@ async def close_session(
     agent: InternalAgent = Depends(get_agent_from_api_key),
 ):
     """Close a broker session."""
+    _validate_session_id(session_id)
     bridge = _get_bridge(request)
     try:
         await bridge.close_session(agent.agent_id, session_id)
@@ -208,6 +222,7 @@ async def send_message(
     agent: InternalAgent = Depends(get_agent_from_api_key),
 ):
     """Send E2E encrypted message via broker."""
+    _validate_session_id(body.session_id)
     bridge = _get_bridge(request)
     request_id = str(uuid.uuid4())
     t0 = time.monotonic()
@@ -259,6 +274,7 @@ async def poll_messages(
     agent: InternalAgent = Depends(get_agent_from_api_key),
 ):
     """Poll for messages in a session."""
+    _validate_session_id(session_id)
     bridge = _get_bridge(request)
     try:
         messages = await bridge.poll_messages(agent.agent_id, session_id, after)

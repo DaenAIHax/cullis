@@ -230,8 +230,11 @@ async def login_submit(request: Request):
     return response
 
 
-@router.get("/logout")
+@router.post("/logout")
 async def logout(request: Request):
+    session = get_session(request)
+    if session and session.logged_in:
+        await verify_csrf(request, session)
     response = RedirectResponse(url="/proxy/login", status_code=303)
     clear_session(response)
     return response

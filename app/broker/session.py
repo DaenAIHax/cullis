@@ -200,6 +200,8 @@ class SessionStore:
             s for s in self._sessions.values()
             if s.initiator_agent_id == agent_id or s.target_agent_id == agent_id
         ]
+        if limit <= 0:
+            return matches[offset:]
         return matches[offset:offset + limit]
 
 

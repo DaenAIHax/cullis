@@ -12,7 +12,9 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKUP_DIR="${PROJECT_DIR}/backups"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 BACKUP_FILE="atn_${TIMESTAMP}.sql.gz"
+ENCRYPTED_FILE="atn_${TIMESTAMP}.sql.gz.enc"
 KEEP_COUNT=30
+BACKUP_ENCRYPT_KEY="${BACKUP_ENCRYPT_KEY:-}"  # passphrase for AES-256 encryption
 
 # Postgres credentials — reads from .env or falls back to compose defaults
 if [ -f "${PROJECT_DIR}/.env" ]; then
@@ -22,8 +24,9 @@ fi
 PG_USER="${POSTGRES_USER:-atn}"
 PG_DB="${POSTGRES_DB:-agent_trust}"
 
-# Ensure backup directory exists
+# Ensure backup directory exists with restricted permissions
 mkdir -p "${BACKUP_DIR}"
+chmod 700 "${BACKUP_DIR}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -48,12 +51,26 @@ if [ ! -s "${BACKUP_DIR}/${BACKUP_FILE}" ]; then
     exit 1
 fi
 
+# Encrypt the backup if a passphrase is set
+if [ -n "${BACKUP_ENCRYPT_KEY}" ]; then
+    log "Encrypting backup with AES-256-CBC..."
+    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+        -in "${BACKUP_DIR}/${BACKUP_FILE}" \
+        -out "${BACKUP_DIR}/${ENCRYPTED_FILE}" \
+        -pass env:BACKUP_ENCRYPT_KEY
+    rm -f "${BACKUP_DIR}/${BACKUP_FILE}"
+    BACKUP_FILE="${ENCRYPTED_FILE}"
+    log "Backup encrypted: ${BACKUP_FILE}"
+else
+    log "WARNING: BACKUP_ENCRYPT_KEY not set — backup is NOT encrypted at rest"
+fi
+
 # Prune old backups — keep only the most recent $KEEP_COUNT
-BACKUP_COUNT=$(find "${BACKUP_DIR}" -maxdepth 1 -name 'atn_*.sql.gz' -type f | wc -l)
+BACKUP_COUNT=$(find "${BACKUP_DIR}" -maxdepth 1 -name 'atn_*.sql.gz*' -type f | wc -l)
 if [ "${BACKUP_COUNT}" -gt "${KEEP_COUNT}" ]; then
     DELETE_COUNT=$((BACKUP_COUNT - KEEP_COUNT))
     log "Pruning ${DELETE_COUNT} old backup(s) (keeping ${KEEP_COUNT})"
-    find "${BACKUP_DIR}" -maxdepth 1 -name 'atn_*.sql.gz' -type f -printf '%T+ %p\n' \
+    find "${BACKUP_DIR}" -maxdepth 1 -name 'atn_*.sql.gz*' -type f -printf '%T+ %p\n' \
         | sort | head -n "${DELETE_COUNT}" | awk '{print $2}' \
         | xargs rm -f
 fi

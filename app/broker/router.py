@@ -34,6 +34,7 @@ from app.rate_limit.limiter import rate_limiter
 from app.auth.message_signer import verify_message_signature
 from app.telemetry import tracer
 from app.telemetry_metrics import SESSION_CREATED_COUNTER, SESSION_DENIED_COUNTER
+from app.injection.detector import injection_detector
 from app.registry.store import get_agent_by_id as _get_agent_by_id
 from app.registry.org_store import get_org_by_id
 
@@ -151,6 +152,35 @@ async def _create_session_inner(body, current_agent, store, db, span):
                                  "denied_by": pdp_decision.org_id})
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail=f"Policy: {pdp_decision.reason}")
+
+    # ── Local policy engine (org-level rules created via /v1/policy/rules) ──
+    # Only evaluate if the org has explicit session rules; orgs with no rules
+    # rely on the PDP webhook decision above (avoids default-deny blocking
+    # orgs that simply haven't created any rules yet).
+    from app.policy.store import list_policies as _list_policies
+    _initiator_rules = await _list_policies(db, current_agent.org, policy_type="session")
+    if _initiator_rules:
+        _session_policy_engine = PolicyEngine()
+        active_count = sum(
+            1 for s in store._sessions.values()
+            if s.initiator_org_id == current_agent.org and s.status == SessionStatus.active
+        )
+        engine_decision = await _session_policy_engine.evaluate_session(
+            db,
+            initiator_org_id=current_agent.org,
+            target_org_id=body.target_org_id,
+            capabilities=body.requested_capabilities,
+            active_session_count=active_count,
+            agent_id=current_agent.agent_id,
+        )
+        if not engine_decision.allowed:
+            SESSION_DENIED_COUNTER.add(1, {"reason": "engine_denied"})
+            await log_event(db, "policy.session_denied", "denied",
+                            agent_id=current_agent.agent_id, org_id=current_agent.org,
+                            details={"reason": engine_decision.reason,
+                                     "policy_id": engine_decision.policy_id})
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"Policy: {engine_decision.reason}")
 
     try:
         session = store.create(
@@ -476,6 +506,21 @@ async def send_message(
                             "parent_jti": txn_record.parent_jti,
                         })
 
+    # ── Injection detection (fast regex + optional LLM judge) ──────────
+    # Skip for E2E-encrypted payloads — the broker cannot read plaintext,
+    # so injection detection is meaningless on ciphertext blobs.
+    _is_e2e = "ciphertext" in envelope.payload and "iv" in envelope.payload
+    if not _is_e2e:
+        injection_result = injection_detector.check(envelope.payload)
+        if injection_result.blocked:
+            await log_event(db, "broker.injection_blocked", "denied",
+                            agent_id=current_agent.agent_id, session_id=session_id,
+                            org_id=current_agent.org,
+                            details={"reason": injection_result.reason,
+                                     "source": injection_result.source})
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"Message blocked: {injection_result.reason}")
+
     # ── Message policy evaluation ────────────────────────────────────────
     _policy_engine = PolicyEngine()
     policy_decision = await _policy_engine.evaluate_message(
@@ -573,11 +618,13 @@ async def list_sessions(
     store: SessionStore = Depends(get_session_store),
 ):
     """List sessions for the authenticated agent, with optional status filter and pagination."""
-    sessions = store.list_for_agent(current_agent.agent_id, limit=limit + offset, offset=0)
+    # Fetch all sessions for the agent (in-memory store), filter by status,
+    # then paginate. Previous approach fetched limit+offset first, which could
+    # miss matching sessions beyond that window.
+    all_sessions = store.list_for_agent(current_agent.agent_id, limit=0, offset=0)
     if status is not None:
-        sessions = [s for s in sessions if s.status == status]
-    # Apply pagination after status filter
-    page = sessions[offset:offset + limit]
+        all_sessions = [s for s in all_sessions if s.status == status]
+    page = all_sessions[offset:offset + limit]
     return [
         SessionResponse(
             session_id=s.session_id,
@@ -707,6 +754,17 @@ async def get_rfq_status(
     result = await get_rfq(db, rfq_id)
     if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="RFQ not found")
+    # Authorization: only the initiator or matched responders can view the RFQ
+    from app.broker.db_models import RfqRecord as _RfqRecord
+    from sqlalchemy import select as _sa_select
+    _rfq_row = (await db.execute(
+        _sa_select(_RfqRecord.initiator_agent_id).where(_RfqRecord.rfq_id == rfq_id)
+    )).scalar_one_or_none()
+    _rfq_matched = getattr(result, "matched_agents", []) or []
+    _allowed = current_agent.agent_id == _rfq_row or current_agent.agent_id in _rfq_matched
+    if not _allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="You are not authorized to view this RFQ")
     return result
 
 
@@ -730,11 +788,15 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
     from app.config import get_settings
     _ws_settings = get_settings()
     _ws_origins = [o.strip() for o in _ws_settings.allowed_origins.split(",") if o.strip()]
+    origin = websocket.headers.get("origin", "")
     if _ws_origins and "*" not in _ws_origins:
-        origin = websocket.headers.get("origin", "")
         if origin not in _ws_origins:
             await websocket.close(code=1008)
             return
+    elif not _ws_origins and _ws_settings.environment == "production":
+        _log.warning("WebSocket rejected: ALLOWED_ORIGINS empty in production (origin=%s)", origin)
+        await websocket.close(code=1008)
+        return
 
     await websocket.accept()
     agent_id: str | None = None

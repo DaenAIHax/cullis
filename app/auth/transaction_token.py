@@ -114,32 +114,49 @@ async def validate_and_consume_transaction_token(
     if token_payload.token_type != "transaction":
         raise ValueError("Not a transaction token")
 
-    result = await db.execute(
-        select(TransactionTokenRecord).where(
-            TransactionTokenRecord.jti == token_payload.jti
-        )
-    )
-    record = result.scalar_one_or_none()
-    if not record:
-        raise ValueError("Transaction token not found")
-
-    if record.status != "active":
-        raise ValueError(f"Transaction token already {record.status}")
+    from sqlalchemy import update as sa_update
 
     now = datetime.now(timezone.utc)
+
+    # Atomic consume: UPDATE ... WHERE status='active' RETURNING *
+    # This prevents TOCTOU race: only one concurrent request succeeds.
+    stmt = (
+        sa_update(TransactionTokenRecord)
+        .where(
+            TransactionTokenRecord.jti == token_payload.jti,
+            TransactionTokenRecord.status == "active",
+        )
+        .values(status="consumed", consumed_at=now)
+        .returning(TransactionTokenRecord)
+    )
+    result = await db.execute(stmt)
+    record = result.scalar_one_or_none()
+
+    if not record:
+        # Either not found or already consumed/expired — check which
+        check = await db.execute(
+            select(TransactionTokenRecord).where(
+                TransactionTokenRecord.jti == token_payload.jti
+            )
+        )
+        existing = check.scalar_one_or_none()
+        if not existing:
+            raise ValueError("Transaction token not found")
+        raise ValueError(f"Transaction token already {existing.status}")
+
     if now > record.expires_at:
         record.status = "expired"
         await db.commit()
         raise ValueError("Transaction token expired")
 
     if record.payload_hash != actual_payload_hash:
+        # Rollback consumption — payload doesn't match
+        record.status = "active"
+        record.consumed_at = None
+        await db.commit()
         raise ValueError("Payload hash mismatch — message does not match approved payload")
 
-    # Consume atomically
-    record.status = "consumed"
-    record.consumed_at = now
     await db.commit()
-
     return record
 
 

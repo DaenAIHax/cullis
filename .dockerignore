@@ -1,0 +1,35 @@
+# Secrets and credentials
+.env
+proxy.env
+proxy-*.env
+agents/*.env
+
+# PKI and keys
+certs/
+.keys/
+nginx-proxy/
+
+# Database files
+*.db
+backups/
+
+# Vault keys
+vault/vault-keys.json
+
+# Git
+.git/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.venv/
+
+# IDE and tools
+.claude/
+.pytest_cache/
+.ruff_cache/
+
+# Local-only files
+imp/
+drafts/
+demo/

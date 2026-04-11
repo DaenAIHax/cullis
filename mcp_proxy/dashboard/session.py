@@ -109,19 +109,25 @@ def set_session(response: Response, role: str = "admin") -> str:
         "exp": int(time.time()) + _COOKIE_MAX_AGE,
     })
     signed = _sign(payload)
+    from mcp_proxy.config import get_settings as _proxy_settings
+    _pub_url = _proxy_settings().proxy_public_url
+    _use_secure = _pub_url.startswith("https") if _pub_url else False
     response.set_cookie(
         _COOKIE_NAME, signed,
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=False,  # set True behind TLS terminator
+        secure=_use_secure,
     )
     return csrf_token
 
 
 def clear_session(response: Response) -> None:
     """Delete the session cookie."""
-    response.delete_cookie(_COOKIE_NAME, samesite="lax", secure=False)
+    from mcp_proxy.config import get_settings as _proxy_settings
+    _pub_url = _proxy_settings().proxy_public_url
+    _use_secure = _pub_url.startswith("https") if _pub_url else False
+    response.delete_cookie(_COOKIE_NAME, samesite="lax", secure=_use_secure)
 
 
 def require_login(request: Request) -> ProxyDashboardSession | RedirectResponse:

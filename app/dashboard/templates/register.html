@@ -74,6 +74,12 @@
     <div class="bg-surface-900/60 border border-gray-800/50 rounded-lg p-6 backdrop-blur-sm" style="box-shadow: 0 0 40px rgba(0,229,199,0.03);">
         <form method="post" action="/dashboard/register" class="space-y-4">
             <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Invite Token</label>
+                <input type="text" name="invite_token" required placeholder="Paste your invite token"
+                       class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 font-mono transition-all">
+                <p class="text-[10px] text-gray-600 mt-1">Required. Obtain from your network administrator.</p>
+            </div>
+            <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Organization ID</label>
                 <input type="text" name="org_id" required placeholder="e.g. electrostore" value="{{ form.org_id or '' }}"
                        pattern="[a-z0-9\-]+"

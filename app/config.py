@@ -168,7 +168,13 @@ def is_policy_enforced() -> bool:
 
 
 def set_policy_enforcement(enabled: bool) -> None:
-    """Toggle policy enforcement at runtime (admin dashboard use)."""
+    """Toggle policy enforcement at runtime (admin dashboard use).
+
+    In production, disabling policy enforcement is blocked to prevent
+    accidental or malicious deactivation of access controls.
+    """
+    if not enabled and get_settings().environment == "production":
+        raise ValueError("Cannot disable policy enforcement in production")
     global _policy_override
     _policy_override = enabled
 

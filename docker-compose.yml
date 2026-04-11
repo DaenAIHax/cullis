@@ -16,7 +16,7 @@ services:
   vault:
     image: hashicorp/vault:1.17
     ports:
-      - "8200:8200"
+      - "127.0.0.1:8200:8200"
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-dev-root-token}
       VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
@@ -67,7 +67,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # dev only — remove in production (use nginx TLS)
     environment:
       DATABASE_URL: postgresql+asyncpg://atn:${POSTGRES_PASSWORD:-atn}@postgres:5432/agent_trust
       BROKER_CA_KEY_PATH: /app/certs/broker-ca-key.pem

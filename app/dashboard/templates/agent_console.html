@@ -120,10 +120,14 @@
 
         const bubble = document.createElement('div');
         bubble.className = classes;
-        let html = '';
-        if (role === 'tool' && toolName) html += '<span class="text-amber-500 font-semibold font-mono">' + toolName + '</span>: ';
-        html += content;
-        bubble.innerHTML = html;
+        if (role === 'tool' && toolName) {
+            const toolSpan = document.createElement('span');
+            toolSpan.className = 'text-amber-500 font-semibold font-mono';
+            toolSpan.textContent = toolName;
+            bubble.appendChild(toolSpan);
+            bubble.appendChild(document.createTextNode(': '));
+        }
+        bubble.appendChild(document.createTextNode(content));
         wrapper.appendChild(bubble);
         container.appendChild(wrapper);
         scrollToBottom();

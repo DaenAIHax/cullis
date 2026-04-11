@@ -49,6 +49,7 @@ class ProxySettings(BaseSettings):
 
     # Broker uplink (for egress)
     broker_url: str = ""
+    broker_verify_tls: bool = True  # verify broker TLS cert (disable only for dev)
     org_id: str = ""
     org_secret: str = ""
 

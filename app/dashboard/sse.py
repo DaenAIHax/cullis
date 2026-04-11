@@ -50,6 +50,8 @@ def _categorize_event(event_type: str) -> set[str]:
 class _Client:
     queue: Queue = field(default_factory=lambda: Queue(maxsize=64))
     connected_at: float = field(default_factory=time.time)
+    org_id: str | None = None
+    is_admin: bool = False
 
 
 class DashboardSSEManager:
@@ -59,19 +61,24 @@ class DashboardSSEManager:
         self._clients: dict[int, _Client] = {}
         self._counter = 0
 
-    def connect(self) -> tuple[int, Queue]:
+    def connect(self, *, org_id: str | None = None, is_admin: bool = False) -> tuple[int, Queue]:
         self._counter += 1
-        client = _Client()
+        client = _Client(org_id=org_id, is_admin=is_admin)
         self._clients[self._counter] = client
-        _log.info("SSE client connected (id=%d, total=%d)", self._counter, len(self._clients))
+        _log.info("SSE client connected (id=%d, org=%s, total=%d)", self._counter, org_id, len(self._clients))
         return self._counter, client.queue
 
     def disconnect(self, client_id: int) -> None:
         self._clients.pop(client_id, None)
         _log.info("SSE client disconnected (id=%d, total=%d)", client_id, len(self._clients))
 
-    async def broadcast(self, event_type: str, data: dict | None = None) -> None:
-        """Broadcast an event to all connected dashboard clients."""
+    async def broadcast(self, event_type: str, data: dict | None = None, org_id: str | None = None) -> None:
+        """Broadcast an event to connected dashboard clients.
+
+        Events are filtered by org_id: admin clients receive all events,
+        org clients only receive events matching their org_id (or events
+        without an org_id, like system-wide notifications).
+        """
         if not self._clients:
             return
 
@@ -85,6 +92,9 @@ class DashboardSSEManager:
 
         disconnected = []
         for cid, client in self._clients.items():
+            # Filter: admins see everything; org clients only see their org's events
+            if not client.is_admin and org_id and client.org_id and client.org_id != org_id:
+                continue
             try:
                 client.queue.put_nowait(payload)
             except asyncio.QueueFull:

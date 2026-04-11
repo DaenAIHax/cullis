@@ -22,10 +22,11 @@ class BrokerBridge:
     Clients are lazily initialized and cached.
     """
 
-    def __init__(self, broker_url: str, org_id: str, agent_manager: Any):
+    def __init__(self, broker_url: str, org_id: str, agent_manager: Any, *, verify_tls: bool = True):
         self._broker_url = broker_url
         self._org_id = org_id
         self._agent_manager = agent_manager
+        self._verify_tls = verify_tls
         self._clients: dict[str, CullisClient] = {}
         self._lock = asyncio.Lock()
 
@@ -35,7 +36,7 @@ class BrokerBridge:
         """Create and authenticate a new CullisClient for an agent."""
         cert_pem, key_pem = await self._agent_manager.get_agent_credentials(agent_id)
 
-        client = CullisClient(self._broker_url, verify_tls=False)
+        client = CullisClient(self._broker_url, verify_tls=self._verify_tls)
         # login_from_pem is synchronous in the SDK — run in thread to avoid blocking
         await asyncio.to_thread(
             client.login_from_pem, agent_id, self._org_id, cert_pem, key_pem,

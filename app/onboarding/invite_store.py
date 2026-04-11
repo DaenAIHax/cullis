@@ -71,28 +71,40 @@ async def validate_and_consume(
     Returns the record if valid, None otherwise.
     Token is consumed atomically — a second call with the same token fails.
     """
+    from sqlalchemy import update as sa_update
+
     h = _hash_token(plaintext_token)
-    result = await db.execute(
-        select(InviteToken).where(
+    now = datetime.now(timezone.utc)
+
+    # Atomic consume: UPDATE WHERE used=false AND revoked=false RETURNING *
+    # This prevents TOCTOU race: only one concurrent request succeeds.
+    stmt = (
+        sa_update(InviteToken)
+        .where(
             InviteToken.token_hash == h,
-            ~InviteToken.used,
-            ~InviteToken.revoked,
+            InviteToken.used == False,  # noqa: E712
+            InviteToken.revoked == False,  # noqa: E712
         )
+        .values(used=True, used_at=now, used_by_org_id=org_id)
+        .returning(InviteToken)
     )
+    result = await db.execute(stmt)
     record = result.scalar_one_or_none()
+
     if record is None:
         return None
 
-    now = datetime.now(timezone.utc)
     expires_at = record.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if now > expires_at:
+        # Token was expired — rollback consumption
+        record.used = False
+        record.used_at = None
+        record.used_by_org_id = None
+        await db.commit()
         return None
 
-    record.used = True
-    record.used_at = now
-    record.used_by_org_id = org_id
     await db.commit()
     await db.refresh(record)
     return record

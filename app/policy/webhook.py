@@ -327,6 +327,13 @@ async def evaluate_session_via_webhooks(
         session_context="target",
     )
 
+    # Track dual-org policy mismatch (one allowed, other denied)
+    if initiator_decision.allowed != target_decision.allowed:
+        from app.telemetry_metrics import POLICY_DUAL_ORG_MISMATCH_COUNTER
+        POLICY_DUAL_ORG_MISMATCH_COUNTER.add(1, {
+            "denied_by": target_org_id if initiator_decision.allowed else initiator_org_id,
+        })
+
     if not initiator_decision.allowed:
         return initiator_decision
     if not target_decision.allowed:

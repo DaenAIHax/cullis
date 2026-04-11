@@ -150,12 +150,27 @@ async def register_submit(request: Request, db: AsyncSession = Depends(get_db)):
     secret = form_data.get("secret", "")
     secret_confirm = form_data.get("secret_confirm", "")
 
+    invite_code = form_data.get("invite_token", "").strip()
     form = {"org_id": org_id, "display_name": display_name}
 
     if not org_id or not display_name or not secret:
         return templates.TemplateResponse("register.html", {
             "request": request, "form": form,
             "error": "All fields are required.", "success": None,
+        })
+
+    # Validate invite token — required to prevent unsolicited registrations
+    if not invite_code:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": "An invite token is required to register.", "success": None,
+        })
+    from app.onboarding.invite_store import validate_and_consume
+    invite_record = await validate_and_consume(db, invite_code, org_id)
+    if not invite_record:
+        return templates.TemplateResponse("register.html", {
+            "request": request, "form": form,
+            "error": "Invalid or expired invite token.", "success": None,
         })
 
     if secret != secret_confirm:
@@ -331,10 +346,22 @@ async def settings_upload_ca(request: Request, db: AsyncSession = Depends(get_db
             _ctx(request, session, active="settings", org=org, ca_locked=False,
                  error="Invalid certificate. Paste a valid PEM certificate.", success=None))
 
-    # Validate the PEM
+    # Validate the PEM — must be a CA certificate
     try:
         from cryptography.x509 import load_pem_x509_certificate
-        load_pem_x509_certificate(ca_pem.encode())
+        from cryptography.x509.oid import ExtensionOID
+        _ca_cert = load_pem_x509_certificate(ca_pem.encode())
+        # Verify BasicConstraints CA=true
+        try:
+            _bc = _ca_cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS)
+            if not _bc.value.ca:
+                return templates.TemplateResponse("settings.html",
+                    _ctx(request, session, active="settings", org=org,
+                         error="Certificate is not a CA (BasicConstraints CA=false).", success=None))
+        except Exception:
+            return templates.TemplateResponse("settings.html",
+                _ctx(request, session, active="settings", org=org,
+                     error="Certificate missing BasicConstraints extension. Must be a CA certificate.", success=None))
     except Exception:
         return templates.TemplateResponse("settings.html",
             _ctx(request, session, active="settings", org=org,
@@ -1118,7 +1145,9 @@ async def audit_log(
 
     if q:
         q = q[:100]  # Limit search term length to prevent expensive LIKE queries
-        pattern = f"%{q}%"
+        # Escape LIKE wildcards in user input to prevent pattern abuse
+        _escaped = q.replace("%", r"\%").replace("_", r"\_")
+        pattern = f"%{_escaped}%"
         query = query.where(or_(
             AuditLog.event_type.ilike(pattern),
             AuditLog.agent_id.ilike(pattern),
@@ -1356,7 +1385,7 @@ async def dashboard_sse(request: Request):
 
     from app.dashboard.sse import sse_manager
 
-    client_id, queue = sse_manager.connect()
+    client_id, queue = sse_manager.connect(org_id=session.org_id, is_admin=session.is_admin)
 
     async def event_stream():
         try:

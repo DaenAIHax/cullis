@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI):
             broker_url=broker_url,
             org_id=org_id,
             agent_manager=agent_mgr,
+            verify_tls=settings.broker_verify_tls,
         )
         app.state.broker_bridge = bridge
         _log.info("BrokerBridge initialized (broker=%s, org=%s)", broker_url, org_id)
@@ -175,6 +176,17 @@ async def security_headers(request: Request, call_next):
     if not any(request.url.path.startswith(p) for p in _no_dpop_nonce):
         from mcp_proxy.auth.dpop import get_current_dpop_nonce
         response.headers["DPoP-Nonce"] = get_current_dpop_nonce()
+
+    # CSP on dashboard pages
+    if request.url.path.startswith("/proxy"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
 
     return response
 
