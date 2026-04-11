@@ -89,6 +89,8 @@ sudo apt update && sudo apt install -y python3-pip python3-venv
 
 </details>
 
+https://github.com/user-attachments/assets/d838ce65-c0cc-4d12-95de-12cb8a37325e
+
 > [!CAUTION]
 > **The demo deliberately disables production security features to let you explore the routing and architecture with two simple scripts.**
 >
