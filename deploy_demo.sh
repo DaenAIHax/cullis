@@ -22,9 +22,11 @@
 #
 # Endpoints exposed on the host:
 #   broker dashboard       http://localhost:8800/dashboard
-#                          login: admin / cullis-demo-admin-secret
+#                          First boot: you'll be asked to create a password
+#                          (enter + confirm). No default credentials.
 #   proxy alpha dashboard  http://localhost:9800/proxy
 #   proxy beta  dashboard  http://localhost:9801/proxy
+#                          Same first-boot password flow for each proxy.
 #
 # Ports are deliberately in the 88xx/98xx range so the demo never collides
 # with the dev stack (8xxx/9xxx) or the e2e test stack (18xxx/19xxx).
