@@ -387,11 +387,30 @@ docker compose --project-name cullis-demo \
 
 ## What this is NOT
 
-- **Not production**. The broker has no TLS, the admin secret is baked
-  into the compose file, the SSRF guard is bypassed for private IPs
-  so the docker-compose webhooks work, agent keys are stored in plain
-  files. None of this is OK on a real network.
-- **Not a tutorial on running Cullis in production**. For that, see
-  `deploy_broker.sh` and `deploy_proxy.sh` in the repo root, the Helm
-  chart in `deploy/helm/cullis/`, and the BYOCA / TLS profiles documented
-  in `enterprise-kit/`.
+> **⚠️ The demo deliberately disables production security features so you can explore the routing with two simple scripts on a laptop.**
+
+### Security features OFF in demo mode
+
+| Security layer | Demo | Production |
+|---|---|---|
+| **TLS / HTTPS** | Plain HTTP (`:8800`) | nginx + TLS (self-signed, ACME, or BYOCA) |
+| **KMS** | Filesystem — keys on disk | HashiCorp Vault KV v2 |
+| **Admin secrets** | Hardcoded (`cullis-demo-admin-secret`) | Strong random, from secrets manager |
+| **SSRF protection** | Bypassed (private IPs allowed) | Enforced — webhooks cannot hit RFC 1918 |
+| **OIDC admin login** | Disabled | Okta / Azure AD / Google federation |
+| **LLM injection detection** | Regex only | + LLM judge (Claude Haiku) |
+| **Observability** | Off | OpenTelemetry + Jaeger + Prometheus |
+| **CORS** | `*` (all origins) | Specific allowed origins |
+| **Cookie secure flag** | `False` (HTTP) | `True` (HTTPS only) |
+| **SPIFFE SAN validation** | Not enforced | Enforced |
+| **Certificate chain validation** | Not enforced | Enforced |
+| **Workers** | 1 process | Multiple + Redis distributed state |
+| **Agent keys** | Plain files on disk | Vault-stored, never exported |
+
+### What the demo DOES show
+
+The full routing flow (agent → proxy → broker → proxy → agent), E2E encryption, DPoP token binding, dual-org policy, the dashboard. **The architecture is real — the hardening is off.**
+
+**Do not expose demo ports outside localhost. Do not reuse demo credentials anywhere.**
+
+For production deployment, see the Helm chart in `deploy/helm/cullis/` and the BYOCA guide in `enterprise-kit/`.

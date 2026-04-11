@@ -88,7 +88,31 @@ cd cullis
 python scripts/demo/sender.py
 ```
 
-Three commands after the clone, including a full Docker build on first run. The demo uses `KMS_BACKEND=local`, no TLS, no Vault — it is meant for laptops. See [`scripts/demo/README.md`](scripts/demo/README.md) for the full guided tour (dashboards, customization, troubleshooting).
+Three commands after the clone, including a full Docker build on first run. See [`scripts/demo/README.md`](scripts/demo/README.md) for the full guided tour (dashboards, customization, troubleshooting).
+
+> [!CAUTION]
+> **The demo deliberately disables production security features to let you explore the routing and architecture with two simple scripts.**
+>
+> What is **OFF** in the demo:
+>
+> | Security layer | Demo | Production |
+> |---|---|---|
+> | **TLS / HTTPS** | Plain HTTP | nginx + TLS certificates (self-signed, ACME, or BYOCA) |
+> | **KMS** | Filesystem (`KMS_BACKEND=local`) — keys on disk | HashiCorp Vault KV v2 (encrypted, access-controlled) |
+> | **Admin secrets** | Hardcoded in compose file (`cullis-demo-admin-secret`) | Strong random, rotated, from secrets manager |
+> | **SSRF protection** | Bypassed (`POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=true`) | Enforced — webhooks cannot hit private IPs |
+> | **OIDC admin login** | Disabled — password-only | Okta / Azure AD / Google federation |
+> | **LLM injection detection** | Fast-path regex only | + LLM judge (Claude Haiku) for real-time analysis |
+> | **Observability** | Off (`OTEL_ENABLED=false`) | OpenTelemetry + Jaeger traces + Prometheus metrics |
+> | **CORS** | `*` (all origins) | Specific allowed origins |
+> | **Cookie security** | `secure=False` (HTTP) | `secure=True` (HTTPS only) |
+> | **SPIFFE SAN validation** | Not enforced | `REQUIRE_SPIFFE_SAN=true` |
+> | **Certificate chain validation** | Not enforced | `REQUIRE_CERT_VALIDATION=true` |
+> | **Workers** | 1 (single process) | Multiple workers + Redis for distributed state |
+>
+> **What the demo DOES show:** the full routing flow (agent → proxy → broker → proxy → agent), E2E encryption, DPoP token binding, dual-org policy evaluation, and the dashboard. Everything that makes the architecture work is real — everything that makes it safe for production is off.
+>
+> **Do not expose demo ports outside localhost. Do not use demo credentials anywhere.**
 
 ---
 
