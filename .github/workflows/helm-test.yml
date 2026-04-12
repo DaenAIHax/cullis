@@ -97,55 +97,18 @@ jobs:
             --selector=app.kubernetes.io/component=controller \
             --timeout=120s
 
-      # The broker needs its PKI secret present before install, otherwise
-      # /readyz hangs. We generate an ephemeral CA here — this is NOT a
-      # real chart capability, it's only to let helm-test reach "pod
-      # Running + /healthz 200". The chart bug for auto-bootstrap PKI
-      # is tracked separately; this step unblocks the deployment gate.
-      - name: Generate ephemeral CA + create broker-pki Secret (broker only)
-        if: steps.filter.outputs.helm == 'true' && matrix.chart == 'cullis'
-        run: |
-          kubectl create namespace cullis-test
-          mkdir -p /tmp/ca
-          openssl genrsa -out /tmp/ca/ca.key 4096
-          openssl req -x509 -new -nodes -key /tmp/ca/ca.key -sha256 -days 365 \
-            -subj "/CN=helm-test CA/O=Cullis CI" -out /tmp/ca/ca.crt
-          kubectl -n cullis-test create secret generic broker-pki \
-            --from-file=broker-ca.pem=/tmp/ca/ca.crt \
-            --from-file=broker-ca-key.pem=/tmp/ca/ca.key
-
+      # values-dev.yaml has broker.pki.bootstrap.enabled=true, so the
+      # chart auto-provisions the broker CA and seeds Vault via a
+      # post-install Helm Job (#11 / #12). No hand-wiring of
+      # extraVolumes, no kubectl exec vault-0 vault kv put.
       - name: Helm install ${{ matrix.chart }}
         if: steps.filter.outputs.helm == 'true'
         run: |
-          if [ "${{ matrix.chart }}" = "cullis" ]; then
-            helm install ${{ matrix.chart }} deploy/helm/${{ matrix.chart }}/ \
-              -n cullis-test \
-              -f deploy/helm/${{ matrix.chart }}/values-dev.yaml \
-              --set-json='broker.extraVolumes=[{"name":"broker-pki","secret":{"secretName":"broker-pki"}}]' \
-              --set-json='broker.extraVolumeMounts=[{"name":"broker-pki","mountPath":"/app/certs","readOnly":true}]' \
-              --wait --timeout 5m
-          else
-            kubectl create namespace cullis-test --dry-run=client -o yaml | kubectl apply -f -
-            helm install ${{ matrix.chart }} deploy/helm/${{ matrix.chart }}/ \
-              -n cullis-test \
-              -f deploy/helm/${{ matrix.chart }}/values-dev.yaml \
-              --wait --timeout 5m
-          fi
-
-      # Bootstrap Vault secret for broker (mimics the missing PKI Job).
-      # Tracked as a separate chart bug; this CI step unblocks the gate.
-      - name: Bootstrap Vault secret (broker only)
-        if: steps.filter.outputs.helm == 'true' && matrix.chart == 'cullis'
-        run: |
-          kubectl -n cullis-test wait --for=condition=ready pod/cullis-vault-0 --timeout=60s
-          CA_CERT=$(cat /tmp/ca/ca.crt)
-          CA_KEY=$(cat /tmp/ca/ca.key)
-          kubectl -n cullis-test exec cullis-vault-0 -- sh -c "
-            export VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=dev-root-token
-            vault kv put secret/broker private_key_pem='$CA_KEY' ca_cert_pem='$CA_CERT'
-          "
-          kubectl -n cullis-test rollout restart deployment/cullis-broker
-          kubectl -n cullis-test rollout status deployment/cullis-broker --timeout=3m
+          kubectl create namespace cullis-test --dry-run=client -o yaml | kubectl apply -f -
+          helm install ${{ matrix.chart }} deploy/helm/${{ matrix.chart }}/ \
+            -n cullis-test \
+            -f deploy/helm/${{ matrix.chart }}/values-dev.yaml \
+            --wait --timeout 5m
 
       - name: Assert /healthz 200
         if: steps.filter.outputs.helm == 'true'
