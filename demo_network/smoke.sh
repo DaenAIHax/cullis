@@ -62,6 +62,7 @@ cmd_up() {
         die "demo_network: services failed to reach healthy state"
     fi
     ok "demo_network: up (nonce persisted to $NONCE_FILE)"
+    cmd_dashboard
 }
 
 cmd_check() {
@@ -111,21 +112,38 @@ cmd_logs() {
 
 cmd_dashboard() {
     cat <<EOF
-Cullis demo network — dashboards (add these to /etc/hosts or use curl --resolve):
 
-    127.0.0.1 broker.cullis.test proxy-a.cullis.test proxy-b.cullis.test checker.cullis.test
+=== Cullis demo network — endpoints & credentials ===
 
-Broker dashboard:    https://broker.cullis.test:8443/dashboard
-  admin secret:      demo-admin-secret-change-me
-  (test CA for your browser: demo_network/certs/ca.crt — docker volume test-certs)
+One-time host mapping (so the browser and curl reach Traefik):
+    sudo tee -a /etc/hosts <<< "127.0.0.1 broker.cullis.test proxy-a.cullis.test proxy-b.cullis.test checker.cullis.test"
 
-Proxy A dashboard:   https://proxy-a.cullis.test:8443/proxy
-  admin secret:      demo-proxy-admin-a
+Export the test CA (trust it in your browser or pass to curl):
+    docker cp demo_network-traefik-1:/certs/ca.crt /tmp/cullis-demo-ca.crt
+    # then: curl --cacert /tmp/cullis-demo-ca.crt https://...
 
-Proxy B dashboard:   https://proxy-b.cullis.test:8443/proxy
-  admin secret:      demo-proxy-admin-b
+Broker dashboard  → https://broker.cullis.test:8443/dashboard/login
+    username:       admin
+    password:       demo-admin-secret-change-me
 
-Checker last msg:    https://checker.cullis.test:8443/last-message
+Broker admin API  → https://broker.cullis.test:8443/v1/admin/...
+    header:         x-admin-secret: demo-admin-secret-change-me
+
+Proxy A dashboard → https://proxy-a.cullis.test:8443/proxy
+    admin secret:   demo-proxy-admin-a
+
+Proxy B dashboard → https://proxy-b.cullis.test:8443/proxy
+    admin secret:   demo-proxy-admin-b
+
+Checker (smoke)   → https://checker.cullis.test:8443/last-message
+                    (returns the last payload the checker decoded)
+
+Handy from the host (no /etc/hosts edit needed):
+    curl --cacert /tmp/cullis-demo-ca.crt --resolve broker.cullis.test:8443:127.0.0.1 \\
+         https://broker.cullis.test:8443/health
+
+Logs:       ./smoke.sh logs [service]
+Teardown:   ./smoke.sh down
 EOF
 }
 
