@@ -136,36 +136,51 @@ class VaultKMSProvider:
 
     async def get_broker_private_key_pem(self) -> str:
         if self._private_key_pem is None:
+            secret: dict | None = None
             try:
                 secret = await self._fetch_secret()
             except VaultSecretNotFound:
+                pass
+            # Fallback when either the Vault path doesn't exist (404) or the
+            # path exists but doesn't carry the broker CA yet. The latter
+            # happens because admin_secret.ensure_bootstrapped may write
+            # `admin_secret_hash` into the same KV path first, so the path
+            # is 200 but without `private_key_pem`. Both are "CA not yet
+            # seeded" from the broker's perspective — fall back to the
+            # filesystem Secret mount.
+            if secret is None or "private_key_pem" not in secret:
                 pem = self._read_fallback_private_key()
                 if pem is None:
                     raise RuntimeError(
-                        f"Vault secret at '{self._secret_path}' not found and no "
-                        f"filesystem fallback key is available. Seed Vault or "
-                        f"mount the CA Secret at the configured fallback path."
+                        f"Vault secret at '{self._secret_path}' missing "
+                        f"'private_key_pem' and no filesystem fallback key "
+                        f"available. Seed Vault or mount the CA Secret at "
+                        f"the configured fallback path."
                     )
                 self._private_key_pem = pem
                 return self._private_key_pem
-            if "private_key_pem" not in secret:
-                raise RuntimeError(
-                    f"Vault secret at '{self._secret_path}' missing field 'private_key_pem'"
-                )
             self._private_key_pem = secret["private_key_pem"]
             _log.info("KMS[vault] broker private key fetched from %s", self._secret_path)
         return self._private_key_pem
 
     async def get_broker_public_key_pem(self) -> str:
         if self._public_key_pem is None:
+            secret: dict | None = None
             try:
                 secret = await self._fetch_secret()
             except VaultSecretNotFound:
+                pass
+            # Same fallback logic as get_broker_private_key_pem: 404 or
+            # path-exists-without-CA-fields both trigger filesystem fallback.
+            if secret is None or (
+                "ca_cert_pem" not in secret and "public_key_pem" not in secret
+            ):
                 pem = self._read_fallback_cert()
                 if pem is None:
                     raise RuntimeError(
-                        f"Vault secret at '{self._secret_path}' not found and no "
-                        f"filesystem fallback cert is available."
+                        f"Vault secret at '{self._secret_path}' missing "
+                        f"'ca_cert_pem' / 'public_key_pem' and no filesystem "
+                        f"fallback cert available."
                     )
                 cert = crypto_x509.load_pem_x509_certificate(pem.encode())
                 self._public_key_pem = cert.public_key().public_bytes(

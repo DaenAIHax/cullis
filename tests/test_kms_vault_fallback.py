@@ -68,12 +68,13 @@ def _gen_test_cert(tmp_path: Path) -> tuple[str, str]:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, text: str = "") -> None:
+    def __init__(self, status_code: int, text: str = "", data: dict | None = None) -> None:
         self.status_code = status_code
         self.text = text
+        self._data = data if data is not None else {}
 
     def json(self) -> dict:
-        return {"data": {"data": {}}}
+        return {"data": {"data": self._data}}
 
 
 class _FakeClient:
@@ -173,8 +174,41 @@ async def test_vault_404_without_fallback_raises(monkeypatch):
         lambda **kw: _FakeClient(_FakeResponse(404))
     )
 
-    with pytest.raises(RuntimeError, match="not found and no filesystem fallback"):
+    with pytest.raises(RuntimeError, match="no filesystem fallback"):
         await provider.get_broker_private_key_pem()
+
+
+@pytest.mark.asyncio
+async def test_vault_200_but_missing_ca_fields_falls_back(
+    monkeypatch, fallback_paths
+):
+    """Admin secret bootstrap writes to the same KV path first, so the
+    path returns 200 but without `private_key_pem` / `ca_cert_pem` on
+    initial boot. The fallback must cover that case too, not only 404.
+    """
+    key_path, cert_path = fallback_paths
+    provider = VaultKMSProvider(
+        vault_addr="http://fake-vault:8200",
+        vault_token="t",
+        secret_path="secret/data/broker",
+        fallback_key_path=key_path,
+        fallback_cert_path=cert_path,
+    )
+    # Vault returns 200 with only admin_secret_hash — no CA yet.
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kw: _FakeClient(_FakeResponse(
+            200, data={"admin_secret_hash": "$2b$12$foo..."},
+        ))
+    )
+
+    pem = await provider.get_broker_private_key_pem()
+    assert "PRIVATE KEY" in pem
+
+    # Fresh provider to re-fetch (cache cleared)
+    provider._public_key_pem = None
+    pub = await provider.get_broker_public_key_pem()
+    assert "PUBLIC KEY" in pub
 
 
 @pytest.mark.asyncio
