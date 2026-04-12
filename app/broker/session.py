@@ -10,13 +10,31 @@ Each session has a unique ID and tracks:
 """
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 
-from app.broker.models import SessionStatus
+from app.broker.models import SessionStatus, SessionCloseReason
 
 _log = logging.getLogger("agent_trust")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        _log.warning("Invalid %s=%r, falling back to default %d", name, raw, default)
+        return default
+
+
+# M1 reliability layer defaults (overridable via env for tests / per-org tuning)
+SESSION_IDLE_TIMEOUT_SECONDS = _env_int("SESSION_IDLE_TIMEOUT_SECONDS", 600)   # 10 min
+SESSION_HARD_TTL_MINUTES     = _env_int("SESSION_HARD_TTL_MINUTES", 60)        # 1 hour
+SESSION_CAP_ACTIVE_PER_AGENT = _env_int("SESSION_CAP_ACTIVE_PER_AGENT", 50)    # O4 decision: only ACTIVE capped
 
 
 @dataclass
@@ -41,6 +59,8 @@ class Session:
     status: SessionStatus = SessionStatus.pending
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime | None = None
+    last_activity_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    close_reason: SessionCloseReason | None = None
     used_nonces: set[str] = field(default_factory=set)
     _messages: list[StoredMessage] = field(default_factory=list)
     _next_seq: int = 0
@@ -51,6 +71,24 @@ class Session:
         if self.expires_at is None:
             return False
         return datetime.now(timezone.utc) > self.expires_at
+
+    def is_idle(self, timeout_seconds: int = SESSION_IDLE_TIMEOUT_SECONDS) -> bool:
+        """True if no activity has been recorded in the last ``timeout_seconds``.
+
+        Activity is anything that calls :meth:`touch`: send, poll, accept.
+        Idle sessions are terminal candidates for the sweeper (M1.1).
+        """
+        if self.status not in (SessionStatus.active, SessionStatus.pending):
+            return False
+        age = (datetime.now(timezone.utc) - self.last_activity_at).total_seconds()
+        return age > timeout_seconds
+
+    def touch(self) -> None:
+        """Record activity on the session. Resets the idle timer.
+
+        Called from the router on every send, poll, and accept. Idempotent.
+        """
+        self.last_activity_at = datetime.now(timezone.utc)
 
     def is_nonce_cached(self, nonce: str) -> bool:
         """Fast-path replay check against the in-memory cache.
@@ -99,27 +137,57 @@ class Session:
         ]
 
 
+class AgentSessionCapExceeded(Exception):
+    """Raised when an agent has too many concurrent ACTIVE sessions (O4)."""
+
+    def __init__(self, agent_id: str, current: int, cap: int):
+        self.agent_id = agent_id
+        self.current = current
+        self.cap = cap
+        super().__init__(
+            f"Agent {agent_id} has {current} ACTIVE sessions "
+            f"(cap {cap}) — cannot open new session"
+        )
+
+
 class SessionStore:
     _MAX_SESSIONS: int = 10_000  # hard cap — prevents unbounded memory growth
 
-    def __init__(self, session_ttl_minutes: int = 60):
+    def __init__(
+        self,
+        session_ttl_minutes: int | None = None,
+        active_cap_per_agent: int | None = None,
+    ):
         self._sessions: dict[str, Session] = {}
-        self._ttl = timedelta(minutes=session_ttl_minutes)
+        self._ttl = timedelta(
+            minutes=session_ttl_minutes
+            if session_ttl_minutes is not None
+            else SESSION_HARD_TTL_MINUTES
+        )
+        self._active_cap_per_agent = (
+            active_cap_per_agent
+            if active_cap_per_agent is not None
+            else SESSION_CAP_ACTIVE_PER_AGENT
+        )
         self._lock = asyncio.Lock()  # protects state transitions (accept/reject/close)
 
     # ── Eviction ─────────────────────────────────────────────────────────
 
     def _evict_stale(self) -> int:
-        """Remove expired and terminal sessions from the in-memory store.
+        """Remove already-terminated sessions from the in-memory store.
 
         Called automatically before creating a new session.  Returns the
         number of sessions evicted.
+
+        Only sessions in CLOSED/DENIED states are evicted here — sessions
+        whose ``expires_at`` has passed but are still PENDING/ACTIVE are
+        left in place so the background sweeper (M1.1) can transition
+        them to CLOSED and emit a ``session.closed`` event with reason
+        ``ttl_expired`` before they disappear.
         """
-        now = datetime.now(timezone.utc)
         to_remove = [
             sid for sid, s in self._sessions.items()
             if s.status in (SessionStatus.closed, SessionStatus.denied)
-            or (s.expires_at is not None and s.expires_at < now)
         ]
         for sid in to_remove:
             del self._sessions[sid]
@@ -128,6 +196,20 @@ class SessionStore:
         return len(to_remove)
 
     # ── CRUD ─────────────────────────────────────────────────────────────
+
+    def count_active_for_agent(self, agent_id: str) -> int:
+        """Count ACTIVE sessions involving ``agent_id`` (as initiator or target).
+
+        Used by :meth:`create` to enforce the per-agent cap (O4 decision:
+        only ACTIVE is capped; PENDING is rate-limited at the route level
+        and auto-swept when it times out).
+        """
+        return sum(
+            1
+            for s in self._sessions.values()
+            if s.status == SessionStatus.active
+            and (s.initiator_agent_id == agent_id or s.target_agent_id == agent_id)
+        )
 
     def create(
         self,
@@ -144,6 +226,16 @@ class SessionStore:
             raise RuntimeError(
                 f"Session store full ({self._MAX_SESSIONS} sessions) — "
                 "cannot create new session"
+            )
+
+        # M1.4 per-agent ACTIVE cap (applies to the initiator; the target's
+        # cap is re-checked when they accept).
+        active_for_initiator = self.count_active_for_agent(initiator_agent_id)
+        if active_for_initiator >= self._active_cap_per_agent:
+            raise AgentSessionCapExceeded(
+                agent_id=initiator_agent_id,
+                current=active_for_initiator,
+                cap=self._active_cap_per_agent,
             )
 
         session_id = str(uuid.uuid4())
@@ -171,20 +263,39 @@ class SessionStore:
         session = self.get(session_id)
         if session and session.status == SessionStatus.pending:
             session.status = SessionStatus.active
+            session.touch()
         return session
 
     def reject(self, session_id: str) -> Session | None:
         session = self.get(session_id)
         if session and session.status == SessionStatus.pending:
             session.status = SessionStatus.denied
+            session.close_reason = SessionCloseReason.rejected
         return session
 
-    def close(self, session_id: str) -> None:
-        session = self._sessions.get(session_id)
-        if session:
-            session.status = SessionStatus.closed
+    def close(
+        self,
+        session_id: str,
+        reason: SessionCloseReason = SessionCloseReason.normal,
+    ) -> Session | None:
+        """Close a session, recording why.
 
-    def close_all_for_agent(self, agent_id: str) -> list[Session]:
+        ``reason`` is attached to the session and propagated to peers via
+        the ``session.closed`` event (M1.3). The event emission itself
+        lives at the router level — this method only mutates state.
+        """
+        session = self._sessions.get(session_id)
+        if session and session.status != SessionStatus.closed:
+            session.status = SessionStatus.closed
+            if session.close_reason is None:
+                session.close_reason = reason
+        return session
+
+    def close_all_for_agent(
+        self,
+        agent_id: str,
+        reason: SessionCloseReason = SessionCloseReason.normal,
+    ) -> list[Session]:
         """Close all active/pending sessions involving the given agent.
         Returns the list of sessions that were closed."""
         closed = []
@@ -193,8 +304,33 @@ class SessionStore:
                 s.initiator_agent_id == agent_id or s.target_agent_id == agent_id
             ):
                 s.status = SessionStatus.closed
+                if s.close_reason is None:
+                    s.close_reason = reason
                 closed.append(s)
         return closed
+
+    def find_stale(
+        self,
+        idle_timeout_seconds: int = SESSION_IDLE_TIMEOUT_SECONDS,
+    ) -> list[tuple[Session, SessionCloseReason]]:
+        """Return sessions that should be closed by the sweeper (M1.1).
+
+        A session is stale when:
+          - expires_at < now                → ttl_expired
+          - status in (active, pending) AND idle > idle_timeout_seconds → idle_timeout
+
+        Returns ``[(session, reason)]`` so the sweeper can emit per-session
+        close events with the right reason.
+        """
+        out: list[tuple[Session, SessionCloseReason]] = []
+        for s in self._sessions.values():
+            if s.status in (SessionStatus.closed, SessionStatus.denied):
+                continue
+            if s.is_expired():
+                out.append((s, SessionCloseReason.ttl_expired))
+            elif s.is_idle(idle_timeout_seconds):
+                out.append((s, SessionCloseReason.idle_timeout))
+        return out
 
     def list_for_agent(self, agent_id: str, *, limit: int = 100, offset: int = 0) -> list[Session]:
         matches = [
