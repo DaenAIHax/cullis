@@ -1,0 +1,86 @@
+name: smoke
+
+# End-to-end pre-merge gate. If this job fails, the golden path is broken
+# and the PR must not merge. See demo_network/README.md for what exactly
+# is covered.
+#
+# Paths filter: PRs that only touch docs, the TS SDK, legacy examples, or
+# other workflow files skip this job — the smoke exercises only the
+# Python broker, MCP proxy, Python SDK, and migrations.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "mcp_proxy/**"
+      - "cullis_sdk/**"
+      - "alembic/**"
+      - "demo_network/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".github/workflows/smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "mcp_proxy/**"
+      - "cullis_sdk/**"
+      - "alembic/**"
+      - "demo_network/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".github/workflows/smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded runs on the same branch / PR so a rebase doesn't
+  # leave an orphan job burning CI minutes.
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: demo_network smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker + Compose version
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Enable BuildKit cache
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run smoke (./demo_network/smoke.sh full)
+        working-directory: demo_network
+        run: |
+          ./smoke.sh full
+        # smoke.sh already dumps the last 100 lines of each critical
+        # service on failure, so no separate post-step log collection
+        # is needed.
+
+      - name: Collect logs on failure
+        if: failure()
+        working-directory: demo_network
+        run: |
+          echo "::group::docker compose ps"
+          docker compose ps -a || true
+          echo "::endgroup::"
+          for svc in ca-init broker-init broker bootstrap proxy-a-init proxy-a proxy-b-init proxy-b sender checker traefik prober; do
+            echo "::group::$svc"
+            docker compose logs "$svc" 2>&1 || true
+            echo "::endgroup::"
+          done
+
+      - name: Teardown (defensive)
+        if: always()
+        working-directory: demo_network
+        run: |
+          ./smoke.sh down || true
