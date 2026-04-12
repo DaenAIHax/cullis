@@ -69,38 +69,156 @@ broker:
     #   value: "https://login.example.com/realms/cullis"
     # - name: OIDC_CLIENT_ID
     #   value: "cullis-broker"
+    #
+    # --- Vault over HTTPS with an internal enterprise CA ---
+    # When your external Vault uses a certificate signed by a private CA,
+    # mount the CA bundle via extraVolumes/extraVolumeMounts (see below)
+    # and point VAULT_CACERT at the resulting path so hvac verifies TLS:
+    # - name: VAULT_CACERT
+    #   value: "/etc/ssl/certs/vault-ca.pem"
+    #
+    # --- Expose the pod namespace (used by OIDC / Kubernetes auth) ---
+    # - name: POD_NAMESPACE
+    #   valueFrom:
+    #     fieldRef:
+    #       fieldPath: metadata.namespace
 
   # -- Additional envFrom sources (e.g. External Secret-backed Secrets).
+  # Use this when the ExternalSecrets Operator, CSI Secret Store, or
+  # SealedSecrets controller materialises the broker secrets under a
+  # different Secret than the chart-rendered one.
   extraEnvFrom: []
     # - secretRef:
     #     name: cullis-external-secrets
+    # - secretRef:
+    #     name: cullis-db-url        # ExternalSecret with DATABASE_URL
+    # - secretRef:
+    #     name: cullis-vault-token   # CSI-mounted Vault token
 
-  # -- Volumes injected into the broker pod (e.g. cert material).
+  # -- Volumes injected into the broker pod. Loops via `range` over the
+  # full list so every Kubernetes Volume source (ConfigMap, Secret,
+  # emptyDir, projected, CSI, etc.) is supported.
   extraVolumes: []
-  # -- Volume mounts for the broker container.
-  extraVolumeMounts: []
+    #
+    # --- Pattern 1: mount an internal-CA bundle for Vault HTTPS ---
+    # Create a ConfigMap holding the PEM first, e.g.:
+    #   kubectl -n cullis create configmap vault-ca \
+    #     --from-file=ca.pem=/path/to/internal-root-ca.pem
+    # - name: vault-ca
+    #   configMap:
+    #     name: vault-ca
+    #     items:
+    #       - key: ca.pem
+    #         path: vault-ca.pem
+    #
+    # --- Pattern 2: External Secrets Operator — file-mode secret ---
+    # Useful for OIDC JWKS files, signing keys, or mTLS material that
+    # the broker expects on disk rather than as env vars.
+    # - name: cullis-oidc-jwks
+    #   secret:
+    #     secretName: cullis-oidc-jwks   # rendered by an ExternalSecret
+    #     defaultMode: 0400
+    #
+    # --- Pattern 3: Vault Agent Injector sidecar output ---
+    # When using the hashicorp/vault-agent-injector mutating webhook,
+    # the agent writes rendered secrets into this shared emptyDir.
+    # Annotate the pod via broker.podAnnotations instead of configuring
+    # the volume; the injector mounts it for you. Only enumerate it here
+    # if you prefer the explicit form (e.g. deterministic rendering).
+    # - name: vault-agent-output
+    #   emptyDir:
+    #     medium: Memory
+    #
+    # --- Pattern 4: writable /tmp when readOnlyRootFilesystem=true ---
+    # REQUIRED if you flip broker.securityContext.readOnlyRootFilesystem
+    # to true. uvicorn, httpx and Pydantic may write short-lived files
+    # (TLS session cache, multipart spool) under /tmp.
+    # - name: tmp
+    #   emptyDir: {}
+    # - name: cache
+    #   emptyDir: {}
 
-  # -- Additional annotations on broker pods.
+  # -- Volume mounts for the broker container. One entry per name in
+  # extraVolumes. The rendered Deployment loops `toYaml` over this list,
+  # so any standard VolumeMount field (subPath, readOnly, mountPropagation)
+  # is supported.
+  extraVolumeMounts: []
+    # --- Matches Pattern 1 above: CA for Vault ---
+    # - name: vault-ca
+    #   mountPath: /etc/ssl/certs/vault-ca.pem
+    #   subPath: vault-ca.pem
+    #   readOnly: true
+    #
+    # --- Matches Pattern 2 above: OIDC JWKS ---
+    # - name: cullis-oidc-jwks
+    #   mountPath: /var/run/secrets/cullis/oidc
+    #   readOnly: true
+    #
+    # --- Matches Pattern 4 above: writable /tmp + cache ---
+    # - name: tmp
+    #   mountPath: /tmp
+    # - name: cache
+    #   mountPath: /var/cache/cullis
+
+  # -- Additional annotations on broker pods. Common use:
+  #    - Vault Agent Injector (vault.hashicorp.com/agent-inject: "true")
+  #    - Istio / Linkerd sidecar opt-in / opt-out
+  #    - checksum annotations for downstream GitOps tooling
   podAnnotations: {}
+    # vault.hashicorp.com/agent-inject: "true"
+    # vault.hashicorp.com/role: "cullis-broker"
+    # vault.hashicorp.com/agent-inject-secret-database-url: "secret/data/cullis/db"
   # -- Additional labels on broker pods.
   podLabels: {}
 
-  # -- Security context applied to the broker Pod.
+  # -- Security context applied to the broker Pod. The default is
+  # intentionally restrictive (non-root, seccomp RuntimeDefault) and
+  # matches the Kubernetes Pod Security Standard `restricted` profile.
+  # Flip to looser defaults only if you have a concrete reason.
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 1000
     runAsGroup: 1000
     fsGroup: 1000
+    # -- Apply the container-runtime default seccomp profile. Required
+    # by PSS `restricted` and by most managed Kubernetes baselines.
     seccompProfile:
       type: RuntimeDefault
+    # -- Supplementary GIDs. Leave as an empty list unless your cluster
+    # injects additional groups via a PodSecurityPolicy replacement.
+    # supplementalGroups: []
+    # -- Additional group ownership change policy for mounted volumes.
+    # `OnRootMismatch` avoids relabelling every file on every restart
+    # and is recommended for large PVCs. Uncomment to enable.
+    # fsGroupChangePolicy: OnRootMismatch
 
-  # -- Security context applied to the broker container.
+  # -- Security context applied to the broker container. Defaults match
+  # the Pod Security Standard `restricted` profile **except** for
+  # readOnlyRootFilesystem, which is left false so that the chart works
+  # out of the box with a stock broker image. To flip it to `true` for
+  # production hardening, see the example block right below.
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: false
     capabilities:
       drop:
         - ALL
+    # --- Hardened production variant ---
+    # Uncomment the whole `securityContext` block above and replace with
+    # the snippet below. You MUST also add tmp + cache emptyDir volumes
+    # to broker.extraVolumes / broker.extraVolumeMounts (see Pattern 4
+    # in the extraVolumes section above) otherwise the broker will fail
+    # on startup when it tries to write to /tmp.
+    #
+    # allowPrivilegeEscalation: false
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    # runAsUser: 1000
+    # capabilities:
+    #   drop:
+    #     - ALL
+    # seccompProfile:
+    #   type: RuntimeDefault
 
   # -- Node selector for broker pods.
   nodeSelector: {}
@@ -314,19 +432,46 @@ ingress:
   path: /
   # -- Path type (Prefix | Exact | ImplementationSpecific).
   pathType: Prefix
-  # -- Extra Ingress annotations merged with the websocket/TLS defaults.
+  # -- Extra Ingress annotations merged with the websocket/TLS defaults
+  # rendered by the chart. The chart already emits the correct
+  # `cert-manager.io/cluster-issuer` annotation when tls.enabled and
+  # tls.certManagerIssuer are set — so you only need to add annotations
+  # here for extras like HSTS, rate-limits or ACME HTTP-01 tuning.
   annotations: {}
+    # --- ACME HTTP-01 via cert-manager on nginx ---
     # kubernetes.io/tls-acme: "true"
+    # acme.cert-manager.io/http01-edit-in-place: "true"
+    #
+    # --- HSTS (1 year) + force https ---
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # nginx.ingress.kubernetes.io/hsts: "true"
+    # nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    # nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
+    #
+    # --- AWS ALB ingress variant (when switching away from nginx) ---
+    # alb.ingress.kubernetes.io/scheme: internet-facing
+    # alb.ingress.kubernetes.io/target-type: ip
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:eu-west-1:…:certificate/…
   tls:
     enabled: true
-    # -- Name of the cert-manager ClusterIssuer or Issuer. When empty
-    # cert-manager is not wired and you must provide a pre-existing
-    # Secret via tls.secretName.
+    # -- Name of the cert-manager ClusterIssuer or Issuer. The chart
+    # emits `cert-manager.io/<lower issuerKind>: <name>` as an Ingress
+    # annotation when both certManagerIssuer and certManagerIssuerKind
+    # are set. Typical values:
+    #   - letsencrypt-prod / letsencrypt-staging (public ACME)
+    #   - internal-ca                            (private CA Issuer)
+    #   - vault-issuer                           (cert-manager + Vault PKI)
+    # Leave empty to skip cert-manager wiring entirely; you must then
+    # pre-provision a TLS Secret and reference it via tls.secretName.
     certManagerIssuer: letsencrypt-prod
     # -- Kind of issuer — `ClusterIssuer` (default) or `Issuer`.
     certManagerIssuerKind: ClusterIssuer
     # -- Name of the TLS Secret to reference in the Ingress. When empty
-    # the chart generates one from the release name and host.
+    # the chart generates one from the release name and host. Set this
+    # explicitly when BYO-cert (imported via SealedSecret/ExternalSecret)
+    # or when reusing a wildcard cert across multiple ingresses.
     secretName: ""
 
 # ---------------------------------------------------------------------------
@@ -371,13 +516,46 @@ networkPolicy:
   ingressNamespace: ingress-nginx
   # -- Extra egress rules merged with the defaults (DB/Redis/Vault/DNS).
   # Add your PDP webhook target here when it lives outside the cluster.
+  #
+  # TIGHTENING THE DEFAULTS (production):
+  # The chart's default egress allows 0.0.0.0/0 on the DB/Redis/Vault
+  # ports because the chart cannot guess your VPC CIDRs. For a strict
+  # production deployment, restrict egress to only:
+  #   - the RDS / CloudSQL security-group CIDR on 5432
+  #   - the ElastiCache / Memorystore CIDR on 6379
+  #   - the Vault cluster LB CIDR on 8200
+  #   - the OIDC issuer / JWKS URL on 443
+  #   - the PDP webhook target
+  # A clean pattern is to set postgres/redis/vault externalUrl pointing
+  # at in-VPC DNS and then fence the NetworkPolicy via extraEgress.
+  # (The chart-emitted 0.0.0.0/0 rules remain but you should swap them
+  # for CIDR-scoped ones by editing the NetworkPolicy template in a
+  # downstream fork, or by setting *.internal=true with a stub service.)
   extraEgress: []
+    # --- PDP webhook living outside the cluster ---
     # - to:
     #     - ipBlock:
     #         cidr: 10.100.0.0/16
     #   ports:
     #     - protocol: TCP
     #       port: 8181
+    #
+    # --- OIDC issuer reachable over a private hosted zone ---
+    # - to:
+    #     - ipBlock:
+    #         cidr: 10.0.0.0/16
+    #   ports:
+    #     - protocol: TCP
+    #       port: 443
+    #
+    # --- Allow egress only to a named namespace (e.g. monitoring) ---
+    # - to:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: monitoring
+    #   ports:
+    #     - protocol: TCP
+    #       port: 9093     # Alertmanager
 
 # ---------------------------------------------------------------------------
 # Autoscaling — HPA on CPU utilisation. Plays nicely with broker.replicaCount
