@@ -44,7 +44,20 @@ redis:
 
 vault:
   internal: true
-  kmsBackend: vault
+  # Dev / CI reads the broker CA directly from the Secret mounted at
+  # /app/certs (created by the pre-install pki-bootstrap Job). Using
+  # kmsBackend=local here avoids the deadlock where /readyz waits on
+  # Vault to contain the CA, but Vault can only be seeded by the
+  # post-install Job that `helm install --wait` will not run until
+  # the broker is Ready. Vault still runs (for dashboard secret,
+  # invite tokens, etc.) and the post-install Job still pushes the
+  # CA there, but the broker's own signing key path uses the
+  # filesystem-mounted Secret as the source of truth.
+  #
+  # Production (values.yaml) keeps kmsBackend=vault because there
+  # Vault is typically external and pre-seeded out of band, so the
+  # broker can resolve the CA via Vault on first boot.
+  kmsBackend: local
   devRootToken: "dev-root-token"
 
 jaeger:
