@@ -95,6 +95,21 @@ async def update_org_webhook(
     return record
 
 
+async def update_org_secret(
+    db: AsyncSession,
+    org_id: str,
+    new_secret: str,
+) -> OrganizationRecord | None:
+    """Replace the org secret with a fresh bcrypt hash."""
+    record = await get_org_by_id(db, org_id)
+    if record is None:
+        return None
+    record.secret_hash = bcrypt.hashpw(new_secret.encode(), bcrypt.gensalt()).decode()
+    await db.commit()
+    await db.refresh(record)
+    return record
+
+
 async def update_org_ca_cert(
     db: AsyncSession,
     org_id: str,

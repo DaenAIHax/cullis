@@ -15,6 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import Base
 
 
+# Invite types
+INVITE_TYPE_ORG_JOIN = "org-join"   # creates a new org (legacy/default)
+INVITE_TYPE_ATTACH_CA = "attach-ca"  # uploads CA to an existing org (org_id in linked_org_id)
+
+VALID_INVITE_TYPES = {INVITE_TYPE_ORG_JOIN, INVITE_TYPE_ATTACH_CA}
+
+
 class InviteToken(Base):
     __tablename__ = "invite_tokens"
 
@@ -28,6 +35,9 @@ class InviteToken(Base):
     used_at = Column(DateTime(timezone=True), nullable=True)
     used_by_org_id = Column(String(128), nullable=True)
     revoked = Column(Boolean, default=False, nullable=False)
+    invite_type = Column(String(32), nullable=False, default=INVITE_TYPE_ORG_JOIN,
+                         server_default=INVITE_TYPE_ORG_JOIN)
+    linked_org_id = Column(String(128), nullable=True, index=True)
 
 
 def _hash_token(token: str) -> str:
@@ -40,19 +50,33 @@ async def create_invite(
     *,
     label: str = "",
     ttl_hours: int = 72,
+    invite_type: str = INVITE_TYPE_ORG_JOIN,
+    linked_org_id: str | None = None,
 ) -> tuple[InviteToken, str]:
     """
     Generate a new invite token.
 
-    Returns (record, plaintext_token).  The plaintext is shown once to the
+    Returns (record, plaintext_token). The plaintext is shown once to the
     admin and never stored — only the SHA-256 hash is persisted.
+
+    For attach-ca invites, linked_org_id MUST be set to the target org_id;
+    the invite is then only usable to upload a CA for that specific org.
     """
+    if invite_type not in VALID_INVITE_TYPES:
+        raise ValueError(f"Unknown invite_type: {invite_type!r}")
+    if invite_type == INVITE_TYPE_ATTACH_CA and not linked_org_id:
+        raise ValueError("attach-ca invites require linked_org_id")
+    if invite_type == INVITE_TYPE_ORG_JOIN and linked_org_id is not None:
+        raise ValueError("org-join invites must not set linked_org_id")
+
     plaintext = secrets.token_urlsafe(32)
     record = InviteToken(
         id=secrets.token_hex(16),
         token_hash=_hash_token(plaintext),
         label=label,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=ttl_hours),
+        invite_type=invite_type,
+        linked_org_id=linked_org_id,
     )
     db.add(record)
     await db.commit()
@@ -64,27 +88,37 @@ async def validate_and_consume(
     db: AsyncSession,
     plaintext_token: str,
     org_id: str,
+    expected_type: str = INVITE_TYPE_ORG_JOIN,
 ) -> InviteToken | None:
     """
     Validate an invite token and mark it as consumed.
 
     Returns the record if valid, None otherwise.
     Token is consumed atomically — a second call with the same token fails.
+
+    For attach-ca invites the token's linked_org_id must equal the provided
+    org_id; the org_id is NEVER trusted from the client alone.
     """
     from sqlalchemy import update as sa_update
 
     h = _hash_token(plaintext_token)
     now = datetime.now(timezone.utc)
 
-    # Atomic consume: UPDATE WHERE used=false AND revoked=false RETURNING *
-    # This prevents TOCTOU race: only one concurrent request succeeds.
+    # Atomic consume: UPDATE WHERE used=false AND revoked=false AND type matches
+    # RETURNING *. This prevents TOCTOU race and cross-type abuse in one query.
+    where_clauses = [
+        InviteToken.token_hash == h,
+        InviteToken.used == False,  # noqa: E712
+        InviteToken.revoked == False,  # noqa: E712
+        InviteToken.invite_type == expected_type,
+    ]
+    if expected_type == INVITE_TYPE_ATTACH_CA:
+        # Attach-ca tokens are bound to a specific org — require match.
+        where_clauses.append(InviteToken.linked_org_id == org_id)
+
     stmt = (
         sa_update(InviteToken)
-        .where(
-            InviteToken.token_hash == h,
-            InviteToken.used == False,  # noqa: E712
-            InviteToken.revoked == False,  # noqa: E712
-        )
+        .where(*where_clauses)
         .values(used=True, used_at=now, used_by_org_id=org_id)
         .returning(InviteToken)
     )
@@ -107,6 +141,33 @@ async def validate_and_consume(
 
     await db.commit()
     await db.refresh(record)
+    return record
+
+
+async def inspect_invite(
+    db: AsyncSession,
+    plaintext_token: str,
+) -> InviteToken | None:
+    """
+    Look up an invite WITHOUT consuming it.
+
+    Used by clients (e.g. the MCP proxy setup wizard) to decide which flow
+    to run (join vs attach). Returns None if token is unknown, revoked,
+    already used, or expired — callers should treat None as "invalid".
+    """
+    now = datetime.now(timezone.utc)
+    h = _hash_token(plaintext_token)
+    result = await db.execute(
+        select(InviteToken).where(InviteToken.token_hash == h)
+    )
+    record = result.scalar_one_or_none()
+    if record is None or record.used or record.revoked:
+        return None
+    expires_at = record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if now > expires_at:
+        return None
     return record
 
 

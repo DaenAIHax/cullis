@@ -962,16 +962,26 @@ async def orgs_list(request: Request, db: AsyncSession = Depends(get_db)):
     # Load invite tokens for admin
     from app.onboarding.invite_store import list_invites
     invites_raw = await list_invites(db)
+    _now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+    def _aware(dt):
+        # SQLite drops tzinfo; normalize to UTC-aware for comparisons.
+        if dt is not None and dt.tzinfo is None:
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        return dt
+
     invites = [
         {
             "id": inv.id,
             "label": inv.label,
-            "created_at": inv.created_at,
-            "expires_at": inv.expires_at,
+            "created_at": _aware(inv.created_at),
+            "expires_at": _aware(inv.expires_at),
             "used": inv.used,
             "used_by_org_id": inv.used_by_org_id,
             "revoked": inv.revoked,
-            "expired": inv.expires_at < datetime.datetime.now(datetime.timezone.utc),
+            "invite_type": inv.invite_type,
+            "linked_org_id": inv.linked_org_id,
+            "expired": _aware(inv.expires_at) < _now_utc,
         }
         for inv in invites_raw
     ]
@@ -1008,6 +1018,53 @@ async def dashboard_generate_invite(request: Request, db: AsyncSession = Depends
     return templates.TemplateResponse("invite_created.html",
         _ctx(request, session, active="orgs",
              invite_token=plaintext, invite_label=label, invite_id=record.id))
+
+
+@router.post("/orgs/{org_id}/attach-invite", response_class=HTMLResponse)
+async def dashboard_generate_attach_invite(
+    request: Request, org_id: str, db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate an attach-ca invite for a pre-registered org. Usable only from
+    the broker dashboard by an admin. The org must exist and must not
+    already have a CA on file.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    if not await verify_csrf(request, session):
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+    from app.registry.org_store import get_org_by_id as _get_org
+    from app.onboarding.invite_store import create_invite, INVITE_TYPE_ATTACH_CA
+
+    org = await _get_org(db, org_id)
+    if org is None:
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+    if org.ca_certificate:
+        # Nothing to attach — silently redirect; rotation is a separate flow.
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+    form_data = await request.form()
+    label = (form_data.get("label", "") or "").strip() or f"attach-ca for {org_id}"
+    ttl_hours = int(form_data.get("ttl_hours", "72") or "72")
+
+    record, plaintext = await create_invite(
+        db, label=label, ttl_hours=ttl_hours,
+        invite_type=INVITE_TYPE_ATTACH_CA,
+        linked_org_id=org_id,
+    )
+    await log_event(db, "admin.attach_invite_created", "ok",
+                    org_id=org_id,
+                    details={"invite_id": record.id, "label": label,
+                             "source": "dashboard"})
+
+    return templates.TemplateResponse("invite_created.html",
+        _ctx(request, session, active="orgs",
+             invite_token=plaintext, invite_label=label, invite_id=record.id,
+             invite_type="attach-ca", linked_org_id=org_id))
 
 
 @router.post("/invites/{invite_id}/revoke", response_class=HTMLResponse)

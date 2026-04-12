@@ -25,6 +25,7 @@ from app.registry.org_store import (
     get_org_by_id,
     register_org,
     update_org_ca_cert,
+    update_org_secret,
     list_pending_orgs,
     set_org_status,
 )
@@ -117,9 +118,12 @@ async def join_network(
     client_ip = get_client_ip(request)
     await rate_limiter.check(client_ip, "onboarding.join")
 
-    # ── Validate invite token (must be valid, unused, unexpired) ──────
-    from app.onboarding.invite_store import validate_and_consume
-    invite = await validate_and_consume(db, body.invite_token, body.org_id)
+    # ── Validate invite token (must be valid, unused, unexpired, type=org-join) ──
+    from app.onboarding.invite_store import validate_and_consume, INVITE_TYPE_ORG_JOIN
+    invite = await validate_and_consume(
+        db, body.invite_token, body.org_id,
+        expected_type=INVITE_TYPE_ORG_JOIN,
+    )
     if invite is None:
         await log_event(db, "onboarding.join_rejected", "denied",
                         org_id=body.org_id,
@@ -185,6 +189,157 @@ async def join_network(
         org_id=org.org_id,
         status="pending",
         message="Request received. Awaiting approval from TrustLink.",
+    )
+
+
+# ── Attach CA to pre-registered org ──────────────────────────────────────────
+
+class AttachCARequest(BaseModel):
+    ca_certificate: str              # PEM of the organization's CA
+    invite_token: str = Field(..., max_length=64)
+    secret: str = Field(..., max_length=256)  # proxy-chosen secret, replaces the placeholder set at org creation
+
+
+class AttachCAResponse(BaseModel):
+    org_id: str
+    status: str
+    message: str
+
+
+class InviteInspectRequest(BaseModel):
+    invite_token: str = Field(..., max_length=64)
+
+
+class InviteInspectResponse(BaseModel):
+    invite_type: str           # "org-join" | "attach-ca"
+    org_id: str | None = None  # set only for attach-ca
+    expires_at: datetime
+
+
+@onboarding_router.post("/invite/inspect", response_model=InviteInspectResponse)
+async def inspect_invite_endpoint(
+    body: InviteInspectRequest,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Look up an invite token and return its type + bound org_id (if any),
+    WITHOUT consuming it. Used by the MCP proxy setup wizard to branch
+    between /join (new org) and /attach (existing org, add CA).
+    """
+    client_ip = get_client_ip(request)
+    await rate_limiter.check(client_ip, "onboarding.invite_inspect")
+
+    from app.onboarding.invite_store import inspect_invite
+    record = await inspect_invite(db, body.invite_token)
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            detail="Invite token is invalid, revoked, expired, or already used")
+    expires_at = record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return InviteInspectResponse(
+        invite_type=record.invite_type,
+        org_id=record.linked_org_id,
+        expires_at=expires_at,
+    )
+
+
+@onboarding_router.post("/attach", response_model=AttachCAResponse,
+                        status_code=status.HTTP_200_OK)
+async def attach_ca(
+    body: AttachCARequest,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Attach a CA certificate to an org that was already registered by the
+    broker admin (no CA on file yet). The org_id is taken from the invite
+    token's linked_org_id — never trusted from the client — so a stolen
+    org-join token cannot hijack a pre-existing org.
+    """
+    client_ip = get_client_ip(request)
+    await rate_limiter.check(client_ip, "onboarding.attach")
+
+    from app.onboarding.invite_store import inspect_invite, validate_and_consume, INVITE_TYPE_ATTACH_CA
+
+    # Look up the invite to discover its bound org_id (without consuming).
+    peek = await inspect_invite(db, body.invite_token)
+    if peek is None or peek.invite_type != INVITE_TYPE_ATTACH_CA or not peek.linked_org_id:
+        await log_event(db, "onboarding.attach_rejected", "denied",
+                        details={"reason": "invalid_or_wrong_type_invite"})
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Invalid or expired attach-ca invite")
+    org_id = peek.linked_org_id
+
+    # Target org must exist and NOT already have a CA.
+    org = await get_org_by_id(db, org_id)
+    if org is None:
+        await log_event(db, "onboarding.attach_rejected", "denied",
+                        org_id=org_id,
+                        details={"reason": "org_not_found"})
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    if org.ca_certificate:
+        await log_event(db, "onboarding.attach_rejected", "denied",
+                        org_id=org_id,
+                        details={"reason": "ca_already_set"})
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            detail="Organization already has a CA certificate on file")
+
+    # Validate CA PEM (same checks as /join).
+    try:
+        ca_cert = crypto_x509.load_pem_x509_certificate(body.ca_certificate.encode())
+        bc = ca_cert.extensions.get_extension_for_class(crypto_x509.BasicConstraints).value
+        if not bc.ca:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="Submitted certificate is not a CA (BasicConstraints CA=false)")
+        pub_key = ca_cert.public_key()
+        if isinstance(pub_key, rsa_types.RSAPublicKey) and pub_key.key_size < 2048:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail=f"CA RSA key too small ({pub_key.key_size} bits) — minimum 2048 required")
+        now = datetime.now(timezone.utc)
+        try:
+            not_after = ca_cert.not_valid_after_utc
+            not_before = ca_cert.not_valid_before_utc
+        except AttributeError:
+            not_after = ca_cert.not_valid_after.replace(tzinfo=timezone.utc)
+            not_before = ca_cert.not_valid_before.replace(tzinfo=timezone.utc)
+        if now > not_after or now < not_before:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail="CA certificate is expired or not yet valid")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import logging
+        logging.getLogger("agent_trust").warning(
+            "Invalid CA certificate in attach flow for org '%s': %s", org_id, exc)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Invalid CA certificate: could not parse or validate the submitted PEM")
+
+    # Atomically consume the invite (re-checks type + linked_org_id match).
+    invite = await validate_and_consume(
+        db, body.invite_token, org_id,
+        expected_type=INVITE_TYPE_ATTACH_CA,
+    )
+    if invite is None:
+        await log_event(db, "onboarding.attach_rejected", "denied",
+                        org_id=org_id,
+                        details={"reason": "invite_consume_failed"})
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Invite token no longer valid")
+
+    await update_org_ca_cert(db, org_id, body.ca_certificate)
+    # The proxy now owns the org — rotate secret_hash to the proxy-chosen value.
+    # The placeholder secret set by the broker admin at creation is discarded.
+    await update_org_secret(db, org_id, body.secret)
+    await log_event(db, "onboarding.ca_attached", "ok",
+                    org_id=org_id,
+                    details={"invite_id": invite.id, "secret_rotated": True})
+
+    return AttachCAResponse(
+        org_id=org_id,
+        status=org.status,
+        message="CA certificate attached and org secret claimed by proxy.",
     )
 
 
@@ -264,6 +419,8 @@ class InviteResponse(BaseModel):
     used: bool
     used_by_org_id: str | None
     revoked: bool
+    invite_type: str = "org-join"
+    linked_org_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -293,6 +450,61 @@ async def generate_invite(
         used=record.used,
         used_by_org_id=record.used_by_org_id,
         revoked=record.revoked,
+        invite_type=record.invite_type,
+        linked_org_id=record.linked_org_id,
+    )
+
+
+class AttachInviteCreateRequest(BaseModel):
+    label: str = Field("", max_length=256)
+    ttl_hours: int = Field(72, ge=1, le=8760)
+
+
+@admin_router.post("/orgs/{org_id}/attach-invite", response_model=InviteResponse,
+                   status_code=status.HTTP_201_CREATED,
+                   dependencies=[Depends(_require_admin)])
+async def generate_attach_invite(
+    org_id: str,
+    body: AttachInviteCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a one-time invite bound to an existing org that lets the org
+    admin upload its CA certificate via POST /onboarding/attach. The org
+    must exist and must not already have a CA on file.
+    """
+    from app.onboarding.invite_store import create_invite, INVITE_TYPE_ATTACH_CA
+
+    org = await get_org_by_id(db, org_id)
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    if org.ca_certificate:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            detail="Organization already has a CA certificate; "
+                                   "use /registry/orgs/{id}/certificate to rotate it")
+
+    record, plaintext = await create_invite(
+        db,
+        label=body.label or f"attach-ca for {org_id}",
+        ttl_hours=body.ttl_hours,
+        invite_type=INVITE_TYPE_ATTACH_CA,
+        linked_org_id=org_id,
+    )
+    await log_event(db, "admin.attach_invite_created", "ok",
+                    org_id=org_id,
+                    details={"invite_id": record.id, "label": body.label,
+                             "ttl_hours": body.ttl_hours})
+    return InviteResponse(
+        id=record.id,
+        token=plaintext,
+        label=record.label,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+        used=record.used,
+        used_by_org_id=record.used_by_org_id,
+        revoked=record.revoked,
+        invite_type=record.invite_type,
+        linked_org_id=record.linked_org_id,
     )
 
 
@@ -313,6 +525,8 @@ async def list_invites_endpoint(db: AsyncSession = Depends(get_db)):
             used=r.used,
             used_by_org_id=r.used_by_org_id,
             revoked=r.revoked,
+            invite_type=r.invite_type,
+            linked_org_id=r.linked_org_id,
         )
         for r in records
     ]

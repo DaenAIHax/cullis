@@ -21,9 +21,19 @@
     {% endif %}
     <p class="text-xs text-gray-500 mb-4 uppercase tracking-wider">ID: <code class="text-gray-600 text-[10px] font-mono">{{ invite_id }}</code></p>
 
+    {% if invite_type == "attach-ca" %}
+    <div class="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded">
+        <p class="text-xs text-yellow-400">This is an <strong>attach-ca</strong> invite bound to org
+            <code class="text-yellow-300 font-mono">{{ linked_org_id }}</code>.
+            Send it to the org admin — when pasted into their MCP proxy setup wizard
+            it will upload their CA and claim the pre-registered org. A different
+            org cannot use this token.</p>
+    </div>
+    {% else %}
     <div class="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded">
         <p class="text-xs text-yellow-400">Send this token to the organization that needs to join. They must include it in their <code class="text-yellow-300 font-mono">/onboarding/join</code> request as the <code class="text-yellow-300 font-mono">invite_token</code> field.</p>
     </div>
+    {% endif %}
 
     <div class="mt-6">
         <a href="/dashboard/orgs"

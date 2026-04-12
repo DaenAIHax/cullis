@@ -470,19 +470,57 @@ async def setup_submit(request: Request):
             if proxy_public:
                 webhook_url = f"{proxy_public.rstrip('/')}/pdp/policy"
 
+    # ── Inspect the invite to decide flow (join vs attach-ca) ──────────────
+    # For attach-ca invites, org_id comes from the token (linked_org_id) and
+    # the org-level fields (display_name, contact_email, webhook_url) were
+    # already set by the broker admin when the org was created.
+    invite_type = "org-join"
+    linked_org_id: str | None = None
+    inspect_err: str | None = None
+    if broker_url and invite_token:
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as http:
+                r = await http.post(
+                    f"{broker_url}/v1/onboarding/invite/inspect",
+                    json={"invite_token": invite_token},
+                )
+            if r.status_code == 200:
+                data = r.json()
+                invite_type = data.get("invite_type") or "org-join"
+                linked_org_id = data.get("org_id")
+            elif r.status_code == 404:
+                inspect_err = ("Invite token is invalid, revoked, expired, or already used. "
+                               "Ask the broker admin for a fresh one.")
+            # Other statuses: fall back to org-join behaviour, the /join call
+            # will surface the real error.
+        except Exception as exc:
+            _log.warning("Invite inspect failed, falling back to join flow: %s", exc)
+
     errors: list[str] = []
+    if inspect_err:
+        errors.append(inspect_err)
     if not broker_url:
         errors.append("Broker URL is required.")
     if not invite_token:
         errors.append("Invite token is required (paste the one from the broker admin).")
-    if not org_id:
-        errors.append("Organization ID is required.")
-    elif not _re.match(r"^[a-z][a-z0-9_-]*$", org_id):
-        errors.append("Org ID must start with a letter and contain only lowercase letters, digits, hyphens, underscores.")
-    if not display_name:
-        errors.append("Display name is required.")
-    if not contact_email:
-        errors.append("Contact email is required.")
+
+    if invite_type == "attach-ca":
+        # org_id is authoritative from the invite; override any form input
+        # so a malicious/confused form submission cannot target a different org.
+        if not linked_org_id:
+            errors.append("attach-ca invite missing bound org_id — broker bug.")
+        else:
+            org_id = linked_org_id
+        # display_name / contact_email / webhook_url are not sent in attach flow
+    else:
+        if not org_id:
+            errors.append("Organization ID is required.")
+        elif not _re.match(r"^[a-z][a-z0-9_-]*$", org_id):
+            errors.append("Org ID must start with a letter and contain only lowercase letters, digits, hyphens, underscores.")
+        if not display_name:
+            errors.append("Display name is required.")
+        if not contact_email:
+            errors.append("Contact email is required.")
 
     # Validate CA import PEMs
     if org_ca_mode == "import":
@@ -625,39 +663,52 @@ async def setup_submit(request: Request):
     error_msg: str | None = None
     try:
         async with httpx.AsyncClient(verify=False, timeout=10.0) as http:
-            resp = await http.post(f"{broker_url}/v1/onboarding/join", json={
-                "org_id": org_id,
-                "display_name": display_name,
-                "secret": org_secret,
-                "ca_certificate": org_ca_cert_pem,
-                "contact_email": contact_email,
-                "webhook_url": webhook_url,
-                "invite_token": invite_token,
-            })
+            if invite_type == "attach-ca":
+                # Existing org on broker (pre-registered by admin), we just
+                # attach the CA and claim the org by rotating its secret.
+                resp = await http.post(f"{broker_url}/v1/onboarding/attach", json={
+                    "ca_certificate": org_ca_cert_pem,
+                    "invite_token": invite_token,
+                    "secret": org_secret,
+                })
+                success_statuses = (200,)
+            else:
+                resp = await http.post(f"{broker_url}/v1/onboarding/join", json={
+                    "org_id": org_id,
+                    "display_name": display_name,
+                    "secret": org_secret,
+                    "ca_certificate": org_ca_cert_pem,
+                    "contact_email": contact_email,
+                    "webhook_url": webhook_url,
+                    "invite_token": invite_token,
+                })
+                success_statuses = (200, 202)
 
-            if resp.status_code == 202:
-                await set_config("org_status", "pending")
+            if resp.status_code in success_statuses:
+                # attach returns 200 with status field; join returns 202 with "pending".
+                try:
+                    body_json = resp.json()
+                    final_status = body_json.get("status") or ("active" if resp.status_code == 200 else "pending")
+                except Exception:
+                    final_status = "active" if resp.status_code == 200 else "pending"
+                await set_config("org_status", final_status)
                 await log_audit(
                     agent_id="admin",
                     action="org.register",
                     status="success",
-                    detail=f"org_id={org_id}, broker={broker_url}, status=pending",
-                )
-                return RedirectResponse(url="/proxy/agents", status_code=303)
-            elif resp.status_code == 200:
-                # Some brokers may approve immediately and return 200. Treat as success.
-                await set_config("org_status", "active")
-                await log_audit(
-                    agent_id="admin",
-                    action="org.register",
-                    status="success",
-                    detail=f"org_id={org_id}, broker={broker_url}, status=active",
+                    detail=(f"org_id={org_id}, broker={broker_url}, status={final_status}, "
+                            f"flow={invite_type}"),
                 )
                 return RedirectResponse(url="/proxy/agents", status_code=303)
             elif resp.status_code == 403:
                 error_msg = "Invalid or expired invite token. Ask the broker admin for a fresh one."
             elif resp.status_code == 409:
-                error_msg = "An organization with this ID is already registered on the broker."
+                if invite_type == "attach-ca":
+                    error_msg = "This organization already has a CA on the broker — nothing to attach."
+                else:
+                    error_msg = "An organization with this ID is already registered on the broker."
+            elif resp.status_code == 404:
+                error_msg = "Target organization no longer exists on the broker."
             else:
                 error_msg = f"Broker rejected the registration (HTTP {resp.status_code}): {resp.text[:200]}"
     except Exception as exc:
