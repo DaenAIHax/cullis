@@ -7,7 +7,6 @@ ES256 decoding); this suite proves no regression across the full
 """
 from __future__ import annotations
 
-import pytest
 import jwt as jose_jwt
 from httpx import AsyncClient
 

@@ -11,9 +11,7 @@ import hashlib
 import json
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ec import (
-    EllipticCurvePublicKey, SECP256R1, SECP384R1, SECP521R1,
-)
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.x509 import load_pem_x509_certificate
 
