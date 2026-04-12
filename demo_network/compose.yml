@@ -1,0 +1,280 @@
+# Cullis demo network — smoke test topology
+#
+# 1 broker + 2 orgs (proxy-a, proxy-b) + sender + checker, fronted by Traefik
+# with a test CA providing TLS on *.cullis.test subdomains. DNS for those
+# subdomains is resolved inside the Docker network via service aliases on
+# Traefik — no /etc/hosts editing needed.
+#
+# Golden path:  sender -> proxy-a -> broker -> proxy-b -> checker
+# Smoke check:  curl https://checker.cullis.test:8443/last-message expects
+#               the nonce that smoke.sh injected at `up`.
+#
+# NOTE: This is step 1 of the buildout — only ca-init, Traefik, and a dummy
+# whoami service are wired up so TLS/DNS can be validated in isolation before
+# broker/proxy/agents are added.
+
+services:
+
+  ca-init:
+    build: ./ca-init
+    volumes:
+      - test-certs:/certs
+    restart: "no"
+
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --configfile=/etc/traefik/traefik.yml
+    depends_on:
+      ca-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - test-certs:/certs:ro
+    ports:
+      - "8443:8443"
+    networks:
+      default:
+        aliases:
+          - broker.cullis.test
+          - proxy-a.cullis.test
+          - proxy-b.cullis.test
+          - checker.cullis.test
+    # traefik:v3.1 base image has no shell/wget — rely on start_period + the
+    # prober container to assert readiness.
+
+  # ── Step 1 scaffold: dummy whoami services for every upstream so Traefik
+  #    has something to route to. Replaced with real broker/proxy/checker
+  #    in later steps.
+
+  broker-init:
+    build: ./broker-init
+    volumes:
+      - broker-certs:/broker-certs
+    restart: "no"
+
+  broker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      broker-init:
+        condition: service_completed_successfully
+    environment:
+      ADMIN_SECRET: "demo-admin-secret-change-me"
+      BROKER_CA_KEY_PATH: /broker-certs/broker-ca-key.pem
+      BROKER_CA_CERT_PATH: /broker-certs/broker-ca.pem
+      BROKER_PUBLIC_URL: "https://broker.cullis.test:8443"
+      DATABASE_URL: "sqlite+aiosqlite:////data/broker.db"
+      KMS_BACKEND: "local"
+      POLICY_BACKEND: "webhook"
+      # Demo bypass: we haven't wired a real PDP per org. Production must
+      # keep this true — the smoke only validates the transport/protocol path.
+      POLICY_ENFORCEMENT: "false"
+      TRUST_DOMAIN: "cullis.test"
+      OTEL_ENABLED: "false"
+      FORWARDED_ALLOW_IPS: "172.16.0.0/12"
+      ENVIRONMENT: "development"
+    volumes:
+      - broker-certs:/broker-certs:ro
+    # SQLite DB on tmpfs: smoke is ephemeral, no persistence needed, and
+    # tmpfs sidesteps permission issues on root-owned named volumes for
+    # the non-root appuser inside the image.
+    tmpfs:
+      - /data:uid=999,gid=999,mode=0700
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  proxy-a-init:
+    build: ./proxy-init
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ORG_ID: "demo-org-a"
+      BROKER_URL: "https://broker.cullis.test:8443"
+      PROXY_PUBLIC_URL: "https://proxy-a.cullis.test:8443"
+      PROXY_DB_PATH: /data/mcp_proxy.db
+      STATE_DIR: /state
+    volumes:
+      - bootstrap-state:/state:ro
+      - proxy-a-data:/data
+    restart: "no"
+
+  proxy-b-init:
+    build: ./proxy-init
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ORG_ID: "demo-org-b"
+      BROKER_URL: "https://broker.cullis.test:8443"
+      PROXY_PUBLIC_URL: "https://proxy-b.cullis.test:8443"
+      PROXY_DB_PATH: /data/mcp_proxy.db
+      STATE_DIR: /state
+    volumes:
+      - bootstrap-state:/state:ro
+      - proxy-b-data:/data
+    restart: "no"
+
+  proxy-a:
+    build:
+      context: ..
+      dockerfile: mcp_proxy/Dockerfile
+    depends_on:
+      proxy-a-init:
+        condition: service_completed_successfully
+    environment:
+      MCP_PROXY_BROKER_URL: "https://broker.cullis.test:8443"
+      MCP_PROXY_BROKER_JWKS_URL: "https://broker.cullis.test:8443/.well-known/jwks.json"
+      MCP_PROXY_PROXY_PUBLIC_URL: "https://proxy-a.cullis.test:8443"
+      MCP_PROXY_ADMIN_SECRET: "demo-proxy-admin-a"
+      MCP_PROXY_DATABASE_URL: "sqlite+aiosqlite:////data/mcp_proxy.db"
+      MCP_PROXY_ORG_ID: "demo-org-a"
+      MCP_PROXY_ALLOWED_ORIGINS: "https://proxy-a.cullis.test:8443"
+      MCP_PROXY_ENVIRONMENT: "development"
+      SSL_CERT_FILE: /certs/ca.crt
+      REQUESTS_CA_BUNDLE: /certs/ca.crt
+    volumes:
+      - proxy-a-data:/data
+      - test-certs:/certs:ro
+    expose: ["9100"]
+
+  proxy-b:
+    build:
+      context: ..
+      dockerfile: mcp_proxy/Dockerfile
+    depends_on:
+      proxy-b-init:
+        condition: service_completed_successfully
+    environment:
+      MCP_PROXY_BROKER_URL: "https://broker.cullis.test:8443"
+      MCP_PROXY_BROKER_JWKS_URL: "https://broker.cullis.test:8443/.well-known/jwks.json"
+      MCP_PROXY_PROXY_PUBLIC_URL: "https://proxy-b.cullis.test:8443"
+      MCP_PROXY_ADMIN_SECRET: "demo-proxy-admin-b"
+      MCP_PROXY_DATABASE_URL: "sqlite+aiosqlite:////data/mcp_proxy.db"
+      MCP_PROXY_ORG_ID: "demo-org-b"
+      MCP_PROXY_ALLOWED_ORIGINS: "https://proxy-b.cullis.test:8443"
+      MCP_PROXY_ENVIRONMENT: "development"
+      SSL_CERT_FILE: /certs/ca.crt
+      REQUESTS_CA_BUNDLE: /certs/ca.crt
+    volumes:
+      - proxy-b-data:/data
+      - test-certs:/certs:ro
+    expose: ["9100"]
+
+  checker:
+    build:
+      context: ..
+      dockerfile: demo_network/checker/Dockerfile
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      BROKER_URL:       "https://broker.cullis.test:8443"
+      AGENT_ID:         "demo-org-b::checker"
+      ORG_ID:           "demo-org-b"
+      AGENT_CERT_PATH:  /state/demo-org-b/checker.pem
+      AGENT_KEY_PATH:   /state/demo-org-b/checker-key.pem
+      CA_BUNDLE:        /certs/ca.crt
+      PORT:             "9000"
+    volumes:
+      - bootstrap-state:/state:ro
+      - test-certs:/certs:ro
+    expose: ["9000"]
+
+  sender:
+    build:
+      context: ..
+      dockerfile: demo_network/sender/Dockerfile
+    depends_on:
+      checker:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    environment:
+      BROKER_URL:       "https://broker.cullis.test:8443"
+      AGENT_ID:         "demo-org-a::sender"
+      ORG_ID:           "demo-org-a"
+      PEER_AGENT_ID:    "demo-org-b::checker"
+      PEER_ORG_ID:      "demo-org-b"
+      AGENT_CERT_PATH:  /state/demo-org-a/sender.pem
+      AGENT_KEY_PATH:   /state/demo-org-a/sender-key.pem
+      CA_BUNDLE:        /certs/ca.crt
+      SMOKE_NONCE:      "${SMOKE_NONCE:-nonce-unset}"
+    volumes:
+      - bootstrap-state:/state:ro
+      - test-certs:/certs:ro
+    restart: "no"
+
+  # One-shot: registers 2 orgs on the broker (one via /join, one via
+  # /attach-ca) so both onboarding paths are exercised on every smoke run.
+  bootstrap:
+    build: ./bootstrap
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "https://broker.cullis.test:8443"
+      ADMIN_SECRET: "demo-admin-secret-change-me"
+      CA_BUNDLE: /certs/ca.crt
+      STATE_DIR: /state
+    volumes:
+      - test-certs:/certs:ro
+      - bootstrap-state:/state
+    restart: "no"
+
+  # One-shot prober that validates TLS routing from inside the network.
+  # Exits 0 iff all four subdomains respond through Traefik with the test CA.
+  prober:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      traefik:
+        condition: service_started
+      broker:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+      proxy-a:
+        condition: service_healthy
+      proxy-b:
+        condition: service_healthy
+      checker:
+        condition: service_started
+    volumes:
+      - test-certs:/certs:ro
+    entrypoint:
+      - sh
+      - -euxc
+      - |
+        # Broker has a real /health; whoami backends serve 200 on /.
+        probe() {
+          local host="$1" path="$2"
+          curl --fail --silent --show-error \
+               --retry 30 --retry-delay 2 --retry-all-errors \
+               --cacert /certs/ca.crt \
+               "https://$${host}.cullis.test:8443$${path}" > /dev/null \
+               || { echo "prober: FAILED reaching $${host}.cullis.test$${path}"; exit 1; }
+        }
+        probe broker  /health
+        probe proxy-a /health
+        probe proxy-b /health
+        probe checker /
+        echo "prober: all four hosts reachable via Traefik with test CA"
+
+volumes:
+  test-certs:
+  broker-certs:
+  bootstrap-state:
+  proxy-a-data:
+  proxy-b-data:
+
+networks:
+  default:
+    name: cullis-demo-net

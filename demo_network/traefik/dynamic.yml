@@ -1,0 +1,53 @@
+# Dynamic routing: one router per hostname, TLS termination via the test CA
+# leaf. Backends are the internal service names on the compose network.
+tls:
+  certificates:
+    - certFile: /certs/traefik.crt
+      keyFile: /certs/traefik.key
+
+http:
+  routers:
+    broker:
+      rule: "Host(`broker.cullis.test`)"
+      service: broker
+      entryPoints: [websecure]
+      tls: {}
+
+    proxy-a:
+      rule: "Host(`proxy-a.cullis.test`)"
+      service: proxy-a
+      entryPoints: [websecure]
+      tls: {}
+
+    proxy-b:
+      rule: "Host(`proxy-b.cullis.test`)"
+      service: proxy-b
+      entryPoints: [websecure]
+      tls: {}
+
+    checker:
+      rule: "Host(`checker.cullis.test`)"
+      service: checker
+      entryPoints: [websecure]
+      tls: {}
+
+  services:
+    broker:
+      loadBalancer:
+        servers:
+          - url: "http://broker:8000"
+
+    proxy-a:
+      loadBalancer:
+        servers:
+          - url: "http://proxy-a:9100"
+
+    proxy-b:
+      loadBalancer:
+        servers:
+          - url: "http://proxy-b:9100"
+
+    checker:
+      loadBalancer:
+        servers:
+          - url: "http://checker:9000"

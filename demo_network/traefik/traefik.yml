@@ -1,0 +1,17 @@
+# Traefik static config — reads dynamic rules from /etc/traefik/dynamic.yml
+# and certs from /certs (shared with ca-init).
+entryPoints:
+  websecure:
+    address: ":8443"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+log:
+  level: INFO
+
+accessLog: {}
+
+# No api dashboard exposed — this is smoke infra, not an ops target.
