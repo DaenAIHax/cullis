@@ -95,6 +95,44 @@ async def save_message(
     return result.rowcount > 0
 
 
+async def fetch_messages_for_resume(
+    db: AsyncSession,
+    session_id: str,
+    recipient_agent_id: str,
+    after_seq: int,
+    limit: int = 500,
+) -> list[dict]:
+    """Fetch messages for a session-resume request (M2.2).
+
+    Returns messages with ``seq > after_seq`` whose ``sender_agent_id``
+    is NOT the resuming agent (we replay incoming traffic only — the
+    resumer's own outbound messages are not re-delivered). Ordered by
+    seq ascending. Capped by ``limit`` to bound a single resume payload.
+    """
+    result = await db.execute(
+        select(SessionMessageRecord)
+        .where(
+            SessionMessageRecord.session_id == session_id,
+            SessionMessageRecord.seq > after_seq,
+            SessionMessageRecord.sender_agent_id != recipient_agent_id,
+        )
+        .order_by(SessionMessageRecord.seq)
+        .limit(limit)
+    )
+    out: list[dict] = []
+    for rec in result.scalars().all():
+        out.append({
+            "seq": rec.seq,
+            "sender_agent_id": rec.sender_agent_id,
+            "payload": json.loads(rec.payload),
+            "nonce": rec.nonce,
+            "timestamp": rec.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "signature": rec.signature,
+            "client_seq": rec.client_seq,
+        })
+    return out
+
+
 async def restore_sessions(db: AsyncSession, store: SessionStore) -> int:
     """
     Load from DB all non-expired, non-closed sessions,
