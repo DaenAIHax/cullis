@@ -88,15 +88,6 @@ jobs:
           version: v0.26.0
           node_image: kindest/node:v1.31.4
 
-      - name: Install ingress-nginx
-        if: steps.filter.outputs.helm == 'true'
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/kind/deploy.yaml
-          kubectl wait --namespace ingress-nginx \
-            --for=condition=ready pod \
-            --selector=app.kubernetes.io/component=controller \
-            --timeout=120s
-
       # values-dev.yaml has broker.pki.bootstrap.enabled=true, so the
       # chart auto-provisions the broker CA and seeds Vault via a
       # post-install Helm Job (#11 / #12). No hand-wiring of
