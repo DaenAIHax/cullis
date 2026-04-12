@@ -148,17 +148,37 @@ sed -i "s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${ALLOWED_ORIGINS}|" "$PROJECT_DIR
 sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://atn:${PG_PASSWORD}@postgres:5432/agent_trust|" "$PROJECT_DIR/.env"
 sed -i "s|^BROKER_PUBLIC_URL=.*|BROKER_PUBLIC_URL=${BROKER_URL}|" "$PROJECT_DIR/.env"
 
-# Append POSTGRES_PASSWORD (used by docker-compose.yml for postgres service)
+# Remove any ENVIRONMENT line copied from .env.example — the tail block
+# below is authoritative for this field (dev vs prod).
+sed -i "/^ENVIRONMENT=/d" "$PROJECT_DIR/.env"
+
+# Append env-specific tail block.
 echo "" >> "$PROJECT_DIR/.env"
 if [[ "$ENV_VALUE" == "production" ]]; then
-    echo "# ─── Production ───────────────────────────────────────────────────────────" >> "$PROJECT_DIR/.env"
-    echo "ENVIRONMENT=production" >> "$PROJECT_DIR/.env"
-    echo "POSTGRES_PASSWORD=${PG_PASSWORD}" >> "$PROJECT_DIR/.env"
-    echo "TRUST_DOMAIN=${DOMAIN}" >> "$PROJECT_DIR/.env"
+    REDIS_PASSWORD="$(generate_secret)"
+    cat >> "$PROJECT_DIR/.env" <<EOF
+# ─── Production ───────────────────────────────────────────────────────────
+ENVIRONMENT=production
+POSTGRES_PASSWORD=${PG_PASSWORD}
+REDIS_PASSWORD=${REDIS_PASSWORD}
+TRUST_DOMAIN=${DOMAIN}
+
+# Production hardening — docker-compose.prod.yml expects these flags.
+VAULT_ALLOW_HTTP=false
+POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=false
+
+# VAULT_TOKEN is deliberately left as the dev-mode default below. Replace
+# it BEFORE running deploy_broker.sh --prod-* by:
+#   ./vault/init-vault.sh
+#   sed -i "s|^VAULT_TOKEN=.*|VAULT_TOKEN=\$(cat vault/broker-token)|" .env
+EOF
+    ok "Generated REDIS_PASSWORD; remember to set VAULT_TOKEN (vault/init-vault.sh)"
 else
-    echo "# ─── Environment ────────────────────────────────────────────────────────────" >> "$PROJECT_DIR/.env"
-    echo "ENVIRONMENT=development" >> "$PROJECT_DIR/.env"
-    echo "POSTGRES_PASSWORD=${PG_PASSWORD}" >> "$PROJECT_DIR/.env"
+    cat >> "$PROJECT_DIR/.env" <<EOF
+# ─── Environment ────────────────────────────────────────────────────────────
+ENVIRONMENT=development
+POSTGRES_PASSWORD=${PG_PASSWORD}
+EOF
 fi
 
 ok "Generated .env with fresh secrets"

@@ -16,8 +16,27 @@ services:
   broker:
     restart: always
     environment:
-      OTEL_TRACES_SAMPLER_ARG: "0.1"   # Sample 10% of traces in production
-      LOG_FORMAT: "json"
+      # ── Fail-fast on missing secrets ────────────────────────────────────
+      # The :? operator makes `docker compose up` abort with a clear error
+      # if any of these is empty in .env. Prevents production boots with
+      # insecure defaults (the #1 cause of "oops we leaked the admin creds"
+      # incidents in multi-env teams).
+      ADMIN_SECRET:          ${ADMIN_SECRET:?ADMIN_SECRET is required in production .env}
+      DASHBOARD_SIGNING_KEY: ${DASHBOARD_SIGNING_KEY:?DASHBOARD_SIGNING_KEY is required in production .env (run scripts/generate-env.sh --prod)}
+      # Vault token must be a scoped broker-policy token, NOT the root token.
+      # vault/init-vault.sh prints one after initialization.
+      VAULT_TOKEN:           ${VAULT_TOKEN:?VAULT_TOKEN is required in production .env (scoped broker-policy token)}
+      # ── Production hardening ────────────────────────────────────────────
+      # HTTPS to Vault — docker-compose.prod.yml also boots Vault with TLS.
+      VAULT_ADDR:            ${VAULT_ADDR:-https://vault:8200}
+      VAULT_ALLOW_HTTP:      "false"
+      # SSRF guard ON — PDP webhooks must use public DNS/IPs. If your
+      # proxies legitimately sit on RFC1918 behind a VPN, override this
+      # in your own env-specific compose file, not here.
+      POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: "false"
+      # Observability
+      OTEL_TRACES_SAMPLER_ARG: "0.1"
+      LOG_FORMAT:              "json"
     deploy:
       resources:
         limits:

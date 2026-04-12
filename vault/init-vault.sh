@@ -92,26 +92,54 @@ echo "==> Enabling KV v2 secrets engine at secret/..."
 vault secrets enable -address="${VAULT_ADDR}" -path=secret kv-v2 2>/dev/null || \
     echo "    (secret/ engine already enabled)"
 
+# ── Write broker policy (narrow: only secret/data/broker) ───────────────────
+echo "==> Writing broker-policy (read+write on secret/data/broker only)..."
+vault policy write -address="${VAULT_ADDR}" broker-policy - <<'POLICY'
+path "secret/data/broker" {
+    capabilities = ["create", "read", "update"]
+}
+path "secret/metadata/broker" {
+    capabilities = ["read"]
+}
+POLICY
+
+# ── Issue a scoped token for the broker ─────────────────────────────────────
+# 30 days, renewable. The broker never gets the root token.
+echo "==> Issuing scoped broker token (policy=broker-policy, ttl=720h, renewable)..."
+BROKER_TOKEN=$(vault token create \
+    -address="${VAULT_ADDR}" \
+    -policy=broker-policy \
+    -ttl=720h \
+    -renewable=true \
+    -display-name="cullis-broker" \
+    -format=json | jq -r '.auth.client_token')
+
+TOKEN_FILE="$(dirname "$0")/broker-token"
+echo "${BROKER_TOKEN}" > "${TOKEN_FILE}"
+chmod 600 "${TOKEN_FILE}"
+
 echo ""
 echo "============================================================"
-echo "  Vault initialized and unsealed successfully!"
+echo "  Vault initialized, unsealed, and broker token issued."
 echo "============================================================"
 echo ""
-echo "  Root token: (stored in ${KEYS_FILE})"
+echo "  Scoped broker token:  (saved to ${TOKEN_FILE}, mode 600)"
 echo ""
-echo "  To retrieve the root token for your .env file, run:"
-echo "    cat ${KEYS_FILE} | python3 -c \"import sys,json; print('VAULT_TOKEN=' + json.load(sys.stdin)['root_token'])\""
+echo "  Paste into your .env file:"
 echo ""
-echo "  WARNING: Store the unseal keys and root token securely!"
-echo "  Consider using a password manager, HSM, or cloud KMS."
-echo "  DELETE ${KEYS_FILE} after securely backing up the keys."
+echo "    VAULT_TOKEN=${BROKER_TOKEN}"
 echo ""
-echo "  Next steps:"
-echo "    1. Store the broker CA key in Vault:"
-echo "       vault kv put secret/broker \\"
-echo "         private_key_pem=@certs/broker-ca-key.pem \\"
-echo "         ca_cert_pem=@certs/broker-ca.pem"
+echo "  Or to copy it into .env automatically:"
+echo "    sed -i \"s|^VAULT_TOKEN=.*|VAULT_TOKEN=\$(cat ${TOKEN_FILE})|\" .env"
 echo ""
-echo "    2. Revoke the root token after creating limited-scope tokens:"
-echo "       vault token revoke \${VAULT_TOKEN}"
+echo "  Unseal keys + root token are in ${KEYS_FILE}."
+echo "  Back them up to a password manager / cloud KMS and DELETE that file."
+echo ""
+echo "  Next step — store the broker CA key (use the scoped token, not root):"
+echo "    VAULT_TOKEN=\$(cat ${TOKEN_FILE}) vault kv put secret/broker \\"
+echo "      private_key_pem=@certs/broker-ca-key.pem \\"
+echo "      public_key_pem=@certs/broker-ca.pem"
+echo ""
+echo "  Root token can be revoked after you've verified the broker boots:"
+echo "    vault token revoke \$(jq -r .root_token ${KEYS_FILE})"
 echo "============================================================"
