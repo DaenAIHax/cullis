@@ -418,10 +418,19 @@ async def settings_generate_ca(request: Request, db: AsyncSession = Depends(get_
     import datetime as _dt
     from cryptography import x509 as _x509
     from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
-    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec, rsa as _rsa
     from cryptography.x509.oid import NameOID as _NameOID
 
-    ca_key = _rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    form = await request.form()
+    key_type = (form.get("key_type") or "rsa").strip().lower()
+    if key_type == "ec":
+        ca_key = _ec.generate_private_key(_ec.SECP256R1())
+    elif key_type == "rsa":
+        ca_key = _rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    else:
+        return templates.TemplateResponse("settings.html",
+            _ctx(request, session, active="settings", org=org,
+                 error=f"Unsupported key type {key_type!r}.", success=None))
     now = _dt.datetime.now(_dt.timezone.utc)
     subject = _x509.Name([
         _x509.NameAttribute(_NameOID.COMMON_NAME, f"{org.display_name} CA"),
@@ -445,7 +454,7 @@ async def settings_generate_ca(request: Request, db: AsyncSession = Depends(get_
 
     ca_key_pem = ca_key.private_bytes(
         encoding=_ser.Encoding.PEM,
-        format=_ser.PrivateFormat.TraditionalOpenSSL,
+        format=_ser.PrivateFormat.PKCS8,  # TraditionalOpenSSL only encodes RSA
         encryption_algorithm=_ser.NoEncryption(),
     ).decode()
     ca_cert_pem = ca_cert.public_bytes(_ser.Encoding.PEM).decode()
