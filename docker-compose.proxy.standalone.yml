@@ -1,0 +1,31 @@
+# Override for running the MCP Proxy on a host DIFFERENT from the broker.
+#
+# Usage:
+#   docker compose -f docker-compose.proxy.yml \
+#                  -f docker-compose.proxy.standalone.yml up -d
+#
+# Or:
+#   ./deploy_proxy.sh --standalone
+#
+# What this changes vs the base compose:
+#   - Swaps the external "agent-trust_default" network (same-host assumption)
+#     for an internal bridge, so the proxy can start without the broker being
+#     on the same docker host.
+#   - Expects MCP_PROXY_BROKER_URL to be the broker's PUBLIC reachable URL
+#     (https://broker.example.com, not http://broker:8000).
+#   - Expects MCP_PROXY_PDP_URL to be a URL the broker can reach over the
+#     network (usually https://proxy.myorg.example.com/pdp/policy with a
+#     reverse proxy in front of this container).
+#
+# Requires Compose v2.20+ for the !reset tag.
+
+services:
+
+  mcp-proxy:
+    networks: !override
+      - proxy_net
+
+networks:
+  broker_net: !reset null
+  proxy_net:
+    driver: bridge

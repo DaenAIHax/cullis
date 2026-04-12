@@ -1,0 +1,35 @@
+# Production hardening overlay for the MCP Proxy.
+#
+# Usage:
+#   ./deploy_proxy.sh --prod                              # same-host (base + prod)
+#   ./deploy_proxy.sh --prod --standalone                 # remote broker (+ standalone override)
+#
+# Effect:
+#   - Fails fast via ${VAR:?} if ADMIN_SECRET / DASHBOARD_SIGNING_KEY /
+#     BROKER_URL are empty or still the dev defaults. Prevents "oops we
+#     pushed change-me-in-production" incidents.
+#   - Forces restart: always and tightens logging/resource limits.
+
+services:
+
+  mcp-proxy:
+    restart: always
+    environment:
+      MCP_PROXY_ENVIRONMENT:             production
+      MCP_PROXY_ADMIN_SECRET:            ${MCP_PROXY_ADMIN_SECRET:?MCP_PROXY_ADMIN_SECRET is required in production proxy.env}
+      MCP_PROXY_DASHBOARD_SIGNING_KEY:   ${MCP_PROXY_DASHBOARD_SIGNING_KEY:?MCP_PROXY_DASHBOARD_SIGNING_KEY is required in production proxy.env (run scripts/generate-proxy-env.sh --prod)}
+      MCP_PROXY_BROKER_URL:              ${MCP_PROXY_BROKER_URL:?MCP_PROXY_BROKER_URL is required in production proxy.env}
+      MCP_PROXY_PROXY_PUBLIC_URL:        ${MCP_PROXY_PROXY_PUBLIC_URL:?MCP_PROXY_PROXY_PUBLIC_URL is required in production proxy.env}
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"

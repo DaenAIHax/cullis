@@ -2,24 +2,20 @@
 # Cullis MCP Proxy — Org-Level Gateway + Built-in PDP
 # =============================================================================
 #
-# Joins the broker's Docker network so the broker can call the PDP webhook
-# and the proxy can reach the broker directly.
+# Joins the broker's Docker network by default so the broker can reach
+# the PDP webhook on the shared bridge. For a proxy that runs on a
+# different host than the broker, use docker-compose.proxy.standalone.yml
+# as an override — it swaps the external network for an internal one and
+# expects a full URL in MCP_PROXY_BROKER_URL.
 #
 # Usage:
-#   docker compose -f docker-compose.proxy.yml up -d
+#   ./deploy_proxy.sh                       # dev, same host as broker
+#   ./deploy_proxy.sh --standalone          # remote broker
+#   ./deploy_proxy.sh --prod                # fail-fast on insecure defaults
 #
-# Prerequisites:
-#   - Broker running: docker compose up -d (or ./deploy_broker.sh)
-#   - The broker's network "agent-trust_default" must exist
-#
-# On first run, open http://localhost:9100/proxy/login to:
-#   1. Enter broker URL: http://broker:8000 (Docker internal)
-#   2. Enter your invite token (from broker admin)
-#   3. Register your organization (certs auto-generated)
-#   4. Create agents
-#
-# The PDP webhook URL is automatically set to http://mcp-proxy:9100/pdp/policy
-# which the broker can reach via the shared Docker network.
+# Prerequisites (shared mode):
+#   - Broker running on this host (docker compose up -d or ./deploy_broker.sh)
+#   - The network "agent-trust_default" must exist
 # =============================================================================
 
 services:
@@ -31,18 +27,37 @@ services:
     ports:
       - "${MCP_PROXY_PORT:-9100}:9100"
     environment:
-      MCP_PROXY_ENVIRONMENT: ${MCP_PROXY_ENVIRONMENT:-development}
-      MCP_PROXY_ADMIN_SECRET: ${MCP_PROXY_ADMIN_SECRET:-change-me-in-production}
-      MCP_PROXY_DATABASE_URL: sqlite+aiosqlite:////data/mcp_proxy.db
-      # PDP webhook URL — the broker calls this for policy decisions
-      # Uses the Docker DNS name so the broker can reach it on the shared network
-      MCP_PROXY_PDP_URL: http://mcp-proxy:9100/pdp/policy
-      # Vault (optional — uncomment to enable)
-      # MCP_PROXY_SECRET_BACKEND: vault
-      # MCP_PROXY_VAULT_ADDR: http://vault:8200
-      # MCP_PROXY_VAULT_TOKEN: ${VAULT_TOKEN:-dev-root-token}
+      MCP_PROXY_ENVIRONMENT:       ${MCP_PROXY_ENVIRONMENT:-development}
+      MCP_PROXY_ADMIN_SECRET:      ${MCP_PROXY_ADMIN_SECRET:-change-me-in-production}
+      # Persistent signing key — without this, admin sessions are invalid
+      # after every proxy restart (per-process random fallback).
+      MCP_PROXY_DASHBOARD_SIGNING_KEY: ${MCP_PROXY_DASHBOARD_SIGNING_KEY:-}
+      MCP_PROXY_DATABASE_URL:      sqlite+aiosqlite:////data/mcp_proxy.db
+      # Broker uplink — defaults to the in-compose service name so dev just
+      # works. Production/remote broker sets MCP_PROXY_BROKER_URL to the
+      # public HTTPS URL.
+      MCP_PROXY_BROKER_URL:        ${MCP_PROXY_BROKER_URL:-http://broker:8000}
+      MCP_PROXY_BROKER_JWKS_URL:   ${MCP_PROXY_BROKER_JWKS_URL:-http://broker:8000/.well-known/jwks.json}
+      # PDP endpoint registered with the broker when the org onboards.
+      # On the shared network, the broker reaches the proxy by service name.
+      MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}
+      # Public URL the proxy advertises to its own internal agents (DPoP HTU).
+      MCP_PROXY_PROXY_PUBLIC_URL:  ${MCP_PROXY_PROXY_PUBLIC_URL:-http://localhost:9100}
+      MCP_PROXY_ALLOWED_ORIGINS:   ${MCP_PROXY_ALLOWED_ORIGINS:-}
+      # Custom CA bundle for HTTPS brokers with enterprise/internal certs.
+      # SSL_CERT_FILE is honored by stdlib ssl + httpx/certifi.
+      SSL_CERT_FILE:               ${MCP_PROXY_BROKER_CA_BUNDLE:-}
+      REQUESTS_CA_BUNDLE:          ${MCP_PROXY_BROKER_CA_BUNDLE:-}
+      # Vault (optional)
+      MCP_PROXY_SECRET_BACKEND:    ${MCP_PROXY_SECRET_BACKEND:-env}
+      MCP_PROXY_VAULT_ADDR:        ${MCP_PROXY_VAULT_ADDR:-}
+      MCP_PROXY_VAULT_TOKEN:       ${MCP_PROXY_VAULT_TOKEN:-}
     volumes:
       - mcp_proxy_data:/data
+      # Optional corporate CA mount. The env above points at a file under /certs
+      # only if MCP_PROXY_BROKER_CA_BUNDLE is set, so the directory can safely
+      # stay empty in dev.
+      - ./certs:/certs:ro
     networks:
       - broker_net
     restart: unless-stopped
