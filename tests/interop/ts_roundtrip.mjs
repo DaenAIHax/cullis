@@ -5,7 +5,12 @@
 //   decrypt --input=<path>                 → read {recipient_priv_pem, blob, session, sender, seq}
 //                                              write {payload, inner_signature} to stdout
 import { readFileSync } from "node:fs";
-import { encryptForAgent, decryptFromAgent } from "../../sdk-ts/dist/crypto.js";
+import {
+  encryptForAgent,
+  decryptFromAgent,
+  signMessage,
+  verifyMessageSignature,
+} from "../../sdk-ts/dist/crypto.js";
 
 const args = Object.fromEntries(
   process.argv.slice(3).map((a) => {
@@ -35,6 +40,33 @@ if (mode === "encrypt") {
     data.client_seq ?? null,
   );
   process.stdout.write(JSON.stringify({ payload, inner_signature }));
+} else if (mode === "sign") {
+  const signature = signMessage(
+    data.sender_priv_pem,
+    data.session_id,
+    data.sender_agent_id,
+    data.nonce,
+    data.timestamp,
+    data.payload,
+    data.client_seq ?? null,
+  );
+  process.stdout.write(JSON.stringify({ signature }));
+} else if (mode === "verify") {
+  try {
+    verifyMessageSignature(
+      data.sender_pub_pem,
+      data.signature,
+      data.session_id,
+      data.sender_agent_id,
+      data.nonce,
+      data.timestamp,
+      data.payload,
+      data.client_seq ?? null,
+    );
+    process.stdout.write(JSON.stringify({ valid: true }));
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ valid: false, error: String(err) }));
+  }
 } else {
   process.stderr.write(`unknown mode: ${mode}\n`);
   process.exit(2);

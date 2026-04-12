@@ -4,7 +4,7 @@
  * Encryption: AES-256-GCM (data)
  *   + RSA-OAEP-SHA256 (key wrapping, RSA recipients)
  *   + ECDH ephemeral + HKDF-SHA256 (key wrapping, EC recipients)
- * Signing:    RSA-PSS-SHA256
+ * Signing:    RSA-PSS-SHA256 (RSA keys) or ECDSA-SHA256 (EC keys)
  *
  * This mirrors app/e2e_crypto.py and app/auth/message_signer.py exactly,
  * so that a TypeScript agent can interoperate with Python agents.
@@ -56,7 +56,10 @@ function buildCanonical(
 }
 
 /**
- * Sign a message with the agent's RSA private key using RSA-PSS-SHA256.
+ * Sign a message. The algorithm is dispatched from the private key type:
+ *   RSA  → RSA-PSS-SHA256, MGF1-SHA256, max salt length
+ *   EC   → ECDSA-SHA256 (DER-encoded signature, as produced by Node.js
+ *          and consumed by Python's cryptography library)
  * Returns the signature as a URL-safe base64 string (no padding).
  */
 export function signMessage(
@@ -69,28 +72,32 @@ export function signMessage(
   clientSeq?: number | null,
 ): string {
   const canonical = buildCanonical(
-    sessionId,
-    senderAgentId,
-    nonce,
-    timestamp,
-    payload,
-    clientSeq,
+    sessionId, senderAgentId, nonce, timestamp, payload, clientSeq,
   );
-
+  const keyObj = createPrivateKey(privateKeyPem);
   const signer = createSign("SHA256");
   signer.update(canonical);
-  const signature = signer.sign({
-    key: privateKeyPem,
-    padding: constants.RSA_PKCS1_PSS_PADDING,
-    saltLength: constants.RSA_PSS_SALTLEN_MAX_SIGN,
-  });
 
+  let signature: Buffer;
+  if (keyObj.asymmetricKeyType === "rsa") {
+    signature = signer.sign({
+      key: keyObj,
+      padding: constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: constants.RSA_PSS_SALTLEN_MAX_SIGN,
+    });
+  } else if (keyObj.asymmetricKeyType === "ec") {
+    signature = signer.sign(keyObj);
+  } else {
+    throw new Error(
+      `Unsupported signing key type: ${keyObj.asymmetricKeyType}`,
+    );
+  }
   return base64url(signature);
 }
 
 /**
- * Verify an RSA-PSS-SHA256 message signature.
- * Returns true if valid, throws Error if invalid.
+ * Verify a message signature. Algorithm is dispatched from the public key
+ * type (RSA-PSS-SHA256 or ECDSA-SHA256). Returns true, throws on failure.
  */
 export function verifyMessageSignature(
   publicKeyPem: string,
@@ -103,25 +110,30 @@ export function verifyMessageSignature(
   clientSeq?: number | null,
 ): boolean {
   const canonical = buildCanonical(
-    sessionId,
-    senderAgentId,
-    nonce,
-    timestamp,
-    payload,
-    clientSeq,
+    sessionId, senderAgentId, nonce, timestamp, payload, clientSeq,
   );
   const sig = base64urlDecode(signatureB64);
-
+  const keyObj = createPublicKey(publicKeyPem);
   const verifier = createVerify("SHA256");
   verifier.update(canonical);
-  const valid = verifier.verify(
-    {
-      key: publicKeyPem,
-      padding: constants.RSA_PKCS1_PSS_PADDING,
-      saltLength: constants.RSA_PSS_SALTLEN_MAX_SIGN,
-    },
-    sig,
-  );
+
+  let valid: boolean;
+  if (keyObj.asymmetricKeyType === "rsa") {
+    valid = verifier.verify(
+      {
+        key: keyObj,
+        padding: constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: constants.RSA_PSS_SALTLEN_MAX_SIGN,
+      },
+      sig,
+    );
+  } else if (keyObj.asymmetricKeyType === "ec") {
+    valid = verifier.verify(keyObj, sig);
+  } else {
+    throw new Error(
+      `Unsupported verification key type: ${keyObj.asymmetricKeyType}`,
+    );
+  }
 
   if (!valid) {
     throw new Error("Message signature verification failed");

@@ -119,6 +119,79 @@ def test_ts_encrypt_to_python_decrypt(kind: str) -> None:
     assert inner_sig == "inner-sig-from-ts"
 
 
+@pytest.mark.parametrize("kind", ["ec", "rsa"])
+def test_python_sign_ts_verify(kind: str) -> None:
+    """Python signs a canonical message; TS verifies. Proves signature-alg
+    auto-dispatch matches Python's RSA-PSS / ECDSA selection."""
+    from app.auth.message_signer import sign_message
+
+    priv_pem, pub_pem = _pem_keypair(kind)
+    payload = {"kind": kind, "k": "py-sign"}
+    nonce = "n-py-ts"
+    ts = 1700000000
+    signature = sign_message(priv_pem, "s1", "orgA::alice", nonce, ts, payload, 5)
+    out = _run_node(
+        "verify",
+        {
+            "sender_pub_pem": pub_pem,
+            "signature": signature,
+            "session_id": "s1",
+            "sender_agent_id": "orgA::alice",
+            "nonce": nonce,
+            "timestamp": ts,
+            "payload": payload,
+            "client_seq": 5,
+        },
+    )
+    assert out.get("valid") is True, out
+
+
+@pytest.mark.parametrize("kind", ["ec", "rsa"])
+def test_ts_sign_python_verify(kind: str) -> None:
+    """TS signs; Python verifies against the raw pubkey (matches broker logic)."""
+    import base64 as _b64
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.hazmat.primitives.asymmetric import padding as _padding
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+
+    priv_pem, pub_pem = _pem_keypair(kind)
+    payload = {"kind": kind, "k": "ts-sign"}
+    nonce = "n-ts-py"
+    ts = 1700000001
+    out = _run_node(
+        "sign",
+        {
+            "sender_priv_pem": priv_pem,
+            "session_id": "s2",
+            "sender_agent_id": "orgB::bob",
+            "nonce": nonce,
+            "timestamp": ts,
+            "payload": payload,
+            "client_seq": 9,
+        },
+    )
+    signature = out["signature"]
+    import json as _json
+    payload_str = _json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    canonical = f"s2|orgB::bob|{nonce}|{ts}|9|{payload_str}".encode()
+    sig_bytes = _b64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
+    pub_key = serialization.load_pem_public_key(pub_pem.encode())
+    if isinstance(pub_key, _rsa.RSAPublicKey):
+        pub_key.verify(
+            sig_bytes, canonical,
+            _padding.PSS(
+                mgf=_padding.MGF1(hashes.SHA256()),
+                salt_length=_padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+    else:
+        assert isinstance(pub_key, _ec.EllipticCurvePublicKey)
+        pub_key.verify(sig_bytes, canonical, _ec.ECDSA(hashes.SHA256()))
+
+
 def test_ts_blob_has_no_base64_padding() -> None:
     """
     Guards against regressions of the TS→Python base64 padding bug.
