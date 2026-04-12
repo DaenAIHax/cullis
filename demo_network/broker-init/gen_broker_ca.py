@@ -31,14 +31,23 @@ CRT = OUT / "broker-ca.pem"
 
 
 def _maybe_push_to_vault(priv_pem: bytes, pub_pem: bytes) -> None:
-    """Push broker keys to Vault at VAULT_SECRET_PATH if Vault is configured."""
+    """Push broker keys to Vault at VAULT_SECRET_PATH if Vault is configured.
+
+    The Vault token is read from VAULT_TOKEN_FILE (preferred) or VAULT_TOKEN
+    env. The file path comes from vault-init which wrote a broker-scoped
+    token, so the root token never enters this container.
+    """
     vault_addr = os.environ.get("VAULT_ADDR", "")
-    vault_token = os.environ.get("VAULT_TOKEN", "")
-    # Path is kv/v2-style, e.g. "secret/data/broker". Extract the mount +
-    # logical path — write uses the same path shape as read for kv-v2.
+    token_file = os.environ.get("VAULT_TOKEN_FILE", "")
+    vault_token = ""
+    if token_file and pathlib.Path(token_file).exists():
+        vault_token = pathlib.Path(token_file).read_text().strip()
+    else:
+        vault_token = os.environ.get("VAULT_TOKEN", "")
+
     secret_path = os.environ.get("VAULT_SECRET_PATH", "secret/data/broker")
     if not vault_addr or not vault_token:
-        print("broker-init: VAULT_ADDR/VAULT_TOKEN not set, skipping Vault push")
+        print("broker-init: VAULT_ADDR/VAULT_TOKEN(_FILE) not set, skipping Vault push")
         return
 
     import httpx
@@ -51,12 +60,14 @@ def _maybe_push_to_vault(priv_pem: bytes, pub_pem: bytes) -> None:
             "public_key_pem":  pub_pem.decode(),
         }
     }
-    # Vault may still be warming up — retry briefly.
+    # Respect a caller-supplied CA bundle (test CA + Vault CA merged).
+    ca_bundle = os.environ.get("SSL_CERT_FILE") or True
     last_exc: Exception | None = None
     for attempt in range(20):
         try:
             r = httpx.post(url, json=body,
                            headers={"X-Vault-Token": vault_token},
+                           verify=ca_bundle,
                            timeout=5.0)
             if r.status_code in (200, 204):
                 print(f"broker-init: pushed broker keys to Vault at {secret_path}")

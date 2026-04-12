@@ -74,29 +74,74 @@ services:
 
   vault:
     image: hashicorp/vault:1.17
+    # Dev mode with a custom TLS listener. The cert is signed by the test
+    # CA from ca-init, so broker only needs to trust /certs/ca.crt — no
+    # CA bundle gymnastics needed.
+    depends_on:
+      ca-init:
+        condition: service_completed_successfully
+    command: ["server", "-dev"]
     environment:
-      VAULT_DEV_ROOT_TOKEN_ID:    "demo-vault-root-token"
-      VAULT_DEV_LISTEN_ADDRESS:   "0.0.0.0:8200"
+      VAULT_DEV_ROOT_TOKEN_ID: "demo-vault-root-token"
+      VAULT_LOCAL_CONFIG: >-
+        {
+          "listener": {
+            "tcp": {
+              "address": "0.0.0.0:8200",
+              "tls_cert_file": "/certs/vault.crt",
+              "tls_key_file":  "/certs/vault.key"
+            }
+          },
+          "disable_mlock": true
+        }
+      VAULT_ADDR:   "https://127.0.0.1:8200"
+      VAULT_CACERT: /certs/ca.crt
+      # Dev mode insists on having its own listener — point it at an unused
+      # localhost-only port. Real traffic goes through the HTTPS listener
+      # defined in VAULT_LOCAL_CONFIG on 0.0.0.0:8200.
+      VAULT_DEV_LISTEN_ADDRESS: "127.0.0.1:8299"
     cap_add:
       - IPC_LOCK
+    volumes:
+      - test-certs:/certs:ro
     healthcheck:
-      test: ["CMD", "vault", "status", "-address=http://localhost:8200"]
+      test: ["CMD", "vault", "status", "-address=https://127.0.0.1:8200"]
       interval: 3s
       timeout: 2s
-      retries: 20
-      start_period: 3s
+      retries: 30
+      start_period: 5s
 
-  broker-init:
-    build: ./broker-init
+  vault-init:
+    build: ./vault-init
     depends_on:
       vault:
         condition: service_healthy
     environment:
-      VAULT_ADDR:        "http://vault:8200"
-      VAULT_TOKEN:       "demo-vault-root-token"
+      VAULT_ADDR:       "https://vault:8200"
+      VAULT_CACERT:     /certs/ca.crt
+      VAULT_ROOT_TOKEN: "demo-vault-root-token"
+      TOKEN_OUT_DIR:    /vault-token
+    volumes:
+      - test-certs:/certs:ro
+      - vault-token:/vault-token
+    restart: "no"
+
+  broker-init:
+    build: ./broker-init
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+    environment:
+      VAULT_ADDR:        "https://vault:8200"
       VAULT_SECRET_PATH: "secret/data/broker"
+      # Use the broker-scoped token issued by vault-init, not the root token.
+      VAULT_TOKEN_FILE:  /vault-token/broker-token
+      SSL_CERT_FILE:     /certs/ca.crt
+      REQUESTS_CA_BUNDLE: /certs/ca.crt
     volumes:
       - broker-certs:/broker-certs
+      - vault-token:/vault-token:ro
+      - test-certs:/certs:ro
     restart: "no"
 
   broker:
@@ -106,11 +151,11 @@ services:
     depends_on:
       broker-init:
         condition: service_completed_successfully
+      vault-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      vault:
         condition: service_healthy
     environment:
       ADMIN_SECRET: "demo-admin-secret-change-me"
@@ -120,10 +165,10 @@ services:
       DATABASE_URL: "postgresql+asyncpg://atn:atn-smoke@postgres:5432/agent_trust"
       REDIS_URL: "redis://redis:6379"
       KMS_BACKEND: "vault"
-      VAULT_ADDR: "http://vault:8200"
-      VAULT_TOKEN: "demo-vault-root-token"
+      VAULT_ADDR: "https://vault:8200"
       VAULT_SECRET_PATH: "secret/data/broker"
-      VAULT_ALLOW_HTTP: "true"
+      # HTTPS to Vault — no more ALLOW_HTTP.
+      VAULT_ALLOW_HTTP: "false"
       POLICY_BACKEND: "webhook"
       POLICY_ENFORCEMENT: "true"
       # Smoke runs PDP webhooks inside the Docker network (172.x.x.x), so
@@ -133,13 +178,21 @@ services:
       OTEL_ENABLED: "false"
       FORWARDED_ALLOW_IPS: "172.16.0.0/12"
       ENVIRONMENT: "development"
-      # Trust the demo CA when the broker calls the proxy's /pdp/policy
-      # endpoint via https://proxy-X.cullis.test:8443/...
+      # Single trust anchor — both Vault (for KMS) and the proxy webhook
+      # endpoints use certs signed by this demo CA.
       SSL_CERT_FILE: /certs/ca.crt
       REQUESTS_CA_BUNDLE: /certs/ca.crt
     volumes:
       - broker-certs:/broker-certs:ro
       - test-certs:/certs:ro
+      - vault-token:/vault-token:ro
+    # Read the narrow-scoped Vault token from a file and export it as env
+    # before exec'ing uvicorn. The root token never touches this container.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        export VAULT_TOKEN="$$(cat /vault-token/broker-token)"
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 172.16.0.0/12
     expose: ["8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -332,6 +385,7 @@ volumes:
   proxy-a-data:
   proxy-b-data:
   postgres-data:
+  vault-token:
 
 networks:
   default:

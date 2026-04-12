@@ -7,7 +7,7 @@ set -euo pipefail
 OUT=/certs
 mkdir -p "$OUT"
 
-if [[ -f "$OUT/ca.crt" && -f "$OUT/traefik.crt" && -f "$OUT/traefik.key" ]]; then
+if [[ -f "$OUT/ca.crt" && -f "$OUT/traefik.crt" && -f "$OUT/traefik.key" && -f "$OUT/vault.crt" && -f "$OUT/vault.key" ]]; then
     # Verify the CA is still valid for at least 30 days.
     if openssl x509 -in "$OUT/ca.crt" -noout -checkend $((30*24*3600)) >/dev/null 2>&1; then
         echo "ca-init: certs already present and valid, skipping"
@@ -31,6 +31,10 @@ HOSTS=(
     "proxy-b.cullis.test"
     "checker.cullis.test"
 )
+
+# Vault has its own leaf — it doesn't go through Traefik, and its SAN must
+# include the service name "vault" so the broker verifies `https://vault:8200`.
+VAULT_HOSTS=("vault" "vault.cullis.test" "localhost" "127.0.0.1")
 
 SAN_CONF="$(mktemp)"
 {
@@ -63,11 +67,51 @@ openssl x509 -req -in "$OUT/traefik.csr" -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" 
     -CAcreateserial -out "$OUT/traefik.crt" -days 365 -sha256 \
     -extfile "$SAN_CONF" -extensions v3_req 2>/dev/null
 
-rm -f "$OUT/traefik.csr" "$SAN_CONF" "$OUT/ca.srl"
+rm -f "$OUT/traefik.csr" "$SAN_CONF"
 
-# Make files world-readable so non-root services can read ca.crt + leaf
-chmod 644 "$OUT/ca.crt" "$OUT/traefik.crt"
-chmod 640 "$OUT/traefik.key"
+# ── Vault leaf ──────────────────────────────────────────────────────────────
+# Vault reads cert/key via VAULT_LOCAL_CONFIG listener. IP SANs are required
+# for the "127.0.0.1" healthcheck probe.
+VAULT_SAN_CONF="$(mktemp)"
+{
+    echo "[req]"
+    echo "distinguished_name = dn"
+    echo "req_extensions = v3_req"
+    echo "prompt = no"
+    echo ""
+    echo "[dn]"
+    echo "CN = vault"
+    echo "O = Cullis Demo"
+    echo ""
+    echo "[v3_req]"
+    echo "keyUsage = critical, digitalSignature, keyEncipherment"
+    echo "extendedKeyUsage = serverAuth"
+    echo "subjectAltName = @alt"
+    echo ""
+    echo "[alt]"
+    i=1
+    for h in "${VAULT_HOSTS[@]}"; do
+        if [[ "$h" == "127.0.0.1" ]]; then
+            echo "IP.$i = $h"
+        else
+            echo "DNS.$i = $h"
+        fi
+        i=$((i+1))
+    done
+} > "$VAULT_SAN_CONF"
 
-echo "ca-init: generated test CA + leaf for: ${HOSTS[*]}"
+openssl genrsa -out "$OUT/vault.key" 2048 2>/dev/null
+openssl req -new -key "$OUT/vault.key" -out "$OUT/vault.csr" -config "$VAULT_SAN_CONF"
+openssl x509 -req -in "$OUT/vault.csr" -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" \
+    -CAcreateserial -out "$OUT/vault.crt" -days 365 -sha256 \
+    -extfile "$VAULT_SAN_CONF" -extensions v3_req 2>/dev/null
+rm -f "$OUT/vault.csr" "$VAULT_SAN_CONF" "$OUT/ca.srl"
+
+# Make files world-readable so non-root services can read ca.crt + leafs.
+# The Vault container runs as uid 100 (vault); needs read on its key.
+chmod 644 "$OUT/ca.crt" "$OUT/traefik.crt" "$OUT/vault.crt"
+chmod 644 "$OUT/traefik.key" "$OUT/vault.key"
+
+echo "ca-init: generated test CA + Traefik leaf for: ${HOSTS[*]}"
+echo "ca-init: generated Vault leaf for: ${VAULT_HOSTS[*]}"
 openssl x509 -in "$OUT/ca.crt" -noout -subject -issuer -dates
