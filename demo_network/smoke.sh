@@ -197,6 +197,11 @@ assert_audit_hash_chain_integrity() {
     fi
 
     # Recompute hashes with the exact canonical form used by the broker.
+    # Pre-pull the image so `docker run` stderr stays clean — otherwise the
+    # "Unable to find image... Pulling from..." noise prepends the script
+    # output and the `^OK N` regex below stops matching on cold-cache runners.
+    docker pull python:3.11-slim >/dev/null 2>&1 || true
+
     local verified
     verified="$(docker run --rm \
         -v "$check_dir":/in:ro \
