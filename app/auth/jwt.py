@@ -22,6 +22,9 @@ Note for tests:
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import Depends, HTTPException, Request, status
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +33,25 @@ from app.config import get_settings, Settings
 from app.auth.models import TokenPayload
 from app.db.database import get_db
 from app.spiffe import internal_id_to_spiffe
+
+
+# All algorithms the broker accepts when it decodes its own access tokens.
+# Signing algorithm is picked from the broker key type at token creation.
+_ACCEPTED_SIGNING_ALGS = ["RS256", "ES256", "ES384", "ES512"]
+
+
+def _signing_alg_for_pem(priv_pem: str) -> str:
+    """Pick the JWT signing algorithm that matches the broker private key."""
+    pem_bytes = priv_pem.encode() if isinstance(priv_pem, str) else priv_pem
+    priv_key = serialization.load_pem_private_key(pem_bytes, password=None)
+    if isinstance(priv_key, RSAPrivateKey):
+        return "RS256"
+    if isinstance(priv_key, EllipticCurvePrivateKey):
+        curve = priv_key.curve.name
+        return {"secp256r1": "ES256",
+                "secp384r1": "ES384",
+                "secp521r1": "ES512"}.get(curve, "ES256")
+    raise ValueError(f"Unsupported broker key type: {type(priv_key).__name__}")
 
 _TOKEN_ISSUER   = "cullis-broker"
 _TOKEN_AUDIENCE = "cullis"
@@ -95,7 +117,8 @@ async def create_access_token(
         "cnf": {"jkt": dpop_jkt},  # DPoP key binding — RFC 9449 §6
     }
 
-    token = jwt.encode(payload, priv_pem, algorithm="RS256", headers={"kid": kid})
+    alg = _signing_alg_for_pem(priv_pem)
+    token = jwt.encode(payload, priv_pem, algorithm=alg, headers={"kid": kid})
     expires_in = settings.jwt_access_token_expire_minutes * 60
     return token, expires_in
 
@@ -119,7 +142,7 @@ async def decode_token(token: str, settings: Settings | None = None) -> TokenPay
         raw = jwt.decode(
             token,
             pub_pem,
-            algorithms=["RS256"],
+            algorithms=_ACCEPTED_SIGNING_ALGS,
             audience=_TOKEN_AUDIENCE,
         )
         if raw.get("iss") != _TOKEN_ISSUER:

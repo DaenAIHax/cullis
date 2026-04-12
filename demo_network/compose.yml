@@ -138,6 +138,10 @@ services:
       VAULT_TOKEN_FILE:  /vault-token/broker-token
       SSL_CERT_FILE:     /certs/ca.crt
       REQUESTS_CA_BUNDLE: /certs/ca.crt
+      # PKI_KEY_TYPE propagates from the host shell (export PKI_KEY_TYPE=ec
+      # before ./smoke.sh up) to generate the demo broker CA with ECDSA P-256
+      # instead of the default RSA-4096. Used by the smoke-all-ecc CI variant.
+      PKI_KEY_TYPE:      "${PKI_KEY_TYPE:-rsa}"
     volumes:
       - broker-certs:/broker-certs
       - vault-token:/vault-token:ro
@@ -356,6 +360,7 @@ services:
       ADMIN_SECRET: "demo-admin-secret-change-me"
       CA_BUNDLE: /certs/ca.crt
       STATE_DIR: /state
+      PKI_KEY_TYPE: "${PKI_KEY_TYPE:-rsa}"
     volumes:
       - test-certs:/certs:ro
       - bootstrap-state:/state

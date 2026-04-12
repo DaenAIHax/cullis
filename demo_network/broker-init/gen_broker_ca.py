@@ -21,8 +21,13 @@ import sys
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
+
+# PKI_KEY_TYPE=rsa (default) | ec → drives the broker CA key algorithm.
+# Lets the smoke-all-ecc CI variant bootstrap a fully-ECC demo stack
+# without rebuilding images.
+PKI_KEY_TYPE = os.environ.get("PKI_KEY_TYPE", "rsa").strip().lower()
 
 OUT = pathlib.Path("/broker-certs")
 OUT.mkdir(parents=True, exist_ok=True)
@@ -91,8 +96,14 @@ if KEY.exists() and CRT.exists():
     _maybe_push_to_vault(priv_existing, pub_existing)
     sys.exit(0)
 
-print("broker-init: generating broker root CA (RSA-4096)")
-key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+if PKI_KEY_TYPE == "ec":
+    print("broker-init: generating broker root CA (ECDSA P-256)")
+    key = ec.generate_private_key(ec.SECP256R1())
+elif PKI_KEY_TYPE == "rsa":
+    print("broker-init: generating broker root CA (RSA-4096)")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+else:
+    raise SystemExit(f"broker-init: unsupported PKI_KEY_TYPE={PKI_KEY_TYPE!r}")
 name = x509.Name([
     x509.NameAttribute(NameOID.COMMON_NAME, "Cullis Demo Broker CA"),
     x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Cullis Demo"),

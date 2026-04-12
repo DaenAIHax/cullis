@@ -61,7 +61,7 @@ async def decode_token(token: str, jwks_client: JWKSClient) -> TokenPayload:
         raw = jose_jwt.decode(
             token,
             pub_pem,
-            algorithms=["RS256"],
+            algorithms=["RS256", "ES256", "ES384", "ES512"],
             audience=_TOKEN_AUDIENCE,
         )
 

@@ -43,9 +43,17 @@ concurrency:
 
 jobs:
   smoke:
-    name: demo_network smoke
+    # Default PKI_KEY_TYPE=rsa (matrix entry "rsa") is the canonical golden
+    # path. The "ec" entry boots the same stack with broker CA, org CAs and
+    # agent certs all ECDSA-P256 — proves the all-ECC claim on every PR
+    # touching crypto-adjacent code.
+    name: demo_network smoke (${{ matrix.key_type }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        key_type: [rsa, ec]
 
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +68,8 @@ jobs:
 
       - name: Run smoke (./demo_network/smoke.sh full)
         working-directory: demo_network
+        env:
+          PKI_KEY_TYPE: ${{ matrix.key_type }}
         run: |
           ./smoke.sh full
         # smoke.sh already dumps the last 100 lines of each critical

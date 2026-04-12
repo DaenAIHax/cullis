@@ -79,7 +79,9 @@ async def create_transaction_token(
         "parent_jti": parent_jti,
     }
 
-    token = jwt.encode(claims, priv_pem, algorithm="RS256", headers={"kid": kid})
+    from app.auth.jwt import _signing_alg_for_pem
+    alg = _signing_alg_for_pem(priv_pem)
+    token = jwt.encode(claims, priv_pem, algorithm=alg, headers={"kid": kid})
 
     record = TransactionTokenRecord(
         jti=jti,

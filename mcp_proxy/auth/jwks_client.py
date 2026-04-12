@@ -12,9 +12,17 @@ import logging
 import time
 
 import httpx
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey, RSAPublicNumbers
 
 _log = logging.getLogger("mcp_proxy")
+
+# JWK crv → (cryptography curve class, expected coord byte length)
+_EC_JWK_CURVES = {
+    "P-256": (ec.SECP256R1, 32),
+    "P-384": (ec.SECP384R1, 48),
+    "P-521": (ec.SECP521R1, 66),
+}
 
 # Minimum interval between forced re-fetches (prevents abuse)
 _MIN_REFETCH_INTERVAL = 60  # seconds
@@ -35,6 +43,27 @@ def _jwk_to_rsa_public_key(jwk: dict) -> RSAPublicKey:
     n = int.from_bytes(_b64url_decode(jwk["n"]), "big")
     e = int.from_bytes(_b64url_decode(jwk["e"]), "big")
     return RSAPublicNumbers(e=e, n=n).public_key()
+
+
+def _jwk_to_ec_public_key(jwk: dict):
+    """Convert a JWK dict (kty=EC) to a cryptography EllipticCurvePublicKey."""
+    crv = jwk.get("crv")
+    if crv not in _EC_JWK_CURVES:
+        raise ValueError(f"Unsupported EC JWK curve: {crv!r}")
+    curve_cls, _ = _EC_JWK_CURVES[crv]
+    x = int.from_bytes(_b64url_decode(jwk["x"]), "big")
+    y = int.from_bytes(_b64url_decode(jwk["y"]), "big")
+    return ec.EllipticCurvePublicNumbers(x=x, y=y, curve=curve_cls()).public_key()
+
+
+def _jwk_to_public_key(jwk: dict):
+    """Dispatch JWK → cryptography PublicKey on kty."""
+    kty = jwk.get("kty")
+    if kty == "RSA":
+        return _jwk_to_rsa_public_key(jwk)
+    if kty == "EC":
+        return _jwk_to_ec_public_key(jwk)
+    raise ValueError(f"Unsupported JWK kty: {kty!r}")
 
 
 class JWKSClient:
@@ -88,18 +117,18 @@ class JWKSClient:
             _log.debug("No JWKS URL or override path configured — skipping fetch")
             return self._cache
 
-        # Parse JWK set
+        # Parse JWK set — accept both RSA and EC keys
         for jwk in jwks_data.get("keys", []):
             kid = jwk.get("kid")
             kty = jwk.get("kty")
             if not kid:
                 _log.warning("Skipping JWK without kid: %s", jwk.get("alg"))
                 continue
-            if kty != "RSA":
-                _log.debug("Skipping non-RSA key: kid=%s kty=%s", kid, kty)
+            if kty not in ("RSA", "EC"):
+                _log.debug("Skipping unsupported kty: kid=%s kty=%s", kid, kty)
                 continue
             try:
-                keys[kid] = _jwk_to_rsa_public_key(jwk)
+                keys[kid] = _jwk_to_public_key(jwk)
             except Exception as exc:
                 _log.warning("Failed to parse JWK kid=%s: %s", kid, exc)
 

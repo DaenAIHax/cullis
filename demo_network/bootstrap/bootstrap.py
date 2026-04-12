@@ -26,8 +26,19 @@ import time
 import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
+
+PKI_KEY_TYPE = os.environ.get("PKI_KEY_TYPE", "rsa").strip().lower()
+
+
+def _gen_key(bits: int):
+    """Generate a private key of the configured type (PKI_KEY_TYPE)."""
+    if PKI_KEY_TYPE == "ec":
+        return ec.generate_private_key(ec.SECP256R1())
+    if PKI_KEY_TYPE == "rsa":
+        return rsa.generate_private_key(public_exponent=65537, key_size=bits)
+    raise SystemExit(f"bootstrap: unsupported PKI_KEY_TYPE={PKI_KEY_TYPE!r}")
 
 BROKER_URL   = os.environ["BROKER_URL"]
 ADMIN_SECRET = os.environ["ADMIN_SECRET"]
@@ -72,7 +83,7 @@ ORGS = [
 
 
 def _gen_org_ca(org_id: str) -> tuple[bytes, bytes]:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    key = _gen_key(bits=4096)
     name = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, f"{org_id} CA"),
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_id),
@@ -177,7 +188,7 @@ def _gen_agent_cert(agent_id: str, org_id: str, ca_cert_pem: bytes,
     ca_cert = x509.load_pem_x509_certificate(ca_cert_pem)
     ca_key  = load_pem_private_key(ca_key_pem, password=None)
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key = _gen_key(bits=2048)
     subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, agent_id),
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_id),
