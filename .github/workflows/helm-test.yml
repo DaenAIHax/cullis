@@ -175,7 +175,13 @@ jobs:
           kubectl -n cullis-test get events --sort-by='.lastTimestamp' || true
           echo "::endgroup::"
           for pod in $(kubectl -n cullis-test get pods -o name); do
-            echo "::group::$pod"
-            kubectl -n cullis-test logs "$pod" --tail=200 || true
+            echo "::group::$pod (current)"
+            kubectl -n cullis-test logs "$pod" --tail=500 || true
+            echo "::endgroup::"
+            echo "::group::$pod (previous)"
+            kubectl -n cullis-test logs "$pod" --tail=500 --previous || true
+            echo "::endgroup::"
+            echo "::group::$pod (describe)"
+            kubectl -n cullis-test describe "$pod" || true
             echo "::endgroup::"
           done
