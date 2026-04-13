@@ -37,11 +37,11 @@ class InternalAgent(Base):
 
     agent_id = Column(Text, primary_key=True)
     display_name = Column(Text, nullable=False)
-    capabilities = Column(Text, nullable=False, default="[]")  # JSON array
+    capabilities = Column(Text, nullable=False, server_default="[]")  # JSON array
     api_key_hash = Column(Text, nullable=False)
     cert_pem = Column(Text, nullable=True)
     created_at = Column(Text, nullable=False)
-    is_active = Column(Integer, nullable=False, default=1)
+    is_active = Column(Integer, nullable=False, server_default="1")
 
 
 class AuditLogEntry(Base):
@@ -84,12 +84,12 @@ class LocalAgent(Base):
 
     agent_id = Column(Text, primary_key=True)
     display_name = Column(Text, nullable=False)
-    capabilities = Column(Text, nullable=False, default="[]")  # JSON array
+    capabilities = Column(Text, nullable=False, server_default="[]")  # JSON array
     cert_pem = Column(Text, nullable=True)
     api_key_hash = Column(Text, nullable=True)
-    scope = Column(Text, nullable=False, default="local")  # reserved: "local" | "federated-cache"
+    scope = Column(Text, nullable=False, server_default="local")  # reserved: "local" | "federated-cache"
     created_at = Column(Text, nullable=False)
-    is_active = Column(Integer, nullable=False, default=1)
+    is_active = Column(Integer, nullable=False, server_default="1")
 
 
 class LocalSession(Base):
@@ -139,9 +139,9 @@ class LocalPolicy(Base):
 
     policy_id = Column(Text, primary_key=True)
     name = Column(Text, nullable=False)
-    scope = Column(Text, nullable=False, default="intra")  # reserved: "intra" | "egress"
-    rules_json = Column(Text, nullable=False, default="{}")
-    enabled = Column(Integer, nullable=False, default=1)
+    scope = Column(Text, nullable=False, server_default="intra")  # reserved: "intra" | "egress"
+    rules_json = Column(Text, nullable=False, server_default="{}")
+    enabled = Column(Integer, nullable=False, server_default="1")
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=False)
 

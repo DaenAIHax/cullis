@@ -1,5 +1,5 @@
 """
-MCP Proxy database — lightweight async SQLite via aiosqlite.
+MCP Proxy database — async SQLAlchemy 2.x Core over aiosqlite / asyncpg.
 
 Tables:
   - internal_agents: locally registered agents (for egress API key auth)
@@ -7,105 +7,111 @@ Tables:
   - proxy_config: key-value store for broker uplink config from setup wizard
 
 Design choices:
-  - aiosqlite directly (no SQLAlchemy) — minimal footprint for a sidecar proxy
+  - SQLAlchemy Core with AsyncEngine — single async driver, portable SQLite/Postgres
   - audit_log is append-only: no UPDATE or DELETE operations exposed
-  - WAL mode enabled for concurrent readers
+  - WAL mode enabled on SQLite for concurrent readers (no-op on Postgres)
+  - get_db() yields an AsyncConnection already inside engine.begin(): callers no
+    longer call db.commit(), transactions commit on context exit.
 """
 import json
 import logging
-import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import AsyncIterator
 
-import aiosqlite
+from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+
+from mcp_proxy.db_models import metadata
 
 _log = logging.getLogger("mcp_proxy")
 
-# Module-level connection path — set by init_db()
-_db_path: str = ""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Schema
-# ─────────────────────────────────────────────────────────────────────────────
-
-_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS internal_agents (
-    agent_id       TEXT PRIMARY KEY,
-    display_name   TEXT NOT NULL,
-    capabilities   TEXT NOT NULL DEFAULT '[]',  -- JSON array
-    api_key_hash   TEXT NOT NULL,
-    cert_pem       TEXT,
-    created_at     TEXT NOT NULL,
-    is_active      INTEGER NOT NULL DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS audit_log (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp      TEXT NOT NULL,
-    agent_id       TEXT NOT NULL,
-    action         TEXT NOT NULL,
-    tool_name      TEXT,
-    status         TEXT NOT NULL,
-    detail         TEXT,
-    request_id     TEXT,
-    duration_ms    REAL
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_log_agent_id ON audit_log(agent_id);
-CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
-CREATE INDEX IF NOT EXISTS idx_audit_log_request_id ON audit_log(request_id);
-
-CREATE TABLE IF NOT EXISTS proxy_config (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-"""
+# Module-level engine — set by init_db()
+_engine: AsyncEngine | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Initialization
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def init_db(db_path: str) -> None:
-    """Create tables if they don't exist. Enable WAL mode."""
-    global _db_path
-    # Strip SQLAlchemy prefix if present
-    clean_path = db_path
+def _normalize_url(db_url: str) -> str:
+    """Accept a SQLAlchemy URL or a raw SQLite path; return a SQLAlchemy URL."""
+    if "://" in db_url:
+        return db_url
+    # Raw filesystem path — wrap as sqlite+aiosqlite
+    return f"sqlite+aiosqlite:///{db_url}"
+
+
+def _sqlite_path(db_url: str) -> str | None:
+    """Extract the filesystem path from a sqlite URL, or None if not SQLite."""
     for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
-        if clean_path.startswith(prefix):
-            clean_path = clean_path[len(prefix):]
-            break
-
-    _db_path = clean_path
-
-    # Ensure parent directory exists
-    parent = Path(_db_path).parent
-    if str(parent) != ".":
-        parent.mkdir(parents=True, exist_ok=True)
-
-    async with aiosqlite.connect(_db_path) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.executescript(_SCHEMA_SQL)
-        await db.commit()
-
-    _log.info("Database initialized: %s", _db_path)
+        if db_url.startswith(prefix):
+            return db_url[len(prefix):]
+    return None
 
 
-def get_db() -> aiosqlite.Connection:
-    """Return a fresh aiosqlite connection handle (NOT yet opened).
+async def init_db(db_url: str) -> None:
+    """Initialize the module-level AsyncEngine and ensure schema exists.
 
-    Callers MUST use ``async with``::
+    Accepts either a SQLAlchemy URL (``sqlite+aiosqlite:///path``) or a raw
+    filesystem path for backward compatibility.
 
-        async with get_db() as db:
-            db.row_factory = aiosqlite.Row
-            await db.execute(...)
-
-    Do NOT ``await get_db()`` — the context manager handles startup.
+    Schema bootstrap still uses ``metadata.create_all`` — callers that want
+    Alembic-managed upgrades should run ``alembic upgrade head`` out of band.
     """
-    if not _db_path:
+    global _engine
+
+    url = _normalize_url(db_url)
+
+    # Ensure parent directory exists for SQLite file DBs
+    sqlite_path = _sqlite_path(url)
+    if sqlite_path:
+        parent = Path(sqlite_path).parent
+        if str(parent) not in ("", "."):
+            parent.mkdir(parents=True, exist_ok=True)
+
+    _engine = create_async_engine(url, echo=False, future=True)
+
+    async with _engine.begin() as conn:
+        if _engine.dialect.name == "sqlite":
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.run_sync(metadata.create_all)
+
+    _log.info("Database initialized: %s", url)
+
+
+async def dispose_db() -> None:
+    """Dispose the module-level engine (shutdown hook)."""
+    global _engine
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+
+
+def _require_engine() -> AsyncEngine:
+    if _engine is None:
         raise RuntimeError("Database not initialized — call init_db() first")
-    return aiosqlite.connect(_db_path)
+    return _engine
+
+
+@asynccontextmanager
+async def get_db() -> AsyncIterator[AsyncConnection]:
+    """Yield an AsyncConnection inside an active transaction.
+
+    The transaction auto-commits when the context exits cleanly and rolls
+    back on exception. Callers MUST NOT call ``await conn.commit()``.
+
+    Usage::
+
+        async with get_db() as conn:
+            result = await conn.execute(text("SELECT ..."), {"param": value})
+            row = result.mappings().first()
+    """
+    engine = _require_engine()
+    async with engine.begin() as conn:
+        yield conn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,14 +130,23 @@ async def log_audit(
 ) -> None:
     """Insert an immutable audit log entry."""
     ts = datetime.now(timezone.utc).isoformat()
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            """INSERT INTO audit_log (timestamp, agent_id, action, tool_name, status, detail, request_id, duration_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, agent_id, action, tool_name, status, detail, request_id, duration_ms),
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                """INSERT INTO audit_log (timestamp, agent_id, action, tool_name, status, detail, request_id, duration_ms)
+                   VALUES (:timestamp, :agent_id, :action, :tool_name, :status, :detail, :request_id, :duration_ms)"""
+            ),
+            {
+                "timestamp": ts,
+                "agent_id": agent_id,
+                "action": action,
+                "tool_name": tool_name,
+                "status": status,
+                "detail": detail,
+                "request_id": request_id,
+                "duration_ms": duration_ms,
+            },
         )
-        await db.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,24 +162,31 @@ async def create_agent(
 ) -> None:
     """Register a new internal agent."""
     ts = datetime.now(timezone.utc).isoformat()
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            """INSERT INTO internal_agents (agent_id, display_name, capabilities, api_key_hash, cert_pem, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (agent_id, display_name, json.dumps(capabilities), api_key_hash, cert_pem, ts),
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                """INSERT INTO internal_agents (agent_id, display_name, capabilities, api_key_hash, cert_pem, created_at)
+                   VALUES (:agent_id, :display_name, :capabilities, :api_key_hash, :cert_pem, :created_at)"""
+            ),
+            {
+                "agent_id": agent_id,
+                "display_name": display_name,
+                "capabilities": json.dumps(capabilities),
+                "api_key_hash": api_key_hash,
+                "cert_pem": cert_pem,
+                "created_at": ts,
+            },
         )
-        await db.commit()
 
 
 async def get_agent(agent_id: str) -> dict | None:
     """Fetch a single agent by ID."""
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM internal_agents WHERE agent_id = ?", (agent_id,)
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("SELECT * FROM internal_agents WHERE agent_id = :agent_id"),
+            {"agent_id": agent_id},
         )
-        row = await cursor.fetchone()
+        row = result.mappings().first()
         if row is None:
             return None
         return _agent_row_to_dict(row)
@@ -180,15 +202,13 @@ async def get_agent_by_key_hash(raw_api_key: str) -> dict | None:
     """
     import bcrypt
 
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM internal_agents WHERE is_active = 1"
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("SELECT * FROM internal_agents WHERE is_active = 1")
         )
-        rows = await cursor.fetchall()
+        rows = result.mappings().all()
         for row in rows:
             stored_hash = row["api_key_hash"]
-            # bcrypt.checkpw expects bytes
             if bcrypt.checkpw(raw_api_key.encode(), stored_hash.encode()):
                 return _agent_row_to_dict(row)
     return None
@@ -196,25 +216,21 @@ async def get_agent_by_key_hash(raw_api_key: str) -> dict | None:
 
 async def list_agents() -> list[dict]:
     """List all internal agents."""
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM internal_agents ORDER BY created_at DESC"
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("SELECT * FROM internal_agents ORDER BY created_at DESC")
         )
-        rows = await cursor.fetchall()
-        return [_agent_row_to_dict(row) for row in rows]
+        return [_agent_row_to_dict(row) for row in result.mappings().all()]
 
 
 async def deactivate_agent(agent_id: str) -> bool:
     """Soft-delete an agent by setting is_active = 0. Returns True if found."""
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "UPDATE internal_agents SET is_active = 0 WHERE agent_id = ?",
-            (agent_id,),
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("UPDATE internal_agents SET is_active = 0 WHERE agent_id = :agent_id"),
+            {"agent_id": agent_id},
         )
-        await db.commit()
-        return cursor.rowcount > 0
+        return result.rowcount > 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,33 +239,37 @@ async def deactivate_agent(agent_id: str) -> bool:
 
 async def get_config(key: str) -> str | None:
     """Get a config value by key."""
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT value FROM proxy_config WHERE key = ?", (key,)
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("SELECT value FROM proxy_config WHERE key = :key"),
+            {"key": key},
         )
-        row = await cursor.fetchone()
+        row = result.mappings().first()
         return row["value"] if row else None
 
 
 async def set_config(key: str, value: str) -> None:
-    """Set a config value (upsert)."""
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            """INSERT INTO proxy_config (key, value) VALUES (?, ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (key, value),
+    """Set a config value (upsert).
+
+    SQLite and PostgreSQL both support ON CONFLICT ... DO UPDATE with the
+    same syntax, so a raw text() upsert stays portable.
+    """
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                """INSERT INTO proxy_config (key, value) VALUES (:key, :value)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+            ),
+            {"key": key, "value": value},
         )
-        await db.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _agent_row_to_dict(row: aiosqlite.Row) -> dict:
-    """Convert an aiosqlite Row to a plain dict with parsed capabilities."""
+def _agent_row_to_dict(row: RowMapping) -> dict:
+    """Convert a RowMapping to a plain dict with parsed capabilities."""
     return {
         "agent_id": row["agent_id"],
         "display_name": row["display_name"],

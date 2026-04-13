@@ -217,15 +217,14 @@ class AgentManager:
         new_hash = hash_api_key(new_key)
 
         # Update hash in DB
-        import aiosqlite
+        from sqlalchemy import text
+
         from mcp_proxy.db import get_db
         async with get_db() as db:
-            db.row_factory = aiosqlite.Row
             await db.execute(
-                "UPDATE internal_agents SET api_key_hash = ? WHERE agent_id = ?",
-                (new_hash, agent_id),
+                text("UPDATE internal_agents SET api_key_hash = :api_key_hash WHERE agent_id = :agent_id"),
+                {"api_key_hash": new_hash, "agent_id": agent_id},
             )
-            await db.commit()
 
         logger.info("API key rotated for agent: %s", agent_id)
         return new_key

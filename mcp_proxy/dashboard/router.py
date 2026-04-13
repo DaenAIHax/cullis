@@ -1021,16 +1021,15 @@ async def agent_detail_page(request: Request, agent_id: str):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     # Fetch recent audit entries for this agent
+    from sqlalchemy import text
+
     from mcp_proxy.db import get_db
-    import aiosqlite
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM audit_log WHERE agent_id = ? ORDER BY timestamp DESC LIMIT 20",
-            (agent_id,),
+        result = await db.execute(
+            text("SELECT * FROM audit_log WHERE agent_id = :agent_id ORDER BY timestamp DESC LIMIT 20"),
+            {"agent_id": agent_id},
         )
-        rows = await cursor.fetchall()
-        audit_entries = [dict(row) for row in rows]
+        audit_entries = [dict(row) for row in result.mappings().all()]
 
     # Extra context for integration snippets
     settings = get_settings()
@@ -1074,14 +1073,13 @@ async def agent_rotate_key(request: Request, agent_id: str):
     raw_key = generate_api_key(base_name)
     key_hash = hash_api_key(raw_key)
 
-    import aiosqlite
+    from sqlalchemy import text
+
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
         await db.execute(
-            "UPDATE internal_agents SET api_key_hash = ? WHERE agent_id = ?",
-            (key_hash, agent_id),
+            text("UPDATE internal_agents SET api_key_hash = :api_key_hash WHERE agent_id = :agent_id"),
+            {"api_key_hash": key_hash, "agent_id": agent_id},
         )
-        await db.commit()
 
     await log_audit(
         agent_id=agent_id,
@@ -1092,13 +1090,11 @@ async def agent_rotate_key(request: Request, agent_id: str):
     # Re-fetch agent and audit
     agent = await get_agent(agent_id)
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM audit_log WHERE agent_id = ? ORDER BY timestamp DESC LIMIT 20",
-            (agent_id,),
+        result = await db.execute(
+            text("SELECT * FROM audit_log WHERE agent_id = :agent_id ORDER BY timestamp DESC LIMIT 20"),
+            {"agent_id": agent_id},
         )
-        rows = await cursor.fetchall()
-        audit_entries = [dict(row) for row in rows]
+        audit_entries = [dict(row) for row in result.mappings().all()]
 
     # Extra context for integration snippets (show real key after rotation)
     from mcp_proxy.config import get_settings
@@ -1194,8 +1190,9 @@ async def agent_delete(request: Request, agent_id: str):
     if not await verify_csrf(request, session):
         raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
-    from mcp_proxy.db import get_agent, get_db, log_audit, get_config
-    import aiosqlite
+    from sqlalchemy import text
+
+    from mcp_proxy.db import get_agent, get_config, get_db, log_audit
 
     agent = await get_agent(agent_id)
     if agent is None:
@@ -1203,11 +1200,15 @@ async def agent_delete(request: Request, agent_id: str):
 
     # Delete from local DB
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("DELETE FROM internal_agents WHERE agent_id = ?", (agent_id,))
+        await db.execute(
+            text("DELETE FROM internal_agents WHERE agent_id = :agent_id"),
+            {"agent_id": agent_id},
+        )
         # Also remove stored key from proxy_config if present
-        await db.execute("DELETE FROM proxy_config WHERE key = ?", (f"agent_key:{agent_id}",))
-        await db.commit()
+        await db.execute(
+            text("DELETE FROM proxy_config WHERE key = :key"),
+            {"key": f"agent_key:{agent_id}"},
+        )
 
     # Best-effort: unregister from broker
     broker_url = await get_config("broker_url")
@@ -1419,36 +1420,38 @@ async def audit_page(request: Request):
     per_page = 50
 
     # Build query
+    from sqlalchemy import text
+
     conditions: list[str] = []
-    params: list[str] = []
+    params: dict[str, object] = {}
     if agent_filter:
-        conditions.append("agent_id = ?")
-        params.append(agent_filter)
+        conditions.append("agent_id = :agent_id")
+        params["agent_id"] = agent_filter
     if action_filter:
-        conditions.append("action = ?")
-        params.append(action_filter)
+        conditions.append("action = :action")
+        params["action"] = action_filter
     if status_filter:
-        conditions.append("status = ?")
-        params.append(status_filter)
+        conditions.append("status = :status")
+        params["status"] = status_filter
 
     where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    import aiosqlite
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
         # Count total
-        cursor = await db.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where}", params)
-        row = await cursor.fetchone()
+        result = await db.execute(
+            text(f"SELECT COUNT(*) as cnt FROM audit_log{where}"), params,
+        )
+        row = result.mappings().first()
         total = row["cnt"] if row else 0
 
         # Fetch page
         offset = (page - 1) * per_page
-        cursor = await db.execute(
-            f"SELECT * FROM audit_log{where} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            [*params, per_page, offset],
+        page_params = {**params, "limit": per_page, "offset": offset}
+        result = await db.execute(
+            text(f"SELECT * FROM audit_log{where} ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"),
+            page_params,
         )
-        rows = await cursor.fetchall()
-        entries = [dict(r) for r in rows]
+        entries = [dict(r) for r in result.mappings().all()]
 
     # Distinct agents and actions for filter dropdowns
     agents = await list_agents()
@@ -1645,13 +1648,13 @@ async def vault_page(request: Request):
     vault_token = await get_config("vault_token") or ""
 
     # Count local keys (agent_key:* in proxy_config)
-    import aiosqlite
+    from sqlalchemy import text
+
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT COUNT(*) as cnt FROM proxy_config WHERE key LIKE 'agent_key:%'"
+        result = await db.execute(
+            text("SELECT COUNT(*) as cnt FROM proxy_config WHERE key LIKE 'agent_key:%'")
         )
-        row = await cursor.fetchone()
+        row = result.mappings().first()
         local_key_count = row["cnt"] if row else 0
 
     # Test vault status if configured
@@ -1803,14 +1806,14 @@ async def vault_migrate_keys(request: Request):
     import httpx
 
     # Find all agent keys stored in proxy_config (agent_key:* pattern)
-    import aiosqlite
+    from sqlalchemy import text
+
     migrated = 0
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT key, value FROM proxy_config WHERE key LIKE 'agent_key:%'"
+        result = await db.execute(
+            text("SELECT key, value FROM proxy_config WHERE key LIKE 'agent_key:%'")
         )
-        rows = await cursor.fetchall()
+        rows = result.mappings().all()
 
     for row in rows:
         agent_id = row["key"].replace("agent_key:", "", 1)
@@ -1867,17 +1870,15 @@ async def badge_audit(request: Request):
     if not session.logged_in:
         return HTMLResponse("")
 
+    from sqlalchemy import text
+
     from mcp_proxy.db import get_db
-    import aiosqlite
-    import time as _time
-    one_hour_ago = _time.time() - 3600
 
     async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT COUNT(*) as cnt FROM audit_log WHERE timestamp > datetime('now', '-1 hour')"
+        result = await db.execute(
+            text("SELECT COUNT(*) as cnt FROM audit_log WHERE timestamp > datetime('now', '-1 hour')")
         )
-        row = await cursor.fetchone()
+        row = result.mappings().first()
         count = row["cnt"] if row else 0
 
     if count:

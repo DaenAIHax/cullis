@@ -10,13 +10,13 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-import aiosqlite
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from mcp_proxy.config import get_settings, validate_config
-from mcp_proxy.db import init_db, get_db
+from mcp_proxy.db import dispose_db, get_db, init_db
 from mcp_proxy.logging_setup import configure_json_logging
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +103,7 @@ async def lifespan(app: FastAPI):
         await app.state.broker_bridge.shutdown()
     if _jwks_client:
         await _jwks_client.close()
+    await dispose_db()
     _log.info("MCP Proxy shutdown complete")
 
 
@@ -299,8 +300,7 @@ async def readyz():
     # Database writable
     try:
         async with get_db() as db:
-            db.row_factory = aiosqlite.Row
-            await db.execute("SELECT 1")
+            await db.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as exc:
         checks["database"] = f"error: {exc}"
