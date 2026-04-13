@@ -17,8 +17,9 @@
 #
 #   ./deploy_demo.sh status   Show container state.
 #   ./deploy_demo.sh logs     Follow the broker + proxy logs.
-#   ./deploy_demo.sh down     Stop everything (volumes preserved by default).
-#   ./deploy_demo.sh nuke     down + remove volumes + clear demo state.
+#   ./deploy_demo.sh down     Stop everything AND remove volumes (demo is
+#                             ephemeral, keeps host clean for other stacks).
+#   ./deploy_demo.sh nuke     down + clear demo state file + fixtures.
 #
 # Endpoints exposed on the host:
 #   broker dashboard       http://localhost:8800/dashboard
@@ -39,6 +40,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_DIR="$SCRIPT_DIR/scripts/demo"
 COMPOSE_FILE="$DEMO_DIR/docker-compose.demo.yml"
+
+# Distinct compose project name isolates the demo stack from the broker
+# (deploy_broker.sh → cullis-broker) and the proxy (deploy_proxy.sh →
+# cullis-proxy). Without this, a fresh user running demo then broker on the
+# same host collides on docker volumes like postgres_data (see shake-out
+# finding P0-03): the broker inherits the demo's stale postgres password and
+# crashes with an opaque asyncpg InvalidPasswordError. Exporting the variable
+# also makes ad-hoc `docker compose -f ...` calls pick up the same project.
+export COMPOSE_PROJECT_NAME="cullis-demo"
 PROJECT_NAME="cullis-demo"
 ORCHESTRATOR="$DEMO_DIR/orchestrate.py"
 
@@ -257,11 +267,14 @@ cmd_down() {
     require_prereqs
     step "Stopping checker daemon"
     stop_checker
-    step "Stopping containers (volumes preserved)"
-    compose down
-    ok "stack stopped"
-    printf "  ${GRAY}volumes preserved — re-run './deploy_demo.sh up' to resume${RESET}\n"
-    printf "  ${GRAY}use './deploy_demo.sh nuke' to remove volumes and demo state${RESET}\n"
+    # Demo is intentionally ephemeral: we remove the postgres/redis volumes on
+    # `down` so a subsequent broker deploy on the same host can't inherit a
+    # stale password from this stack (shake-out P0-03). For stop-without-wipe,
+    # use `docker compose --project-name cullis-demo stop` directly.
+    step "Stopping containers + removing volumes (demo is ephemeral)"
+    compose down -v --remove-orphans
+    ok "stack stopped and volumes removed"
+    printf "  ${GRAY}demo state persists in scripts/demo/.state.json; use 'nuke' to clear it too${RESET}\n"
 }
 
 cmd_nuke() {
@@ -287,8 +300,8 @@ Commands:
   info         Print dashboard URLs + bootstrap credentials
   status       Show container state
   logs         Follow broker + proxy logs (Ctrl-C to stop)
-  down         Stop containers + checker daemon, keep volumes
-  nuke         down + remove volumes + clear demo state
+  down         Stop containers + checker daemon + remove volumes (ephemeral)
+  nuke         down + clear demo state + fixtures
   help         Show this help
 
 Quick start:

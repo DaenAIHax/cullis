@@ -23,6 +23,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Distinct compose project name isolates the proxy stack from the broker
+# (deploy_broker.sh → cullis-broker) and the demo (deploy_demo.sh → cullis-demo).
+# Otherwise fresh clones named `cullis` would share docker volumes across
+# stacks and a fresh user would hit opaque volume/password collisions
+# (shake-out P0-03).
+export COMPOSE_PROJECT_NAME="cullis-proxy"
+
 GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'
 BOLD=$'\033[1m'; GRAY=$'\033[90m'; RESET=$'\033[0m'
 ok()   { echo -e "  ${GREEN}✓${RESET}  $1"; }

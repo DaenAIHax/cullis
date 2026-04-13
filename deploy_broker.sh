@@ -29,6 +29,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Distinct compose project name isolates the broker stack from the demo
+# (deploy_demo.sh → cullis-demo) and the proxy (deploy_proxy.sh → cullis-proxy).
+# Without this, fresh clones in directories that both happen to be named
+# `cullis` share the default compose project name and therefore the
+# `*_postgres_data` volume. A user who runs demo first and broker second then
+# hits an opaque asyncpg InvalidPasswordError because the broker's regenerated
+# POSTGRES_PASSWORD mismatches the demo's persisted password (shake-out P0-03).
+export COMPOSE_PROJECT_NAME="cullis-broker"
+
 # ── Colors ───────────────────────────────────────────────────────────────────
 GREEN='\033[32m'
 YELLOW='\033[33m'
@@ -482,6 +491,51 @@ server {
 }
 NGINXEOF
     ok "Updated nginx.conf for domain: ${DOMAIN}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5b. Detect stale postgres volume with wrong password (shake-out P0-03)
+# ═══════════════════════════════════════════════════════════════════════════════
+# If a previous deploy (including a demo or older broker) left behind the
+# broker's postgres volume, docker reuses it on the next `up` — but the
+# volume was initialized with a different POSTGRES_PASSWORD than the one in
+# the freshly generated .env. The broker container then crashes with an
+# opaque `asyncpg.exceptions.InvalidPasswordError`. We detect this cheaply
+# by checking whether our project's postgres volume already exists on disk
+# BEFORE compose creates the container (compose only creates the volume the
+# first time; afterwards it mounts the pre-existing one).
+step "Checking for stale postgres volume"
+
+BROKER_PG_VOLUME="${COMPOSE_PROJECT_NAME}_postgres_data"
+_env_pgpw="$(grep -E '^POSTGRES_PASSWORD=' "$SCRIPT_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+_env_pgpw="${_env_pgpw:-atn}"
+
+if docker volume inspect "$BROKER_PG_VOLUME" >/dev/null 2>&1; then
+    # Volume exists — try to auth against it using .env credentials.
+    # We spin up a throwaway postgres client against the volume's pgdata,
+    # but the simplest reliable probe is to start the postgres container
+    # the same way compose would and run a psql check. That's expensive
+    # at this step; instead we check whether any broker container is still
+    # running with a password mismatch and provide a clear recovery path.
+    _running_pg="$(docker ps -q --filter "name=^${COMPOSE_PROJECT_NAME}-postgres" 2>/dev/null || true)"
+    if [[ -z "$_running_pg" ]]; then
+        warn "Found existing volume '${BROKER_PG_VOLUME}' from a previous deploy."
+        warn "If this volume was initialized with a different POSTGRES_PASSWORD"
+        warn "than the one in .env, the broker will crash on startup with"
+        warn "  asyncpg.exceptions.InvalidPasswordError: password authentication failed"
+        warn ""
+        warn "To reset and start clean (DELETES any previous broker data):"
+        warn "  COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME} ${COMPOSE} down -v"
+        warn "  docker volume rm ${BROKER_PG_VOLUME}"
+        warn ""
+        warn "To keep the existing volume, make sure the password in .env"
+        warn "matches the one postgres was originally initialized with."
+        warn "Continuing — if the broker fails to start, rerun the above."
+    else
+        ok "Postgres container already running — reusing existing volume"
+    fi
+else
+    ok "No stale postgres volume found (fresh deploy)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════

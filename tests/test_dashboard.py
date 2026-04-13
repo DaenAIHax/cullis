@@ -219,6 +219,99 @@ async def test_onboard_duplicate_rejected(client: AsyncClient):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Admin — onboard CA generator (shake-out P1-08)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def test_onboard_generate_ca_returns_valid_pair(client: AsyncClient):
+    """Endpoint returns a parseable self-signed CA cert + matching private key."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    c, csrf = await _admin_ctx(client)
+    resp = await client.post(
+        "/dashboard/orgs/onboard/generate-ca",
+        data={"csrf_token": csrf, "display_name": "Acme Test CA"},
+        cookies=c,
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert "cert_pem" in payload and "key_pem" in payload
+    cert = x509.load_pem_x509_certificate(payload["cert_pem"].encode())
+    key = serialization.load_pem_private_key(payload["key_pem"].encode(), password=None)
+    # Self-signed
+    assert cert.issuer == cert.subject
+    # ECDSA-P256 per spec
+    assert isinstance(key, ec.EllipticCurvePrivateKey)
+    assert isinstance(key.curve, ec.SECP256R1)
+    # BasicConstraints: CA=true
+    bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
+    assert bc.value.ca is True
+    # Display name is in the CN
+    cn = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+    assert "Acme Test CA" in cn
+
+
+async def test_onboard_generate_ca_requires_admin(client: AsyncClient):
+    """Org-role users must not be able to generate CAs."""
+    from tests.cert_factory import get_org_ca_pem
+    c, csrf = await _admin_ctx(client)
+    ca_pem = get_org_ca_pem("gen-ca-org-nonadmin")
+    await client.post("/dashboard/orgs/onboard", data={
+        "csrf_token": csrf,
+        "org_id": "gen-ca-org-nonadmin", "display_name": "NonAdminOrg",
+        "secret": "secret", "contact_email": "", "webhook_url": "",
+        "ca_certificate": ca_pem, "action": "approve",
+    }, cookies=c)
+    org_c, org_csrf = await _org_ctx(client, "gen-ca-org-nonadmin", "secret")
+    resp = await client.post(
+        "/dashboard/orgs/onboard/generate-ca",
+        data={"csrf_token": org_csrf, "display_name": "Sneaky"},
+        cookies=org_c,
+    )
+    assert resp.status_code == 403
+
+
+async def test_onboard_generate_ca_requires_csrf(client: AsyncClient):
+    c = await _admin_cookies(client)
+    resp = await client.post(
+        "/dashboard/orgs/onboard/generate-ca",
+        data={"display_name": "NoCsrf"},  # no csrf_token
+        cookies=c,
+    )
+    assert resp.status_code == 403
+
+
+async def test_onboard_generate_ca_unauthenticated(client: AsyncClient):
+    resp = await client.post(
+        "/dashboard/orgs/onboard/generate-ca",
+        data={"display_name": "Anon"},
+    )
+    # Unauthenticated: dashboard redirect path is intercepted and turned into 401 JSON.
+    assert resp.status_code in (401, 303, 307)
+
+
+async def test_onboard_generated_ca_accepted_by_onboard_form(client: AsyncClient):
+    """End-to-end: generate a CA, then use it to onboard an org in one flow."""
+    c, csrf = await _admin_ctx(client)
+    gen = await client.post(
+        "/dashboard/orgs/onboard/generate-ca",
+        data={"csrf_token": csrf, "display_name": "E2E Org"},
+        cookies=c,
+    )
+    assert gen.status_code == 200
+    cert_pem = gen.json()["cert_pem"]
+    resp = await client.post("/dashboard/orgs/onboard", data={
+        "csrf_token": csrf,
+        "org_id": "e2e-generated-ca-org", "display_name": "E2E Org",
+        "secret": "secret", "contact_email": "", "webhook_url": "",
+        "ca_certificate": cert_pem, "action": "approve",
+    }, cookies=c)
+    assert resp.status_code == 200
+    assert "registered and approved" in resp.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Admin — register agent
 # ─────────────────────────────────────────────────────────────────────────────
 
