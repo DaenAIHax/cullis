@@ -1483,6 +1483,99 @@ async def dashboard_sse(request: Request):
 # Onboard Organization
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.post("/orgs/onboard/generate-ca")
+async def org_onboard_generate_ca(request: Request):
+    """Generate a self-signed ECDSA-P256 CA for an org being onboarded.
+
+    Shake-out P1-08: a user without openssl knowledge couldn't paste a CA PEM
+    to create their first test org. This endpoint returns a fresh keypair
+    (admin-only, CSRF-protected); the UI shows the private key in a modal so
+    the user can copy or download it. The key is NOT persisted server-side —
+    once the modal is dismissed the private key is unrecoverable.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        # JSON fallback for the HTMX call
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if not session.is_admin:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "admin only"}, status_code=403)
+    if not await verify_csrf(request, session):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "invalid CSRF token"}, status_code=403)
+
+    # Lightweight rate limit per admin session — cheap defense against an
+    # accidental autoclicker. 20 generations per 60s is ample for real use.
+    # Endpoint is already gated by admin auth + CSRF.
+    try:
+        from fastapi import HTTPException
+        from app.rate_limit.limiter import SlidingWindowLimiter
+        global _onboard_ca_limiter  # type: ignore[name-defined]
+        if "_onboard_ca_limiter" not in globals():
+            _lim = SlidingWindowLimiter()
+            _lim.register("onboard-generate-ca", window_seconds=60, max_requests=20)
+            globals()["_onboard_ca_limiter"] = _lim
+        await globals()["_onboard_ca_limiter"].check(
+            subject=session.org_id or "admin", bucket="onboard-generate-ca",
+        )
+    except HTTPException as _e:
+        if _e.status_code == 429:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "rate limited"}, status_code=429)
+        raise
+    except Exception:
+        # Limiter unavailable (shouldn't happen, in-memory fallback exists).
+        # Fail open — we've already checked auth + CSRF.
+        pass
+
+    form = await request.form()
+    display_name = (form.get("display_name") or "").strip() or "Cullis Test Org"
+    # Truncate over-long CN — x509 CN technically allows 64 chars.
+    display_name = display_name[:64]
+
+    import datetime as _dt
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.x509.oid import NameOID as _NameOID
+
+    ca_key = _ec.generate_private_key(_ec.SECP256R1())
+    now = _dt.datetime.now(_dt.timezone.utc)
+    subject = _x509.Name([
+        _x509.NameAttribute(_NameOID.COMMON_NAME, f"{display_name} CA"),
+        _x509.NameAttribute(_NameOID.ORGANIZATION_NAME, display_name),
+    ])
+    ca_cert = (
+        _x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(ca_key.public_key())
+        .serial_number(_x509.random_serial_number())
+        .not_valid_before(now - _dt.timedelta(minutes=5))  # tolerate minor clock skew
+        .not_valid_after(now + _dt.timedelta(days=365 * 2))
+        .add_extension(_x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            _x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, _hashes.SHA256())
+    )
+    key_pem = ca_key.private_bytes(
+        encoding=_ser.Encoding.PEM,
+        format=_ser.PrivateFormat.PKCS8,
+        encryption_algorithm=_ser.NoEncryption(),
+    ).decode()
+    cert_pem = ca_cert.public_bytes(_ser.Encoding.PEM).decode()
+
+    _log.info(
+        "onboard.generate_ca role=%s display_name=%s serial=%d",
+        session.role, display_name, ca_cert.serial_number,
+    )
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"cert_pem": cert_pem, "key_pem": key_pem})
+
+
 @router.get("/orgs/onboard", response_class=HTMLResponse)
 async def org_onboard_form(request: Request):
     session = require_login(request)
