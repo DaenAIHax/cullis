@@ -119,11 +119,12 @@ else
         echo ""
         echo "  Detected LAN IP: ${_DETECTED_IP}"
         echo "  Agents on other machines need BROKER_PUBLIC_URL to match their BROKER_URL."
+        echo "  If you're just trying Cullis on this machine, press Enter to accept option 1."
         echo ""
-        echo "  1) https://localhost:8443  (local only — agents on this machine)"
+        echo "  1) https://localhost:8443  (local only — agents on this machine) [default]"
         echo "  2) http://${_DETECTED_IP}:8000   (LAN — agents on other VMs, no TLS)"
         echo "  3) https://${_DETECTED_IP}:8443  (LAN — agents on other VMs, self-signed TLS)"
-        read -rp "  Choose BROKER_PUBLIC_URL [1/2/3]: " _url_choice
+        read -rp "  Choose BROKER_PUBLIC_URL [1/2/3, default 1]: " _url_choice
         case "$_url_choice" in
             2) BROKER_URL="http://${_DETECTED_IP}:8000" ;;
             3) BROKER_URL="https://${_DETECTED_IP}:8443" ;;

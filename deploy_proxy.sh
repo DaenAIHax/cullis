@@ -41,6 +41,32 @@ else
 fi
 
 # ── Parse args ──────────────────────────────────────────────────────────────
+print_help() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Deploys the MCP Proxy for one organization. Combines with --down / --rebuild
+for lifecycle management, and --standalone when the proxy runs on a different
+host than the broker.
+
+Options:
+  (no flags)                  Dev mode, same host as the broker (default)
+  --prod                      Production: fail-fast on insecure defaults,
+                              requires proxy.env pre-provisioned
+  --standalone                Proxy runs on a different host than the broker
+                              (reads BROKER_URL from proxy.env)
+  --down                      Stop and remove containers
+  --rebuild                   Rebuild images and restart
+  --help, -h                  Show this help and exit
+
+Examples:
+  ./deploy_proxy.sh                          # dev, same host as broker
+  ./deploy_proxy.sh --standalone             # dev, proxy on its own host
+  ./deploy_proxy.sh --prod --standalone      # prod, proxy on its own host
+  ./deploy_proxy.sh --down                   # stop + remove containers
+EOF
+}
+
 ACTION="up"
 MODE="development"
 STANDALONE=0
@@ -50,8 +76,7 @@ for arg in "$@"; do
         --rebuild)    ACTION="rebuild" ;;
         --prod)       MODE="production" ;;
         --standalone) STANDALONE=1 ;;
-        --help|-h)
-            sed -n '2,20p' "$0"; exit 0 ;;
+        --help|-h)    print_help; exit 0 ;;
         *) die "Unknown argument: $arg (use --help)" ;;
     esac
 done
