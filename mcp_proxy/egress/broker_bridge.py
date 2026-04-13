@@ -204,12 +204,14 @@ class BrokerBridge:
         agent_id: str,
         capabilities: list[str] | None = None,
         q: str | None = None,
+        org_id: str | None = None,
+        pattern: str | None = None,
     ) -> list[dict]:
         """Discover remote agents via broker."""
         client = await self.get_client(agent_id)
         try:
             agents = await asyncio.to_thread(
-                client.discover, capabilities, None, None, q,
+                client.discover, capabilities, org_id, pattern, q,
             )
             return [_agent_info_to_dict(a) for a in agents]
         except Exception as exc:
@@ -217,7 +219,7 @@ class BrokerBridge:
                 logger.warning("Auth error for %s, re-authenticating: %s", agent_id, exc)
                 client = await self._evict_and_retry(agent_id)
                 agents = await asyncio.to_thread(
-                    client.discover, capabilities, None, None, q,
+                    client.discover, capabilities, org_id, pattern, q,
                 )
                 return [_agent_info_to_dict(a) for a in agents]
             raise

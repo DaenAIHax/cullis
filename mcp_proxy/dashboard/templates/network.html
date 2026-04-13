@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Network{% endblock %}
+{% block header_title %}Network Directory{% endblock %}
+{% block content %}
+<div class="max-w-6xl">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h2 class="text-lg font-semibold text-white uppercase tracking-wider">Discover Agents</h2>
+            <p class="text-xs text-gray-600 mt-0.5">
+                Search the trust network via
+                {% if broker_url %}
+                <code class="font-mono text-gray-500">{{ broker_url }}</code>
+                {% else %}
+                <span class="text-amber-500">broker not configured</span>
+                {% endif %}
+            </p>
+        </div>
+    </div>
+
+    {% if error %}
+    <div class="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">{{ error }}</div>
+    {% endif %}
+
+    <!-- Search form -->
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-5 card-glow backdrop-blur-sm mb-6">
+        <form method="get" action="/proxy/network" class="space-y-4">
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">Free text</label>
+                    <input type="text" name="q" value="{{ q }}"
+                           placeholder="name, description, agent_id, org_id…"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white font-mono placeholder:text-gray-700 focus:border-accent-400/50 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">Capabilities (AND, CSV)</label>
+                    <input type="text" name="capabilities" value="{{ capabilities }}"
+                           placeholder="order.read, invoice.write"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white font-mono placeholder:text-gray-700 focus:border-accent-400/50 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">agent_id glob</label>
+                    <input type="text" name="pattern" value="{{ pattern }}"
+                           placeholder="italmetal::*"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white font-mono placeholder:text-gray-700 focus:border-accent-400/50 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">Organization</label>
+                    <input type="text" name="org_id" value="{{ org_filter }}"
+                           placeholder="acme-corp"
+                           class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white font-mono placeholder:text-gray-700 focus:border-accent-400/50 focus:outline-none">
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-end justify-between gap-4 pt-2">
+                <div class="flex flex-wrap items-center gap-4">
+                    <div>
+                        <label class="block text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">Querier agent</label>
+                        <select name="querier"
+                                class="bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white font-mono focus:border-accent-400/50 focus:outline-none min-w-[14rem]">
+                            {% if not internal_agents %}
+                            <option value="">— no internal agents —</option>
+                            {% endif %}
+                            {% for a in internal_agents %}
+                            <option value="{{ a.agent_id }}" {% if a.agent_id == querier %}selected{% endif %}>
+                                {{ a.agent_id }}{% if not a.is_active %} (inactive){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <label class="flex items-center gap-2 text-xs text-gray-400 pb-2.5">
+                        <input type="checkbox" name="include_own_org" {% if include_own_org %}checked{% endif %}
+                               class="w-3.5 h-3.5 rounded border-gray-700 bg-surface-950 text-accent-400 focus:ring-accent-400/30 focus:ring-offset-0">
+                        Include own org ({{ own_org_id or '—' }})
+                    </label>
+                </div>
+                <button type="submit"
+                        class="px-4 py-2 text-xs font-medium uppercase tracking-wider bg-accent-400/10 border border-accent-400/40 text-accent-400 rounded hover:bg-accent-400/20 transition-colors">
+                    <svg class="w-3.5 h-3.5 inline mr-1.5 -mt-px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    Search
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Results -->
+    {% if submitted and not error %}
+    <div class="mb-3 flex items-center justify-between">
+        <h3 class="text-xs text-gray-500 uppercase tracking-wider">
+            {{ agents | length }} result{{ 's' if agents | length != 1 else '' }}
+        </h3>
+    </div>
+
+    {% if agents %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {% for a in agents %}
+        <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-5 card-glow backdrop-blur-sm">
+            <div class="flex items-start justify-between mb-2 gap-3">
+                <div class="min-w-0">
+                    <h3 class="text-sm font-mono font-medium text-white truncate">{{ a.display_name or a.agent_id }}</h3>
+                    <p class="text-[10px] text-gray-600 uppercase tracking-wider mt-0.5">{{ a.org_id }}</p>
+                </div>
+                {% if a.org_id == own_org_id %}
+                <span class="flex-shrink-0 px-2 py-0.5 rounded text-[10px] font-medium bg-accent-400/10 text-accent-400 uppercase tracking-wider">Own org</span>
+                {% endif %}
+            </div>
+
+            {% if a.description %}
+            <p class="text-xs text-gray-500 mb-3">{{ a.description }}</p>
+            {% endif %}
+
+            {% if a.agent_uri %}
+            <div class="mb-3">
+                <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">SPIFFE URI</p>
+                <div class="flex items-center gap-2">
+                    <code class="flex-1 min-w-0 bg-surface-950 border border-gray-800/60 rounded px-2 py-1.5 text-[11px] font-mono text-accent-400 truncate">{{ a.agent_uri }}</code>
+                    <button type="button" onclick="copyToClipboard('{{ a.agent_uri }}')"
+                            class="flex-shrink-0 px-2 py-1.5 border border-gray-700 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                            title="Copy SPIFFE URI">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+                    </button>
+                </div>
+            </div>
+            {% endif %}
+
+            <div>
+                <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">agent_id</p>
+                <code class="block bg-surface-950 border border-gray-800/60 rounded px-2 py-1.5 text-[11px] font-mono text-gray-400 truncate">{{ a.agent_id }}</code>
+            </div>
+
+            {% if a.capabilities %}
+            <div class="mt-3">
+                <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Capabilities</p>
+                <div class="flex flex-wrap gap-1">
+                    {% for cap in a.capabilities %}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-surface-950 text-gray-400 border border-gray-800/50">{{ cap }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-12 text-center backdrop-blur-sm">
+        <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <p class="text-sm text-gray-500">No agents matched these filters.</p>
+        <p class="text-xs text-gray-600 mt-1">Try relaxing the filters, or toggle <span class="text-gray-400">Include own org</span>.</p>
+    </div>
+    {% endif %}
+    {% elif not submitted %}
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-12 text-center backdrop-blur-sm">
+        <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <p class="text-sm text-gray-500">Search the network by capability, SPIFFE pattern, organization, or free text.</p>
+        <p class="text-xs text-gray-600 mt-2 max-w-md mx-auto">Results come from the broker registry. Queries run under a selected internal agent identity — peers visible are those your org is bound to.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

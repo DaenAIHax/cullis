@@ -18,6 +18,7 @@ class AgentInfo:
     capabilities: list[str] = field(default_factory=list)
     description: str | None = None
     status: str | None = None
+    agent_uri: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentInfo:
@@ -28,6 +29,7 @@ class AgentInfo:
             capabilities=d.get("capabilities", []),
             description=d.get("description"),
             status=d.get("status"),
+            agent_uri=d.get("agent_uri"),
         )
 
 

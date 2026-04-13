@@ -8,6 +8,7 @@ Routes:
   /proxy/register        — One-shot: set the admin password (first run only)
   /proxy/setup           — Broker uplink wizard (URL + invite token, org details, CA, Vault)
   /proxy/agents          — Internal agent management
+  /proxy/network         — Network directory (discover remote agents via broker)
   /proxy/tools           — Tool registry viewer
   /proxy/policies        — Policy editor
   /proxy/audit           — Audit log viewer
@@ -1251,6 +1252,80 @@ async def tools_page(request: Request):
         request, session,
         active="tools",
         tools=tools,
+    ))
+
+
+@router.get("/network", response_class=HTMLResponse)
+async def network_page(request: Request):
+    """Network directory — discover agents across the trust network via broker."""
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+
+    from mcp_proxy.db import list_agents, get_config
+
+    q = (request.query_params.get("q") or "").strip() or None
+    pattern = (request.query_params.get("pattern") or "").strip() or None
+    org_filter = (request.query_params.get("org_id") or "").strip() or None
+    capabilities_raw = (request.query_params.get("capabilities") or "").strip()
+    capabilities = [c.strip() for c in capabilities_raw.split(",") if c.strip()] or None
+    include_own_org = request.query_params.get("include_own_org") == "on"
+    querier = (request.query_params.get("querier") or "").strip() or None
+    submitted = any(k in request.query_params for k in ("q", "pattern", "org_id", "capabilities"))
+
+    internal_agents = await list_agents()
+    own_org_id = await get_config("org_id") or ""
+    broker_url = await get_config("broker_url") or ""
+
+    bridge = getattr(request.app.state, "broker_bridge", None)
+
+    # Default querier: first active internal agent.
+    if not querier and internal_agents:
+        querier = next(
+            (a["agent_id"] for a in internal_agents if a.get("is_active", True)),
+            internal_agents[0]["agent_id"],
+        )
+
+    agents: list[dict] = []
+    error: str | None = None
+
+    if submitted:
+        if bridge is None:
+            error = "Broker bridge not initialized — complete the Setup wizard first."
+        elif not internal_agents:
+            error = "Create an internal agent first — discovery queries go through an agent identity."
+        elif not querier:
+            error = "Select a querier agent."
+        else:
+            try:
+                agents = await bridge.discover_agents(
+                    querier,
+                    capabilities=capabilities,
+                    q=q,
+                    org_id=org_filter,
+                    pattern=pattern,
+                )
+                if not include_own_org and own_org_id:
+                    agents = [a for a in agents if a.get("org_id") != own_org_id]
+            except Exception as exc:
+                _log.warning("Network directory query failed: %s", exc)
+                error = f"Discovery failed: {exc}"
+
+    return templates.TemplateResponse("network.html", _ctx(
+        request, session,
+        active="network",
+        internal_agents=internal_agents,
+        querier=querier,
+        q=q or "",
+        pattern=pattern or "",
+        org_filter=org_filter or "",
+        capabilities=capabilities_raw,
+        include_own_org=include_own_org,
+        submitted=submitted,
+        agents=agents,
+        own_org_id=own_org_id,
+        broker_url=broker_url,
+        error=error,
     ))
 
 
