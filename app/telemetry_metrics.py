@@ -65,6 +65,28 @@ SESSION_SWEEPER_CLOSED_COUNTER = meter.create_counter(
     unit="1",
 )
 
+# ── M2 Heartbeat + Resume ────────────────────────────────────────────────────
+WS_PING_SENT_COUNTER = meter.create_counter(
+    name="atn.ws.ping_sent",
+    description="Server-initiated WebSocket pings",
+    unit="1",
+)
+WS_PONG_TIMEOUT_COUNTER = meter.create_counter(
+    name="atn.ws.pong_timeout",
+    description="WebSocket connections closed due to pong timeout",
+    unit="1",
+)
+WS_RESUME_COUNTER = meter.create_counter(
+    name="atn.ws.resume",
+    description="Session resume requests received via WS",
+    unit="1",
+)
+WS_RESUME_MESSAGES_DELIVERED_COUNTER = meter.create_counter(
+    name="atn.ws.resume_messages_delivered",
+    description="Messages replayed on resume",
+    unit="1",
+)
+
 # ── Histograms ────────────────────────────────────────────────────────────────
 AUTH_DURATION_HISTOGRAM = meter.create_histogram(
     name="atn.auth.duration",

@@ -41,6 +41,8 @@ from app.telemetry import tracer
 from app.telemetry_metrics import (
     SESSION_CREATED_COUNTER, SESSION_DENIED_COUNTER,
     SESSION_CLOSED_COUNTER, SESSION_CAP_REJECTED_COUNTER,
+    WS_PING_SENT_COUNTER, WS_PONG_TIMEOUT_COUNTER,
+    WS_RESUME_COUNTER, WS_RESUME_MESSAGES_DELIVERED_COUNTER,
 )
 from app.injection.detector import injection_detector
 from app.registry.store import get_agent_by_id as _get_agent_by_id
@@ -840,6 +842,94 @@ async def get_rfq_status(
 _WS_AUTH_TIMEOUT = 10  # seconds — max time to wait for initial auth message
 
 
+def _ws_env_int(name: str, default: int) -> int:
+    import os as _os
+    raw = _os.environ.get(name)
+    try:
+        return int(raw) if raw is not None else default
+    except ValueError:
+        return default
+
+
+# M2 heartbeat config — all overridable via env for tuning / tests
+_WS_PING_INTERVAL_SECONDS = _ws_env_int("WS_PING_INTERVAL_SECONDS", 30)
+_WS_PONG_TIMEOUT_SECONDS = _ws_env_int("WS_PONG_TIMEOUT_SECONDS", 10)
+_WS_RECV_POLL_SECONDS = _ws_env_int("WS_RECV_POLL_SECONDS", 5)
+_WS_RESUME_MAX_MESSAGES = _ws_env_int("WS_RESUME_MAX_MESSAGES", 500)
+
+
+async def _handle_ws_resume(
+    websocket: WebSocket,
+    msg: dict,
+    agent_id: str,
+    db: AsyncSession,
+    store: SessionStore,
+) -> None:
+    """Handle ``{"type":"resume","session_id":..,"last_seq":N}`` (M2.2).
+
+    Replays messages for the given session with ``seq > last_seq``,
+    excluding those sent by the resuming agent. Fetches from the DB
+    directly — the in-memory store is authoritative for state but the
+    DB is authoritative for message bytes (survives restarts).
+    """
+    session_id = msg.get("session_id")
+    if not isinstance(session_id, str) or not _UUID_RE.match(session_id):
+        await websocket.send_json({
+            "type": "resume_error",
+            "detail": "Invalid or missing session_id",
+        })
+        return
+
+    try:
+        last_seq = int(msg.get("last_seq", -1))
+    except (TypeError, ValueError):
+        await websocket.send_json({
+            "type": "resume_error",
+            "session_id": session_id,
+            "detail": "last_seq must be integer",
+        })
+        return
+
+    session = store.get(session_id)
+    if session is None:
+        await websocket.send_json({
+            "type": "resume_error",
+            "session_id": session_id,
+            "detail": "Session not found",
+        })
+        return
+    if agent_id not in (session.initiator_agent_id, session.target_agent_id):
+        await websocket.send_json({
+            "type": "resume_error",
+            "session_id": session_id,
+            "detail": "Not a participant",
+        })
+        return
+
+    from app.broker.persistence import fetch_messages_for_resume
+    replay = await fetch_messages_for_resume(
+        db, session_id, agent_id, last_seq, limit=_WS_RESUME_MAX_MESSAGES,
+    )
+
+    WS_RESUME_COUNTER.add(1, {"org": session.initiator_org_id})
+    WS_RESUME_MESSAGES_DELIVERED_COUNTER.add(len(replay), {"org": session.initiator_org_id})
+    session.touch()
+
+    await websocket.send_json({
+        "type": "resume_ok",
+        "session_id": session_id,
+        "last_seq_server": session._next_seq - 1,
+        "delivered": len(replay),
+    })
+    for m in replay:
+        await websocket.send_json({
+            "type": "new_message",
+            "session_id": session_id,
+            "message": m,
+            "replayed": True,
+        })
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     """
@@ -962,30 +1052,74 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
             return
         await websocket.send_json({"type": "auth_ok", "agent_id": agent_id})
 
-        # Step 4: keepalive — server pushes; client can send ping
-        _WS_IDLE_TIMEOUT = 300   # 5 minutes
+        # Step 4: keepalive loop with M2 server-initiated heartbeat.
+        _WS_IDLE_TIMEOUT = 300   # 5 minutes — upper bound on total client inactivity
         _WS_MSG_LIMIT = 30       # max messages per window
         _WS_MSG_WINDOW = 60      # window in seconds
         _msg_times: list[float] = []
 
+        # Heartbeat state: last time we heard anything from the client
+        # (including pongs), and whether we are currently awaiting a pong.
+        _last_client_activity = _time.monotonic()
+        _awaiting_pong_since: float | None = None
+
         while True:
-            # Check token expiry
+            now_mono = _time.monotonic()
+
+            # Token expiry check (wall-clock)
             if _time.time() > agent.exp:
                 _log.info("Token expired during WebSocket session for agent %s", agent_id)
                 await websocket.send_json({"type": "auth_error", "detail": "Token expired"})
                 await websocket.close(code=1000, reason="Token expired")
                 break
 
-            # Receive with idle timeout
-            try:
-                msg = await asyncio.wait_for(
-                    websocket.receive_json(),
-                    timeout=_WS_IDLE_TIMEOUT,
+            # M2.1 — if we pinged earlier and no pong within grace, declare dead
+            if (
+                _awaiting_pong_since is not None
+                and now_mono - _awaiting_pong_since >= _WS_PONG_TIMEOUT_SECONDS
+            ):
+                WS_PONG_TIMEOUT_COUNTER.add(1, {"org": agent_org or ""})
+                _log.info(
+                    "WebSocket pong timeout for agent %s (%.1fs since ping)",
+                    agent_id, now_mono - _awaiting_pong_since,
                 )
-            except asyncio.TimeoutError:
+                await websocket.close(code=1001, reason="Pong timeout")
+                break
+
+            # M2.1 — proactively send a ping when the connection has been
+            # silent for PING_INTERVAL (and we are not already waiting on one)
+            if (
+                _awaiting_pong_since is None
+                and now_mono - _last_client_activity >= _WS_PING_INTERVAL_SECONDS
+            ):
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+                WS_PING_SENT_COUNTER.add(1, {"org": agent_org or ""})
+                _awaiting_pong_since = now_mono
+
+            # Overall idle guard: if the client has been totally silent for
+            # IDLE_TIMEOUT (no pings, no pongs, no messages), close.
+            if now_mono - _last_client_activity >= _WS_IDLE_TIMEOUT:
                 _log.info("WebSocket idle timeout for agent %s", agent_id)
                 await websocket.close(code=1000, reason="Idle timeout")
                 break
+
+            # Receive with a short poll so we can re-check ping cadence
+            try:
+                msg = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=_WS_RECV_POLL_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                continue  # loop back to re-evaluate ping/idle conditions
+            except Exception:
+                break
+
+            # Any valid client frame counts as activity and clears pong-wait
+            _last_client_activity = _time.monotonic()
+            _awaiting_pong_since = None
 
             # Rate limit incoming messages
             now = _time.monotonic()
@@ -996,8 +1130,19 @@ async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(ge
                 break
             _msg_times.append(now)
 
-            if msg.get("type") == "ping":
+            mtype = msg.get("type")
+            if mtype == "ping":
+                # Client-initiated ping — reply with pong (legacy behaviour)
                 await websocket.send_json({"type": "pong"})
+            elif mtype == "pong":
+                # Pong acknowledging our server ping — already handled by
+                # clearing _awaiting_pong_since above; no-op here.
+                pass
+            elif mtype == "resume":
+                await _handle_ws_resume(
+                    websocket, msg, agent_id, db,
+                    get_session_store(),
+                )
 
     except WebSocketDisconnect:
         pass
