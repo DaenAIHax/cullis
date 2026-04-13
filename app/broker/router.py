@@ -730,6 +730,62 @@ async def send_message(
     return response
 
 
+@router.post(
+    "/sessions/{session_id}/messages/{msg_id}/ack",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def ack_queued_message(
+    session_id: str,
+    msg_id: str,
+    current_agent: TokenPayload = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+):
+    """Acknowledge a queued message (M3.6).
+
+    Called by the recipient SDK after it has successfully decrypted and
+    processed a message delivered via the queue-drain path. Scoped to
+    the caller's agent_id so an attacker who guesses a msg_id cannot
+    ack someone else's message.
+
+    Returns 204 on success, 404 if the message does not exist for this
+    recipient, 409 if it is already delivered or has expired.
+    """
+    _validate_session_id(session_id)
+    if not _UUID_RE.match(msg_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="msg_id must be a UUID")
+
+    from app.broker import message_queue as mq
+    from app.broker.db_models import ProxyMessageQueueRecord
+    from sqlalchemy import select as _select
+
+    ok = await mq.mark_delivered(
+        db, msg_id, recipient_agent_id=current_agent.agent_id,
+    )
+    if ok:
+        await log_event(
+            db, "broker.message_acked", "ok",
+            agent_id=current_agent.agent_id, session_id=session_id,
+            org_id=current_agent.org,
+            details={"msg_id": msg_id},
+        )
+        return
+
+    # Distinguish missing vs already-terminal to give the SDK a clear signal.
+    existing = (await db.execute(
+        _select(ProxyMessageQueueRecord.delivery_status).where(
+            ProxyMessageQueueRecord.msg_id == msg_id,
+            ProxyMessageQueueRecord.recipient_agent_id == current_agent.agent_id,
+        )
+    )).scalar_one_or_none()
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Message not found for this recipient")
+    # delivered (1) or expired (2) — terminal state, ack is a no-op 409.
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                        detail="Message already in a terminal state")
+
+
 @router.get("/sessions", response_model=list[SessionResponse])
 async def list_sessions(
     status: SessionStatus | None = None,
