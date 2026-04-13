@@ -21,6 +21,8 @@ class SessionRecord(Base):
     created_at          = Column(DateTime(timezone=True), nullable=False)
     expires_at          = Column(DateTime(timezone=True), nullable=True)
     closed_at           = Column(DateTime(timezone=True), nullable=True)
+    last_activity_at    = Column(DateTime(timezone=True), nullable=True)
+    close_reason        = Column(String(32),  nullable=True)
 
 
 class SessionMessageRecord(Base):

@@ -195,6 +195,15 @@ async def lifespan(app: FastAPI):
     # WebSocket notification path the moment a signal arrives.
     drain_task = asyncio.create_task(_drain_watcher(), name="cullis-drain-watcher")
 
+    # M1.1 — Session sweeper: periodically close idle/expired sessions,
+    # persist state, and notify peers via session.closed events.
+    from app.broker.session_sweeper import sweeper_loop
+    sweeper_stop = asyncio.Event()
+    sweeper_task = asyncio.create_task(
+        sweeper_loop(session_store, stop_event=sweeper_stop),
+        name="cullis-session-sweeper",
+    )
+
     yield
 
     # ── Drain phase ──────────────────────────────────────────────────────────
@@ -217,6 +226,14 @@ async def lifespan(app: FastAPI):
             await drain_task
         except (asyncio.CancelledError, Exception):
             pass
+
+    # Stop the session sweeper cleanly.
+    sweeper_stop.set()
+    sweeper_task.cancel()
+    try:
+        await sweeper_task
+    except (asyncio.CancelledError, Exception):
+        pass
 
     await ws_manager.shutdown()
     await close_redis()

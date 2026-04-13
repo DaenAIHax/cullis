@@ -20,6 +20,17 @@ class SessionStatus(str, Enum):
     denied = "denied"
 
 
+class SessionCloseReason(str, Enum):
+    """Why a session was terminated. Attached to session.closed events (M1.3)."""
+    normal = "normal"                # explicit close() by a peer
+    idle_timeout = "idle_timeout"    # no activity within SESSION_IDLE_TIMEOUT
+    ttl_expired = "ttl_expired"      # hard TTL reached (expires_at)
+    peer_lost = "peer_lost"          # peer disconnected beyond grace (reserved for M2)
+    policy_revoked = "policy_revoked"  # binding/policy revocation
+    pending_timeout = "pending_timeout"  # accept not received within pending window
+    rejected = "rejected"            # explicit reject() by target
+
+
 class SessionRequest(BaseModel):
     target_agent_id: str = Field(..., description="ID of the target agent")
     target_org_id: str = Field(..., description="Target org — cross-checked against the registered org")

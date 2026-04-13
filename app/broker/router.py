@@ -24,8 +24,13 @@ from app.db.database import get_db
 from app.db.audit import log_event
 from app.registry.store import get_agent_by_id
 from app.registry.binding_store import get_approved_binding
-from app.broker.models import SessionRequest, SessionResponse, SessionStatus, MessageEnvelope, InboxMessage
-from app.broker.session import get_session_store, SessionStore
+from app.broker.models import (
+    SessionRequest, SessionResponse, SessionStatus,
+    SessionCloseReason, MessageEnvelope, InboxMessage,
+)
+from app.broker.session import (
+    get_session_store, SessionStore, AgentSessionCapExceeded,
+)
 from app.broker.persistence import save_session, save_message
 from app.broker.ws_manager import ws_manager
 from app.policy.backend import evaluate_session_policy
@@ -33,7 +38,10 @@ from app.policy.engine import PolicyEngine
 from app.rate_limit.limiter import rate_limiter
 from app.auth.message_signer import verify_message_signature
 from app.telemetry import tracer
-from app.telemetry_metrics import SESSION_CREATED_COUNTER, SESSION_DENIED_COUNTER
+from app.telemetry_metrics import (
+    SESSION_CREATED_COUNTER, SESSION_DENIED_COUNTER,
+    SESSION_CLOSED_COUNTER, SESSION_CAP_REJECTED_COUNTER,
+)
 from app.injection.detector import injection_detector
 from app.registry.store import get_agent_by_id as _get_agent_by_id
 from app.registry.org_store import get_org_by_id
@@ -51,6 +59,34 @@ def _validate_session_id(session_id: str) -> None:
     if not _UUID_RE.match(session_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="Invalid session_id format (expected UUID)")
+
+
+async def _emit_session_closed(
+    session_obj,
+    reason: SessionCloseReason,
+    *,
+    triggered_by: str | None = None,
+) -> None:
+    """Best-effort notification of session close to both peers (M1.3, O3).
+
+    The event is pushed via the WebSocket manager (which transparently
+    falls back to Redis pub/sub for cross-worker delivery). If a peer
+    is offline, the notification is lost — by design. Upgrade to
+    durable notifications is an M3 opt-in, not default.
+    """
+    event = {
+        "type": "session_closed",
+        "session_id": session_obj.session_id,
+        "reason": reason.value,
+    }
+    if triggered_by:
+        event["triggered_by"] = triggered_by
+    for peer in (session_obj.initiator_agent_id, session_obj.target_agent_id):
+        try:
+            await ws_manager.send_to_agent(peer, event)
+        except Exception:  # noqa: BLE001 — best-effort
+            _log.debug("session_closed notify failed for peer %s", peer)
+    SESSION_CLOSED_COUNTER.add(1, {"reason": reason.value, "source": "router"})
 
 
 @router.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -190,6 +226,15 @@ async def _create_session_inner(body, current_agent, store, db, span):
             target_org_id=body.target_org_id,
             requested_capabilities=body.requested_capabilities,
         )
+    except AgentSessionCapExceeded as exc:
+        SESSION_CAP_REJECTED_COUNTER.add(1, {"org": current_agent.org})
+        await log_event(db, "broker.session_cap_rejected", "denied",
+                        agent_id=current_agent.agent_id, org_id=current_agent.org,
+                        details={"current": exc.current, "cap": exc.cap})
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many active sessions ({exc.current}/{exc.cap}) — close some before opening new ones",
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail=str(exc))
@@ -318,13 +363,20 @@ async def reject_session(
                     agent_id=current_agent.agent_id, session_id=session_id,
                     org_id=current_agent.org)
 
-    # Notify initiator via WebSocket
+    # Notify initiator via WebSocket (legacy session_rejected event)
     if ws_manager.is_connected(session.initiator_agent_id):
         await ws_manager.send_to_agent(session.initiator_agent_id, {
             "type": "session_rejected",
             "session_id": session.session_id,
             "rejected_by": current_agent.agent_id,
         })
+
+    # M1.3 — unified session_closed event for all terminal transitions
+    await _emit_session_closed(
+        session,
+        SessionCloseReason.rejected,
+        triggered_by=current_agent.agent_id,
+    )
 
     return SessionResponse(
         session_id=session.session_id,
@@ -375,12 +427,20 @@ async def close_session(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                 detail=f"Session is in state '{session.status}', cannot be closed")
 
-        store.close(session_id)
+        store.close(session_id, SessionCloseReason.normal)
         await save_session(db, session)
 
     await log_event(db, "session_closed", "ok",
                     agent_id=current_agent.agent_id, session_id=session_id,
-                    org_id=current_agent.org)
+                    org_id=current_agent.org,
+                    details={"reason": SessionCloseReason.normal.value})
+
+    # M1.3 — notify both peers of the close
+    await _emit_session_closed(
+        session,
+        SessionCloseReason.normal,
+        triggered_by=current_agent.agent_id,
+    )
 
     return SessionResponse(
         session_id=session.session_id,
@@ -552,6 +612,8 @@ async def send_message(
 
         seq = session.store_message(current_agent.agent_id, envelope.payload, envelope.nonce,
                                     envelope.signature, client_seq=envelope.client_seq)
+        # M1.2 — record activity to defer idle timeout
+        session.touch()
 
         # Atomic DB insert — source of truth for nonce uniqueness.
         # Rollback in-memory state on ANY failure (nonce conflict or DB error).
@@ -672,6 +734,10 @@ async def poll_messages(
                             detail="You are not a participant of this session")
 
     messages = session.get_messages_for(current_agent.agent_id, after=after)
+    # M1.2 — touch only when poll actually delivers messages: an empty
+    # poll loop from a dead client must not keep a stale session alive.
+    if messages:
+        session.touch()
     return [
         InboxMessage(
             seq=m.seq,

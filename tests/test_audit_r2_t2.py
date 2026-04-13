@@ -88,13 +88,18 @@ class TestSessionStoreEviction:
         assert evicted == 1
         assert s.session_id not in store._sessions
 
-    def test_evict_stale_removes_expired_sessions(self):
+    def test_evict_stale_keeps_expired_pending_sessions(self):
+        """M1: TTL-expired sessions stay in the store until the sweeper
+        transitions them to CLOSED and emits session.closed — _evict_stale
+        no longer deletes them silently. Only already-closed/denied are evicted.
+        """
         store = SessionStore(session_ttl_minutes=0)  # immediate expiry
         s = store.create("a", "org-a", "b", "org-b", [])
         s.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         evicted = store._evict_stale()
-        assert evicted == 1
-        assert s.session_id not in store._sessions
+        assert evicted == 0
+        # Still there — sweeper will handle it with reason=ttl_expired.
+        assert s.session_id in store._sessions
 
     def test_evict_stale_keeps_active_sessions(self):
         store = SessionStore(session_ttl_minutes=60)

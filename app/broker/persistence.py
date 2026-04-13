@@ -29,10 +29,16 @@ async def save_session(db: AsyncSession, session: Session) -> None:
     if session.status in (SessionStatus.closed, SessionStatus.denied):
         closed_at = datetime.now(timezone.utc)
 
+    close_reason_value = (
+        session.close_reason.value if session.close_reason is not None else None
+    )
+
     existing = await db.get(SessionRecord, session.session_id)
     if existing:
         existing.status = session.status.value
         existing.closed_at = closed_at
+        existing.last_activity_at = session.last_activity_at
+        existing.close_reason = close_reason_value
     else:
         db.add(SessionRecord(
             session_id=session.session_id,
@@ -45,6 +51,8 @@ async def save_session(db: AsyncSession, session: Session) -> None:
             created_at=session.created_at,
             expires_at=session.expires_at,
             closed_at=closed_at,
+            last_activity_at=session.last_activity_at,
+            close_reason=close_reason_value,
         ))
     await db.commit()
 
@@ -150,6 +158,12 @@ async def restore_sessions(db: AsyncSession, store: SessionStore) -> int:
             await db.commit()
             continue
 
+        last_activity = (
+            rec.last_activity_at.replace(tzinfo=timezone.utc)
+            if rec.last_activity_at is not None
+            else rec.created_at.replace(tzinfo=timezone.utc)
+        )
+
         session = Session(
             session_id=rec.session_id,
             initiator_agent_id=rec.initiator_agent_id,
@@ -160,6 +174,7 @@ async def restore_sessions(db: AsyncSession, store: SessionStore) -> int:
             status=SessionStatus(rec.status),
             created_at=rec.created_at.replace(tzinfo=timezone.utc),
             expires_at=rec.expires_at.replace(tzinfo=timezone.utc) if rec.expires_at else None,
+            last_activity_at=last_activity,
         )
 
         # Reload messages and rebuild nonce set

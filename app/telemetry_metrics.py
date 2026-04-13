@@ -43,6 +43,28 @@ RATE_LIMIT_REJECT_COUNTER = meter.create_counter(
     unit="1",
 )
 
+# ── M1 Session Reliability Layer ─────────────────────────────────────────────
+SESSION_CLOSED_COUNTER = meter.create_counter(
+    name="atn.session.closed",
+    description="Sessions closed, tagged with the reason",
+    unit="1",
+)
+SESSION_CAP_REJECTED_COUNTER = meter.create_counter(
+    name="atn.session.cap_rejected",
+    description="Session creations rejected due to per-agent ACTIVE cap",
+    unit="1",
+)
+SESSION_SWEEPER_CYCLES_COUNTER = meter.create_counter(
+    name="atn.session.sweeper_cycles",
+    description="Sweeper cycles executed",
+    unit="1",
+)
+SESSION_SWEEPER_CLOSED_COUNTER = meter.create_counter(
+    name="atn.session.sweeper_closed",
+    description="Sessions closed by the sweeper, tagged with reason",
+    unit="1",
+)
+
 # ── Histograms ────────────────────────────────────────────────────────────────
 AUTH_DURATION_HISTOGRAM = meter.create_histogram(
     name="atn.auth.duration",
