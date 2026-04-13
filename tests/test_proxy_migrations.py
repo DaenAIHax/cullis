@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import tempfile
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, inspect
@@ -123,6 +121,49 @@ async def test_init_db_stamps_legacy_sqlite_then_upgrades(tmp_path):
 
     assert rows == [("legacy-agent",)], "pre-existing row lost during stamp+upgrade"
     assert version == [("0002_local_tables",)]
+
+
+@pytest.mark.asyncio
+async def test_init_db_stamps_seed_only_proxy_config(tmp_path):
+    """Smoke / proxy-init scenario: only proxy_config exists pre-boot.
+
+    The demo_network proxy-init container writes broker uplink config rows
+    to a fresh DB before the proxy starts. Alembic stamping must trigger
+    on ANY legacy table presence, not just internal_agents — otherwise
+    the upgrade tries to CREATE TABLE proxy_config on top of itself.
+    """
+    db_file = tmp_path / "seeded.db"
+    seed = sqlite3.connect(str(db_file))
+    try:
+        seed.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS proxy_config (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL
+            );
+            """
+        )
+        seed.execute(
+            "INSERT INTO proxy_config (key, value) VALUES ('broker_url', 'https://b.test')"
+        )
+        seed.commit()
+    finally:
+        seed.close()
+
+    url = f"sqlite+aiosqlite:///{db_file}"
+    await init_db(url)
+    await dispose_db()
+
+    tables = _table_names_sqlite(str(db_file))
+    assert EXPECTED_TABLES.issubset(tables)
+
+    conn = sqlite3.connect(str(db_file))
+    try:
+        rows = conn.execute(
+            "SELECT value FROM proxy_config WHERE key='broker_url'"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("https://b.test",)], "seeded config row lost during stamp+upgrade"
 
 
 @pytest.mark.asyncio

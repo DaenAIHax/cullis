@@ -69,16 +69,26 @@ def _alembic_config(url: str) -> AlembicConfig:
     return cfg
 
 
-def _detect_legacy_unstamped(sync_conn) -> bool:
-    """True when the legacy schema is present but alembic_version is missing.
+_LEGACY_TABLES = frozenset({"internal_agents", "audit_log", "proxy_config"})
 
-    Pre-Phase-1 deployments created tables via raw CREATE TABLE IF NOT EXISTS
-    without Alembic. We stamp those at 0001_initial_snapshot so the upgrade
-    chain doesn't try to recreate tables that already exist.
+
+def _detect_legacy_unstamped(sync_conn) -> bool:
+    """True when any pre-Phase-1 table exists but alembic_version is missing.
+
+    Two scenarios produce legacy-unstamped state:
+      1. Pre-Phase-1 deployments that created the full _SCHEMA_SQL via raw
+         CREATE TABLE IF NOT EXISTS.
+      2. The demo_network proxy-init seed container, which writes only
+         proxy_config (broker uplink config) before the proxy boots.
+
+    Either way, alembic must be stamped at 0001_initial_snapshot so the
+    upgrade chain doesn't try to recreate tables that already exist.
     """
     inspector = inspect(sync_conn)
     table_names = set(inspector.get_table_names())
-    return "internal_agents" in table_names and "alembic_version" not in table_names
+    if "alembic_version" in table_names:
+        return False
+    return bool(_LEGACY_TABLES & table_names)
 
 
 def _run_migrations_sync(url: str) -> None:
@@ -87,6 +97,15 @@ def _run_migrations_sync(url: str) -> None:
 
     Stamp-existing detection runs only on SQLite — no proxy was ever deployed
     on Postgres pre-Phase-1, so legacy unstamped Postgres DBs cannot exist.
+
+    Two legacy-unstamped scenarios are handled:
+      - Full legacy schema (pre-Phase-1 deploy): all three legacy tables
+        present → just stamp 0001 and upgrade.
+      - Partial legacy (e.g. demo_network proxy-init has seeded only
+        proxy_config): create the missing legacy tables idempotently via
+        metadata.create_all so the stamped revision matches reality, then
+        stamp + upgrade. Without this, alembic would skip CREATE TABLE for
+        internal_agents / audit_log because 0001 is assumed already applied.
     """
     cfg = _alembic_config(url)
 
@@ -99,6 +118,23 @@ def _run_migrations_sync(url: str) -> None:
             sync_engine = create_sync_engine(sync_url, future=True)
             with sync_engine.connect() as conn:
                 needs_stamp = _detect_legacy_unstamped(conn)
+            if needs_stamp:
+                # Fill in any legacy tables missing from a partial seed so
+                # the 0001 stamp accurately describes the on-disk schema.
+                from mcp_proxy.db_models import (
+                    AuditLogEntry,
+                    InternalAgent,
+                    ProxyConfig,
+                )
+                with sync_engine.begin() as conn:
+                    metadata.create_all(
+                        bind=conn,
+                        tables=[
+                            InternalAgent.__table__,
+                            AuditLogEntry.__table__,
+                            ProxyConfig.__table__,
+                        ],
+                    )
             sync_engine.dispose()
         except Exception as exc:
             _log.debug("Pre-migration inspection skipped: %s", exc)
