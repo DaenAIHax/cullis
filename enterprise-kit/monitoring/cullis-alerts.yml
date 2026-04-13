@@ -19,6 +19,10 @@
 #   atn.policy.deny                   -->   atn_policy_deny_total
 #   atn.ratelimit.reject              -->   atn_ratelimit_reject_total
 #   atn.pdp_webhook.latency           -->   atn_pdp_webhook_latency_milliseconds
+#   atn.message.queued                -->   atn_message_queued_total
+#   atn.message.expired               -->   atn_message_expired_total
+#   atn.ws.pong_timeout               -->   atn_ws_pong_timeout_total
+#   atn.ws.queue_drained              -->   atn_ws_queue_drained_total
 #
 # Validate locally with:
 #   promtool check rules cullis-alerts.yml
@@ -168,6 +172,40 @@ groups:
             Vault is sealed or unreachable. The broker can keep serving
             existing sessions from cached keys, but cannot rotate or write
             new secrets. Unseal Vault before any maintenance windows.
+
+      - alert: CullisMessageExpirySpike
+        expr: |
+          sum(increase(atn_message_expired_total[10m]))
+          /
+          clamp_min(sum(increase(atn_message_queued_total[10m])), 1)
+          > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: cullis-broker
+        annotations:
+          summary: "More than 10% of queued messages expired over 10 minutes"
+          description: |
+            A non-trivial fraction of offline-queued messages are hitting TTL
+            before the recipient comes back. Either recipients are dying and
+            not reconnecting, or the TTL values requested by senders are too
+            aggressive for the current agent availability. Inspect
+            `atn_message_expired_total` by org_id and correlate with WS
+            connection counts.
+
+      - alert: CullisWsPongTimeoutSpike
+        expr: sum(rate(atn_ws_pong_timeout_total[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          component: cullis-broker
+        annotations:
+          summary: "WebSocket pong timeouts elevated"
+          description: |
+            The broker is dropping WS connections because clients are not
+            answering pings. Sustained rate indicates network path
+            degradation between clients and broker, or clients frozen in
+            userland. Cross-check with session closures by reason.
 
       - alert: CullisSessionDeniedSpike
         expr: |

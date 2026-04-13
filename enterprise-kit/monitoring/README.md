@@ -82,10 +82,19 @@ The other metrics (auth success/deny, session created/denied, policy
 allow/deny, rate-limit reject, PDP webhook latency) drive the operational
 alerts and are straightforward operational signals.
 
+## Grafana dashboard
+
+`cullis-session-reliability.json` is a drop-in Grafana dashboard covering
+the Session Reliability Layer (M1 + M2 + M3): offline message queue,
+WebSocket heartbeat, session resume, and sweeper activity.
+
+Import via **Dashboards → New → Import → Upload JSON file**, then pick
+your Prometheus datasource when prompted (the dashboard exposes a
+`$datasource` variable so you can point it at the right instance without
+editing the file).
+
 ## SIEM integration
 
-Cullis already emits structured JSON logs when `LOG_FORMAT=json` is set.
-Combine the alert rules above with log shipping to your SIEM (Loki, Splunk,
-Elastic, Datadog) for full incident response context. There is no native
-"business dashboard" inside Cullis — metrics flow to your existing
-observability stack.
+Cullis emits structured JSON logs when `LOG_FORMAT=json` is set. Combine
+the alert rules above with log shipping to your SIEM (Loki, Splunk,
+Elastic, Datadog) for full incident response context.

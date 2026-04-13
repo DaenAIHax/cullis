@@ -327,6 +327,16 @@ spec:
 7. `broker.image.tag` — pin to a specific release tag, do not rely on the
    chart `appVersion` in production.
 
+## Dashboards
+
+The chart renders the Prometheus Operator CRDs (`ServiceMonitor` +
+`PrometheusRule`), but does not bundle a Grafana dashboard. A drop-in
+dashboard for the Session Reliability Layer (M1 + M2 + M3 — offline
+queue, WebSocket heartbeat, session resume, sweeper) lives at
+[`enterprise-kit/monitoring/cullis-session-reliability.json`](../../../enterprise-kit/monitoring/cullis-session-reliability.json).
+Import it via **Grafana → Dashboards → New → Import** and point the
+`$datasource` variable at the Prometheus instance scraping this chart.
+
 ## Validation
 
 ```bash
