@@ -70,7 +70,7 @@ async def test_search_by_spiffe_uri(client: AsyncClient, dpop):
                  ["supply.negotiate"], dpop)
 
     resp = await client.get("/v1/registry/agents/search",
-        params={"agent_uri": "spiffe://atn.local/ed-sup2/agent"},
+        params={"agent_uri": "spiffe://cullis.local/ed-sup2/agent"},
         headers=dpop.headers("GET", "/v1/registry/agents/search", token),
     )
     assert resp.status_code == 200

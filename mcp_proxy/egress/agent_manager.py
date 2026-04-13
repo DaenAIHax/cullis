@@ -42,7 +42,7 @@ class AgentManager:
     internal auth.
     """
 
-    def __init__(self, org_id: str, trust_domain: str = "atn.local"):
+    def __init__(self, org_id: str, trust_domain: str = "cullis.local"):
         self._org_id = org_id
         self._trust_domain = trust_domain
         self._org_ca_key: rsa.RSAPrivateKey | None = None

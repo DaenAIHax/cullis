@@ -19,7 +19,7 @@ def _extract_csrf(cookies: dict) -> str:
     (backslash-escaped special chars, surrounding quotes). We undo
     that encoding before parsing JSON.
     """
-    cookie = cookies.get("atn_session", "")
+    cookie = cookies.get("cullis_session", "")
     if not cookie:
         return ""
     # Strip surrounding quotes added by Starlette cookie encoding
@@ -89,7 +89,7 @@ async def test_unauthenticated_redirects_to_login(client: AsyncClient):
 
 async def test_admin_login_success(client: AsyncClient):
     cookies = await _admin_cookies(client)
-    assert "atn_session" in cookies
+    assert "cullis_session" in cookies
 
 
 async def test_admin_login_wrong_secret(client: AsyncClient):

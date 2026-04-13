@@ -65,7 +65,7 @@ services:
       # Must match the default AgentManager(trust_domain=...) used by the
       # proxy when it issues agent x509 certs. The broker validates the
       # SPIFFE SAN against this trust domain — mismatch → 401 on login.
-      TRUST_DOMAIN: atn.local
+      TRUST_DOMAIN: cullis.local
       # No reverse proxy in front of the broker for the e2e test — clients
       # call http://localhost:18000 directly so build_htu derives the URL
       # from the request itself. Leaving BROKER_PUBLIC_URL empty avoids the

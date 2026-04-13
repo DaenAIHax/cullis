@@ -190,7 +190,7 @@ async def search_agents(
     pattern: str | None = None,
     q: str | None = None,
     exclude_org_id: str | None = None,
-    trust_domain: str = "atn.local",
+    trust_domain: str = "cullis.local",
 ) -> list["AgentRecord"]:
     """Unified agent search with multiple optional filters.
 

@@ -25,7 +25,7 @@ pytestmark = pytest.mark.asyncio
 def _extract_csrf(cookies: dict) -> str:
     """Extract CSRF token from the signed session cookie."""
     import codecs
-    cookie = cookies.get("atn_session", "")
+    cookie = cookies.get("cullis_session", "")
     if not cookie:
         return ""
     if cookie.startswith('"') and cookie.endswith('"'):

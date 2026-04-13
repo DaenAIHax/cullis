@@ -62,7 +62,7 @@ services:
       ADMIN_SECRET: cullis-demo-admin-secret
       # Same trust domain the proxy AgentManager uses by default — must
       # match for SPIFFE SAN validation on agent login.
-      TRUST_DOMAIN: atn.local
+      TRUST_DOMAIN: cullis.local
       BROKER_PUBLIC_URL: ""
       REDIS_URL: redis://redis:6379
       # KMS=local: broker CA is bind-mounted from scripts/demo/.fixtures

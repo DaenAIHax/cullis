@@ -65,7 +65,7 @@ async def test_login_post_with_admin_secret_rejected_on_fresh_deploy(
     )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/dashboard/setup"
-    assert "atn_session" not in dict(resp.cookies)
+    assert "cullis_session" not in dict(resp.cookies)
 
 
 async def test_setup_submit_stores_hash_and_redirects_to_login(
@@ -85,7 +85,7 @@ async def test_setup_submit_stores_hash_and_redirects_to_login(
     assert resp.headers["location"] == "/dashboard/login"
     # No session cookie issued by /setup — the operator must sign in
     # with the password they just chose.
-    assert "atn_session" not in dict(resp.cookies)
+    assert "cullis_session" not in dict(resp.cookies)
 
     from app.kms.admin_secret import (
         is_admin_password_user_set, get_admin_secret_hash,
@@ -162,7 +162,7 @@ async def test_end_to_end_setup_then_login(
     )
     assert r5.status_code == 303
     assert r5.headers["location"] == "/dashboard"
-    assert "atn_session" in dict(r5.cookies)
+    assert "cullis_session" in dict(r5.cookies)
 
 
 async def test_admin_secret_rejected_after_user_set(client: AsyncClient):

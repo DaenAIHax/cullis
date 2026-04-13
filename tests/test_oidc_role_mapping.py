@@ -306,7 +306,7 @@ async def test_callback_with_mapping_grant(client: AsyncClient):
 
     assert resp.status_code == 303
     assert resp.headers.get("location") == "/dashboard"
-    assert "atn_session" in resp.headers.get("set-cookie", "")
+    assert "cullis_session" in resp.headers.get("set-cookie", "")
 
 
 async def test_callback_with_mapping_deny_no_match(client: AsyncClient):
@@ -338,7 +338,7 @@ async def test_callback_with_mapping_deny_no_match(client: AsyncClient):
     # Render login error page (200), no session cookie set
     assert resp.status_code == 200
     assert b"not authorized" in resp.content
-    assert "atn_session" not in resp.headers.get("set-cookie", "")
+    assert "cullis_session" not in resp.headers.get("set-cookie", "")
 
 
 async def test_callback_with_mapping_deny_claim_missing(client: AsyncClient):
@@ -395,4 +395,4 @@ async def test_callback_no_mapping_legacy_behavior(client: AsyncClient):
 
     assert resp.status_code == 303
     assert resp.headers.get("location") == "/dashboard"
-    assert "atn_session" in resp.headers.get("set-cookie", "")
+    assert "cullis_session" in resp.headers.get("set-cookie", "")

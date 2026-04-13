@@ -123,7 +123,7 @@ async def test_transaction_token_single_use(client: AsyncClient, dpop, db_sessio
 
     # Build a mock TokenPayload instead of decoding (avoids DPoP verification)
     tp = TokenPayload(
-        sub="spiffe://atn.local/tt-single/agent",
+        sub="spiffe://cullis.local/tt-single/agent",
         agent_id="tt-single::agent",
         org="tt-single",
         exp=int(record.expires_at.timestamp()),
@@ -163,7 +163,7 @@ async def test_transaction_token_payload_hash_mismatch(client: AsyncClient, dpop
     )
 
     tp = TokenPayload(
-        sub="spiffe://atn.local/tt-hash/agent",
+        sub="spiffe://cullis.local/tt-hash/agent",
         agent_id="tt-hash::agent",
         org="tt-hash",
         exp=int(record.expires_at.timestamp()),
@@ -202,7 +202,7 @@ async def test_transaction_token_expired(client: AsyncClient, dpop, db_session):
     await asyncio.sleep(1.5)
 
     tp = TokenPayload(
-        sub="spiffe://atn.local/tt-exp/agent",
+        sub="spiffe://cullis.local/tt-exp/agent",
         agent_id="tt-exp::agent",
         org="tt-exp",
         exp=int(record.expires_at.timestamp()),
