@@ -225,7 +225,10 @@ async def test_step7_agente_a_invia_messaggio(client: AsyncClient):
     )
 
     assert resp.status_code == 202, resp.text
-    assert resp.json()["status"] == "accepted"
+    # M3.6 — recipient is not WS-connected in this TestClient flow, so the
+    # broker falls back to the offline queue. Either status is a valid
+    # "delivered for processing" signal from the broker's perspective.
+    assert resp.json()["status"] in ("accepted", "queued")
 
 
 # ---------------------------------------------------------------------------

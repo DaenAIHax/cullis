@@ -12,7 +12,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.broker import message_queue as mq
 from app.broker.db_models import ProxyMessageQueueRecord
 from app.db.database import AsyncSessionLocal
 from tests.cert_factory import make_encrypted_envelope
