@@ -345,12 +345,26 @@ class CullisClient:
     # ── Messaging ───────────────────────────────────────────────────
 
     def send(self, session_id: str, sender_agent_id: str, payload: dict,
-             recipient_agent_id: str) -> None:
+             recipient_agent_id: str,
+             ttl_seconds: int | None = None,
+             idempotency_key: str | None = None) -> dict:
         """
         Send an E2E encrypted, signed message through a session.
 
         The message is encrypted with the recipient's public key and signed
         with the sender's private key. The broker cannot read the content.
+
+        M3.4 — optional queue parameters for offline delivery:
+          - ``ttl_seconds``: broker-side TTL for the queued copy when the
+            recipient is offline (default server-side: 300s, max 86400).
+          - ``idempotency_key``: when provided, a retry with the same
+            ``(recipient_agent_id, idempotency_key)`` collapses to a
+            single queued message.
+
+        Returns the broker's response body as a dict, e.g.
+          ``{"status": "accepted", "session_id": ...}``  (direct push)
+          ``{"status": "queued",   "msg_id": ..., "deduped": False, "session_id": ...}``
+        so the caller can react to queued deliveries.
         """
         if not self._signing_key_pem:
             raise RuntimeError("Signing key not available — call login() first")
@@ -389,17 +403,31 @@ class CullisClient:
             "client_seq": client_seq,
         }
         path = f"/v1/broker/sessions/{session_id}/messages"
+        query: dict[str, str | int] = {}
+        if ttl_seconds is not None:
+            query["ttl_seconds"] = ttl_seconds
+        if idempotency_key is not None:
+            query["idempotency_key"] = idempotency_key
+
         for attempt in range(3):
             try:
-                resp = self._authed_request("POST", path, json=envelope)
+                resp = self._authed_request(
+                    "POST", path, json=envelope,
+                    params=query if query else None,
+                )
                 resp.raise_for_status()
-                return
+                try:
+                    return resp.json()
+                except Exception:
+                    return {"status": "accepted", "session_id": session_id}
             except (httpx.ConnectError, httpx.TimeoutException):
                 if attempt < 2:
                     print(f"[{self._label}] Broker unreachable — retry in 2s...", flush=True)
                     time.sleep(2)
                 else:
                     raise ConnectionError(f"[{self._label}] Broker unreachable after 3 attempts.")
+        # Unreachable — loop above either returns or raises.
+        raise ConnectionError(f"[{self._label}] Broker send failed unexpectedly.")
 
     def decrypt_payload(self, msg: dict, session_id: str | None = None) -> dict:
         """
