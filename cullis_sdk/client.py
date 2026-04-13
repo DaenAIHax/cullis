@@ -429,6 +429,27 @@ class CullisClient:
         # Unreachable — loop above either returns or raises.
         raise ConnectionError(f"[{self._label}] Broker send failed unexpectedly.")
 
+    def ack_message(self, session_id: str, msg_id: str) -> bool:
+        """Acknowledge a queued offline message (M3.5).
+
+        Called by the WS drain loop when a ``new_message`` frame carries
+        ``queued: True`` and a ``msg_id``. Also usable directly by the
+        application when ``manual_ack=True`` was passed to
+        :meth:`connect_websocket`.
+
+        Returns ``True`` on 204, ``False`` on 404/409 (terminal state —
+        safe to continue; the broker has already moved on). Raises on
+        transport failures so the caller can retry.
+        """
+        path = f"/v1/broker/sessions/{session_id}/messages/{msg_id}/ack"
+        resp = self._authed_request("POST", path)
+        if resp.status_code == 204:
+            return True
+        if resp.status_code in (404, 409):
+            return False
+        resp.raise_for_status()
+        return False
+
     def decrypt_payload(self, msg: dict, session_id: str | None = None) -> dict:
         """
         Decrypt the payload of a received message.
@@ -482,14 +503,29 @@ class CullisClient:
 
     # ── WebSocket ───────────────────────────────────────────────────
 
-    def connect_websocket(self) -> "WebSocketConnection":
+    def connect_websocket(
+        self,
+        *,
+        auto_ack: bool = True,
+        auto_reconnect: bool = True,
+    ) -> "WebSocketConnection":
         """
         Open an authenticated WebSocket connection for real-time events.
 
         Returns a WebSocketConnection that yields parsed event dicts.
         The connection handles auth handshake and DPoP automatically.
+
+        M3.5 — ``auto_ack`` (default True) makes the connection auto-POST
+        ``/messages/{msg_id}/ack`` whenever a ``new_message`` frame
+        carries ``queued: true``. Pass ``auto_ack=False`` if the
+        application needs process-then-ack semantics (call
+        :meth:`ack_message` manually).
         """
-        return WebSocketConnection(self)
+        return WebSocketConnection(
+            self,
+            auto_ack=auto_ack,
+            auto_reconnect=auto_reconnect,
+        )
 
     # ── RFQ ─────────────────────────────────────────────────────────
 
@@ -643,11 +679,13 @@ class WebSocketConnection:
         client: CullisClient,
         *,
         auto_reconnect: bool = True,
+        auto_ack: bool = True,
         max_reconnect_attempts: int | None = None,
     ) -> None:
         self._client = client
         self._ws = None
         self._auto_reconnect = auto_reconnect
+        self._auto_ack = auto_ack
         self._max_reconnect_attempts = (
             max_reconnect_attempts
             if max_reconnect_attempts is not None
@@ -752,6 +790,15 @@ class WebSocketConnection:
                     self._last_seq[sid] = (
                         max(seq, prev) if prev is not None else seq
                     )
+
+                # M3.5 — auto-ack queued offline messages before yielding.
+                # Best-effort: failures don't drop the event, the broker
+                # will redeliver on next reconnect.
+                if self._auto_ack and event.get("queued") and event.get("msg_id"):
+                    try:
+                        self._client.ack_message(sid, event["msg_id"])
+                    except Exception:
+                        pass
 
             return event
 
