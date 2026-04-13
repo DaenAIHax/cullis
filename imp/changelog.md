@@ -4,6 +4,63 @@ Log delle implementazioni per sessione. Aggiornato dopo ogni sessione di lavoro.
 
 ---
 
+## 2026-04-13 — Session Reliability Layer M3.6 (router integration)
+
+Chiuso M3.6 (router integration) sul branch `feature/m3-message-durability`
+sopra M3.1 (schema) + M3.2 (queue ops) già presenti. Ripreso dopo
+discussione architetturale che ha prodotto ADR-001 (intra-org routing +
+Guardian). M3 broker-side resta valido per path cross-org.
+
+### Nuovi endpoint / comportamento broker
+- `POST /v1/broker/sessions/{id}/messages` accetta due nuovi query params:
+  - `ttl_seconds` (1..86400, default 300) — TTL della riga in coda
+  - `idempotency_key` (opt, max 128) — dedup chiave `(recipient, key)`
+- Se il recipient NON è connesso via WS localmente → `mq.enqueue()` con
+  ciphertext = canonical JSON di `envelope.payload`; risposta
+  `{status:"queued", msg_id, deduped}`
+- Se il recipient è connesso → push WS diretto invariato, risposta `{status:"accepted"}`
+- Nuovo `POST /v1/broker/sessions/{id}/messages/{msg_id}/ack` —
+  204/400/404/409, scoped a `current_agent.agent_id` (niente info leak)
+
+### WS drain su connect/resume
+- Helper `_drain_queue_for_agent` chiamato dopo `auth_ok` e alla fine di
+  `_handle_ws_resume`
+- Ogni messaggio queued consegnato come `new_message` con `queued:true` + `msg_id`
+- Drain non muta stato — SDK deve ack via REST per chiudere la riga
+- Failure durante drain loggati, non abortono la sessione WS
+
+### Sweeper TTL expiry
+- `session_sweeper._sweep_message_queue()` invocato ad ogni ciclo `sweep_once`
+- Chiama `mq.sweep_expired()` e per ogni riga scaduta emette `message_expired`
+  best-effort al sender (fields: type, session_id, msg_id, recipient_agent_id, reason="ttl")
+- Isolato in try/except — errori DB/WS non rompono il session sweep
+
+### Metriche nuove (OpenTelemetry)
+- `atn.message.queued`, `atn.message.queue_deduped`, `atn.ws.queue_drained`,
+  `atn.message.expired`
+
+### Test
+- `tests/test_m3_router_integration.py` (8), `tests/test_m3_ws_drain.py` (4),
+  `tests/test_m3_sweeper_ttl.py` (3) — totale 15 nuovi test
+- Tutte le suite reliability/queue esistenti invariate (M1+M2+M3 unit)
+
+### Commit sequence sul branch
+- `3d265ca` — queue fallback + query params
+- `0131546` — ack endpoint
+- `9fcae25` — WS drain
+- `9b13ea0` — sweeper TTL + notify
+
+### Decisioni chiave (vedi anche ADR-001)
+- Presence: enqueue solo se `ws_manager.is_connected` locale è False.
+  Multi-worker deliverato via Redis pub/sub + drain al reconnect, dedupe
+  client-side su msg_id.
+- Query params invece di wrapper body — zero regressione sui ~20 test
+  esistenti. SDK aggiungerà i params in M3.4/M3.5.
+- Ack 409 vs 404 distinti: extra SELECT utile per diagnostica SDK.
+- Sender scoping: ack da non-recipient ritorna 404 (no info leak).
+
+---
+
 ## 2026-04-12 — Attach-CA + smoke production-grade + deploy hardening (sessione 8)
 
 ### Flusso attach-CA (onboarding org pre-registrate)
