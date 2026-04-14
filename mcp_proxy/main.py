@@ -81,16 +81,21 @@ async def lifespan(app: FastAPI):
     if broker_url:
         from mcp_proxy.egress.agent_manager import AgentManager
         from mcp_proxy.egress.broker_bridge import BrokerBridge
-        agent_mgr = AgentManager(org_id=org_id)
+        agent_mgr = AgentManager(org_id=org_id, trust_domain=settings.trust_domain)
         await agent_mgr.load_org_ca_from_config()
         bridge = BrokerBridge(
             broker_url=broker_url,
             org_id=org_id,
             agent_manager=agent_mgr,
             verify_tls=settings.broker_verify_tls,
+            trust_domain=settings.trust_domain,
+            intra_org_routing=settings.intra_org_routing,
         )
         app.state.broker_bridge = bridge
-        _log.info("BrokerBridge initialized (broker=%s, org=%s)", broker_url, org_id)
+        _log.info(
+            "BrokerBridge initialized (broker=%s, org=%s, trust_domain=%s, intra_org=%s)",
+            broker_url, org_id, settings.trust_domain, settings.intra_org_routing,
+        )
     else:
         _log.warning("No broker_url configured — egress endpoints will return 503")
 

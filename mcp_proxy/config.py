@@ -68,11 +68,30 @@ class ProxySettings(BaseSettings):
     # Rate limiting
     rate_limit_per_minute: int = 60
 
+    # ADR-001 Phase 2 — SPIFFE routing decision.
+    # trust_domain is the SPIFFE trust domain this proxy serves (matched against
+    # recipient SPIFFE IDs to decide intra vs cross-org). intra_org_routing is
+    # the feature flag; when false (default) behavior is unchanged and every
+    # message forwards to the broker. When true, intra-org targets are
+    # short-circuited with 501 until Phase 3 wires real local delivery.
+    trust_domain: str = "cullis.local"
+    intra_org_routing: bool = False
+
     @model_validator(mode="after")
     def _apply_proxy_db_url_override(self):
         override = os.environ.get("PROXY_DB_URL")
         if override:
             self.database_url = override
+        return self
+
+    @model_validator(mode="after")
+    def _apply_routing_overrides(self):
+        td = os.environ.get("PROXY_TRUST_DOMAIN")
+        if td:
+            self.trust_domain = td
+        flag = os.environ.get("PROXY_INTRA_ORG")
+        if flag is not None:
+            self.intra_org_routing = flag.lower() in ("1", "true", "yes", "on")
         return self
 
 

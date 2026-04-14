@@ -31,6 +31,12 @@ data:
   MCP_PROXY_ORG_ID: {{ .Values.proxy.orgId | quote }}
   {{- end }}
 
+  # ADR-001 Phase 2 — SPIFFE routing decision. trust_domain is the SPIFFE
+  # trust domain this proxy serves; intra_org_routing gates the new routing
+  # decision (default off — Phase 3 wires real local delivery).
+  PROXY_TRUST_DOMAIN: {{ .Values.proxy.trustDomain | default "cullis.local" | quote }}
+  PROXY_INTRA_ORG: {{ .Values.proxy.intraOrgRouting | default false | quote }}
+
   MCP_PROXY_ALLOWED_ORIGINS: {{ .Values.proxy.allowedOrigins | quote }}
 
   # PROXY_DB_URL is the canonical name (ADR-001 Phase 1.3). The legacy
