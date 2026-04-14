@@ -1,0 +1,29 @@
+# Cullis Enterprise Sandbox — compose topology
+#
+# Status: SCAFFOLD ONLY (Blocco 1 in progress)
+# Plan:   imp/enterprise_sandbox_plan.md
+#
+# Three networks:
+#   - orga-internal: contains all Org A services (IdP, Vault, SPIRE, proxy, connector, agent)
+#   - orgb-internal: mirror for Org B
+#   - public-wan:    only brokers live here; simulates internet between orgs
+
+networks:
+  orga-internal:
+    name: cullis-sandbox-orga
+    driver: bridge
+  orgb-internal:
+    name: cullis-sandbox-orgb
+    driver: bridge
+  public-wan:
+    name: cullis-sandbox-wan
+    driver: bridge
+
+# Services will be added incrementally per block.
+# Blocco 1: ca-init-{a,b}, postgres-{a,b}, redis-{a,b}, broker-{a,b}
+# Blocco 2: vault-{a,b}, proxy-{a,b}
+# Blocco 3: keycloak-{a,b}
+# Blocco 4: spire-server-{a,b}, spire-agent-{a,b}, connector-{a,b}, agent-{a,b}
+services: {}
+
+volumes: {}
