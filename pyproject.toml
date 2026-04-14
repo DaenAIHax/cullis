@@ -27,6 +27,7 @@ connector = [
 
 [project.scripts]
 cullis-connector = "cullis_connector.cli:main"
+cullis-proxy = "mcp_proxy.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cullis_sdk", "cullis_connector"]

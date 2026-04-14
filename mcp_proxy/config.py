@@ -77,6 +77,12 @@ class ProxySettings(BaseSettings):
     trust_domain: str = "cullis.local"
     intra_org_routing: bool = False
 
+    # ADR-001 Phase 4c — Federation cache subscriber.
+    # When enabled, a long-lived task tails the broker's federation
+    # event stream and mirrors agent / policy / binding state into
+    # local cache tables. Default off — flip via PROXY_FEDERATION_SYNC.
+    federation_sync_enabled: bool = False
+
     @model_validator(mode="after")
     def _apply_proxy_db_url_override(self):
         override = os.environ.get("PROXY_DB_URL")
@@ -92,6 +98,11 @@ class ProxySettings(BaseSettings):
         flag = os.environ.get("PROXY_INTRA_ORG")
         if flag is not None:
             self.intra_org_routing = flag.lower() in ("1", "true", "yes", "on")
+        sync_flag = os.environ.get("PROXY_FEDERATION_SYNC")
+        if sync_flag is not None:
+            self.federation_sync_enabled = sync_flag.lower() in (
+                "1", "true", "yes", "on",
+            )
         return self
 
 

@@ -141,6 +141,41 @@ async def lifespan(app: FastAPI):
         app.state.local_sweeper_stop = stop_event
         app.state.local_sweeper_task = sweeper_task
 
+    # Phase 4c — federation SSE subscriber. Wires the Phase 4b cache
+    # to the live broker stream. Off by default; flip via
+    # PROXY_FEDERATION_SYNC=true. The auth surface (DPoP / mTLS / SPIFFE)
+    # is delegated to an externally-provided client factory set on
+    # `app.state.federation_subscriber_factory`. Wiring an actual
+    # credential is a follow-up — keeping the factory injectable lets
+    # deployments pick the auth flavor without forking this module.
+    if settings.federation_sync_enabled and broker_url and org_id:
+        factory = getattr(app.state, "federation_subscriber_factory", None)
+        if factory is None:
+            _log.warning(
+                "PROXY_FEDERATION_SYNC=on but no "
+                "federation_subscriber_factory registered on app.state "
+                "— subscriber not started. Set one before app startup.",
+            )
+        else:
+            from mcp_proxy.sync.subscriber import (
+                SubscriberConfig,
+                run_subscriber,
+            )
+            sub_cfg = SubscriberConfig(
+                broker_url=broker_url,
+                org_id=org_id,
+                client_factory=factory,
+            )
+            sub_stop = asyncio.Event()
+            sub_task = asyncio.create_task(
+                run_subscriber(sub_cfg, stop_event=sub_stop),
+                name="federation_subscriber",
+            )
+            app.state.federation_subscriber_stop = sub_stop
+            app.state.federation_subscriber_task = sub_task
+            app.state.federation_subscriber_stats = sub_cfg.stats
+            _log.info("federation subscriber started (org=%s)", org_id)
+
     _log.info(
         "MCP Proxy started (host=%s, port=%d, env=%s)",
         settings.host, settings.port, settings.environment,
@@ -160,6 +195,20 @@ async def lifespan(app: FastAPI):
             sweeper_task.cancel()
             try:
                 await sweeper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    sub_stop = getattr(app.state, "federation_subscriber_stop", None)
+    sub_task = getattr(app.state, "federation_subscriber_task", None)
+    if sub_stop is not None:
+        sub_stop.set()
+    if sub_task is not None:
+        try:
+            await asyncio.wait_for(sub_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            sub_task.cancel()
+            try:
+                await sub_task
             except (asyncio.CancelledError, Exception):
                 pass
 
