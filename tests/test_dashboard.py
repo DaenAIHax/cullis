@@ -1,7 +1,10 @@
 """
 Test dashboard — verifies all dashboard pages render and operations work.
-Tests cover both admin and org login flows, CSRF protection, security headers,
-auth enforcement on all endpoints, and input validation.
+
+Scope: network-admin only. Org-tenant login, org self-service pages, and
+the org OIDC mapping UI were removed from the broker dashboard in the
+ADR-001 refactor — tenants now operate on their per-org proxy.
+Deprecated tests that exercised those flows were removed or rewritten.
 """
 import json
 import pytest
@@ -56,19 +59,9 @@ async def _admin_ctx(client: AsyncClient) -> tuple[dict, str]:
     return cookies, _extract_csrf(cookies)
 
 
-async def _org_cookies(client: AsyncClient, org_id: str, org_secret: str) -> dict:
-    """Login as org and return cookies dict."""
-    resp = await client.post("/dashboard/login", data={
-        "user_id": org_id, "password": org_secret,
-    }, follow_redirects=False)
-    assert resp.status_code == 303
-    return dict(resp.cookies)
-
-
-async def _org_ctx(client: AsyncClient, org_id: str, org_secret: str) -> tuple[dict, str]:
-    """Login as org, return (cookies, csrf_token)."""
-    cookies = await _org_cookies(client, org_id, org_secret)
-    return cookies, _extract_csrf(cookies)
+# Deprecated: _org_cookies / _org_ctx helpers (org-tenant login moved to
+# proxy in ADR-001). Any test that needs a non-admin session against the
+# broker dashboard is now out of scope by design.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,7 +71,8 @@ async def _org_ctx(client: AsyncClient, org_id: str, org_secret: str) -> tuple[d
 async def test_login_page_renders(client: AsyncClient):
     resp = await client.get("/dashboard/login")
     assert resp.status_code == 200
-    assert "Login" in resp.text
+    # Network-admin-only copy emphasises the operator surface.
+    assert "Network" in resp.text and "Admin" in resp.text
     assert "password" in resp.text
 
 
@@ -252,24 +246,21 @@ async def test_onboard_generate_ca_returns_valid_pair(client: AsyncClient):
     assert "Acme Test CA" in cn
 
 
-async def test_onboard_generate_ca_requires_admin(client: AsyncClient):
-    """Org-role users must not be able to generate CAs."""
-    from tests.cert_factory import get_org_ca_pem
-    c, csrf = await _admin_ctx(client)
-    ca_pem = get_org_ca_pem("gen-ca-org-nonadmin")
-    await client.post("/dashboard/orgs/onboard", data={
-        "csrf_token": csrf,
-        "org_id": "gen-ca-org-nonadmin", "display_name": "NonAdminOrg",
-        "secret": "secret", "contact_email": "", "webhook_url": "",
-        "ca_certificate": ca_pem, "action": "approve",
-    }, cookies=c)
-    org_c, org_csrf = await _org_ctx(client, "gen-ca-org-nonadmin", "secret")
+async def test_onboard_generate_ca_rejects_non_admin(client: AsyncClient):
+    """Unauthenticated requests to the CA generator are rejected.
+
+    Deprecated: previously this test also exercised org-role login and
+    expected a 403; org login moved to the proxy in ADR-001, so there
+    is no 'org session' on the broker anymore. The remaining guarantee
+    is that an anonymous caller cannot mint a CA.
+    """
     resp = await client.post(
         "/dashboard/orgs/onboard/generate-ca",
-        data={"csrf_token": org_csrf, "display_name": "Sneaky"},
-        cookies=org_c,
+        data={"display_name": "Anon"},
     )
-    assert resp.status_code == 403
+    # No session cookie → dashboard redirects, but the endpoint returns
+    # JSON 401 for unauthenticated HTMX-style callers.
+    assert resp.status_code in (401, 303, 307)
 
 
 async def test_onboard_generate_ca_requires_csrf(client: AsyncClient):
@@ -346,12 +337,17 @@ async def test_register_agent_via_dashboard(client: AsyncClient):
 # Org login — scoped view
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def test_org_login_and_scoped_view(client: AsyncClient):
-    """Org user sees only their own agents, not other orgs."""
+async def test_admin_sees_network_wide_agents(client: AsyncClient):
+    """Admin sees agents across every org (no per-org scoping on the broker).
+
+    Deprecated predecessor: test_org_login_and_scoped_view asserted an
+    org session could only see its own agents. Org login moved to the
+    proxy (ADR-001); the broker is network-admin only and unconditionally
+    shows every agent.
+    """
     from tests.cert_factory import get_org_ca_pem
     admin_c, admin_csrf = await _admin_ctx(client)
 
-    # Create two orgs via admin
     for org_id in ("scope-org-a", "scope-org-b"):
         ca_pem = get_org_ca_pem(org_id)
         await client.post("/dashboard/orgs/onboard", data={
@@ -365,38 +361,36 @@ async def test_org_login_and_scoped_view(client: AsyncClient):
             "display_name": f"Agent of {org_id}", "capabilities": "test.read",
         }, cookies=admin_c)
 
-    # Login as org A
-    org_c = await _org_cookies(client, "scope-org-a", "scope-org-a-secret")
-
-    # Overview works
-    resp = await client.get("/dashboard", cookies=org_c)
+    resp = await client.get("/dashboard/agents", cookies=admin_c)
     assert resp.status_code == 200
-
-    # Agents page — should see only org-a's agent
-    resp = await client.get("/dashboard/agents", cookies=org_c)
-    assert resp.status_code == 200
+    # Network-admin view: both orgs' agents are visible.
     assert "scope-org-a::agent" in resp.text
-    assert "scope-org-b::agent" not in resp.text
-
-    # Orgs page — admin only, org user gets redirected
-    resp = await client.get("/dashboard/orgs", cookies=org_c, follow_redirects=False)
-    assert resp.status_code == 303
+    assert "scope-org-b::agent" in resp.text
 
 
-async def test_org_cannot_onboard(client: AsyncClient):
-    """Org user cannot access the onboard form — admin only."""
+async def test_org_tenant_cannot_log_in(client: AsyncClient):
+    """Deprecated: org-tenant login removed in ADR-001.
+
+    A tenant attempting to log in with a non-admin user_id must be
+    rejected with a message pointing at the proxy, never redirected into
+    a session.
+    """
     from tests.cert_factory import get_org_ca_pem
     admin_c, admin_csrf = await _admin_ctx(client)
-    ca_pem = get_org_ca_pem("cant-onboard-org")
+    ca_pem = get_org_ca_pem("legacy-tenant")
     await client.post("/dashboard/orgs/onboard", data={
         "csrf_token": admin_csrf,
-        "org_id": "cant-onboard-org", "display_name": "X", "secret": "secret",
-        "contact_email": "", "webhook_url": "", "ca_certificate": ca_pem, "action": "approve",
+        "org_id": "legacy-tenant", "display_name": "Legacy Tenant",
+        "secret": "tenant-secret", "contact_email": "",
+        "webhook_url": "", "ca_certificate": ca_pem, "action": "approve",
     }, cookies=admin_c)
 
-    org_c = await _org_cookies(client, "cant-onboard-org", "secret")
-    resp = await client.get("/dashboard/orgs/onboard", cookies=org_c, follow_redirects=False)
-    assert resp.status_code == 303  # redirected — not admin
+    resp = await client.post("/dashboard/login", data={
+        "user_id": "legacy-tenant", "password": "tenant-secret",
+    }, follow_redirects=False)
+    # Login page re-rendered with a deny message — no 303 session redirect.
+    assert resp.status_code == 200
+    assert "network-admin" in resp.text.lower() or "proxy" in resp.text.lower()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,21 +472,32 @@ async def test_reject_requires_auth(client: AsyncClient):
     assert "/login" in resp.headers.get("location", "")
 
 
-async def test_approve_requires_admin(client: AsyncClient):
-    """Org user cannot approve an org."""
-    from tests.cert_factory import get_org_ca_pem
-    admin_c, csrf = await _admin_ctx(client)
-    ca_pem = get_org_ca_pem("approve-auth-org")
-    await client.post("/dashboard/orgs/onboard", data={
-        "csrf_token": csrf,
-        "org_id": "approve-auth-org", "display_name": "X", "secret": "sec",
-        "contact_email": "", "webhook_url": "", "ca_certificate": ca_pem, "action": "approve",
-    }, cookies=admin_c)
-    org_c = await _org_cookies(client, "approve-auth-org", "sec")
-    resp = await client.post("/dashboard/orgs/approve-auth-org/approve",
-                             data={}, cookies=org_c, follow_redirects=False)
+async def test_approve_with_stale_non_admin_cookie_is_rejected(client: AsyncClient):
+    """Deprecated predecessor: test_approve_requires_admin minted an org
+    session to confirm it could not approve other orgs. Org sessions no
+    longer exist on the broker (ADR-001). We now verify that a cookie
+    forged with role!='admin' is treated as logged-out: the approve
+    endpoint redirects to /dashboard/login rather than silently allowing
+    the action.
+    """
+    # Forge a fake session cookie with role='org'. The dashboard hardened
+    # get_session() to treat anything other than role='admin' as no
+    # session; we expect the bounce-to-login path.
+    from app.dashboard.session import _sign
+    import json as _json
+    import time as _time
+    payload = _json.dumps({
+        "role": "org", "org_id": "whoever", "csrf_token": "x",
+        "exp": int(_time.time()) + 600,
+    })
+    fake_cookie = _sign(payload)
+    resp = await client.post(
+        "/dashboard/orgs/someone/approve", data={},
+        cookies={"cullis_session": fake_cookie},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303
-    assert "/dashboard" in resp.headers.get("location", "")
+    assert "/login" in resp.headers.get("location", "")
 
 
 async def test_badge_pending_orgs_requires_admin(client: AsyncClient):

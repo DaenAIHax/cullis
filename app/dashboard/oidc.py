@@ -2,7 +2,9 @@
 OIDC (OpenID Connect) client for dashboard federation.
 
 Supports OAuth 2.0 Authorization Code Flow with PKCE (RFC 7636).
-Used for both per-org and network-admin OIDC login.
+Used exclusively for the optional network-admin SSO login. Per-org OIDC
+login was removed when the broker dashboard became network-admin-only
+(org tenants now log in on the per-org proxy — see ADR-001).
 """
 import base64
 import hashlib
@@ -34,8 +36,8 @@ class OidcFlowState:
     state: str
     nonce: str
     code_verifier: str
-    role: str              # "admin" or "org"
-    org_id: str | None     # None for admin flow
+    role: str = "admin"            # only "admin" is supported on the broker
+    org_id: str | None = None      # unused; kept for cookie schema compat
 
     def to_dict(self) -> dict:
         return {
@@ -52,7 +54,7 @@ class OidcFlowState:
             state=d["state"],
             nonce=d["nonce"],
             code_verifier=d["code_verifier"],
-            role=d["role"],
+            role=d.get("role", "admin"),
             org_id=d.get("org_id"),
         )
 
@@ -66,95 +68,12 @@ class OidcIdentity:
     claims: dict  # raw claims from id_token (used for role mapping)
 
 
-def _extract_claim(claims: dict, path: str) -> object:
+def create_oidc_state(role: str = "admin", org_id: str | None = None) -> OidcFlowState:
+    """Generate cryptographically random state, nonce, and PKCE code_verifier.
+
+    ``role`` and ``org_id`` are retained only for test/callsite compatibility
+    — the broker OIDC flow always resolves to the network-admin session.
     """
-    Walk a dot-notation path through a claims dict/list tree.
-
-    Examples:
-        _extract_claim({"groups": ["a", "b"]}, "groups")        -> ["a", "b"]
-        _extract_claim({"role": {"name": "admin"}}, "role.name") -> "admin"
-        _extract_claim({"items": [{"id": 1}]}, "items.0.id")    -> 1
-
-    Returns None if any path segment is missing or the type is unwalkable.
-    """
-    if not path:
-        return None
-    current: object = claims
-    for part in path.split("."):
-        if current is None:
-            return None
-        if isinstance(current, dict):
-            current = current.get(part)
-        elif isinstance(current, list):
-            try:
-                idx = int(part)
-            except ValueError:
-                return None
-            if 0 <= idx < len(current):
-                current = current[idx]
-            else:
-                return None
-        else:
-            return None
-    return current
-
-
-def validate_role_mapping(mapping: dict | None, claims: dict) -> tuple[bool, str]:
-    """
-    Validate OIDC claims against an org's role mapping configuration.
-
-    Mapping schema (stored in organizations.metadata_json.oidc_role_mapping):
-        {
-          "claim_path": "groups",                    # dot-notation, required
-          "admin_values": ["cullis-admin", "ops"],   # list of accepted values
-          "default_role": "deny" | "org"             # behavior when claim missing
-        }
-
-    Returns (allowed, reason).
-      - allowed=True  -> user is granted the "org" role
-      - allowed=False -> user is denied (HTTP 403)
-      - reason is a short machine-readable code for audit logging
-
-    If `mapping` is None or empty, returns (True, "no_mapping_legacy") for
-    backward compatibility with orgs that have not configured a mapping yet.
-    """
-    if not mapping:
-        return True, "no_mapping_legacy"
-
-    claim_path = mapping.get("claim_path")
-    admin_values = mapping.get("admin_values") or []
-    default_role = mapping.get("default_role", "deny")
-
-    if not claim_path or not admin_values:
-        # Misconfigured mapping → fail closed
-        return False, "mapping_misconfigured"
-
-    claim_value = _extract_claim(claims, claim_path)
-
-    if claim_value is None:
-        if default_role == "deny":
-            return False, "claim_missing"
-        return True, "default_allow"
-
-    # Normalize to a list of strings (claim can be a single string or a list)
-    if isinstance(claim_value, str):
-        values = [claim_value]
-    elif isinstance(claim_value, list):
-        values = [str(v) for v in claim_value if v is not None]
-    else:
-        return False, "claim_type_invalid"
-
-    admin_set = {str(v) for v in admin_values}
-    if any(v in admin_set for v in values):
-        return True, "match"
-
-    if default_role == "deny":
-        return False, "no_match"
-    return True, "default_allow"
-
-
-def create_oidc_state(role: str, org_id: str | None = None) -> OidcFlowState:
-    """Generate cryptographically random state, nonce, and PKCE code_verifier."""
     return OidcFlowState(
         state=os.urandom(32).hex(),
         nonce=os.urandom(32).hex(),
