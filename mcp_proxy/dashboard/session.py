@@ -148,6 +148,59 @@ async def verify_csrf(request: Request, session: ProxyDashboardSession) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# OIDC flow state cookie — short-lived, signed, single-purpose
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OIDC_STATE_COOKIE = "mcp_proxy_oidc_state"
+_OIDC_STATE_MAX_AGE = 600  # 10 minutes
+
+
+def set_oidc_state(response: Response, flow_state: dict) -> None:
+    """Store the OIDC flow state (state+nonce+code_verifier) in a signed cookie."""
+    payload_data = dict(flow_state)
+    payload_data["exp"] = int(time.time()) + _OIDC_STATE_MAX_AGE
+    payload = json.dumps(payload_data)
+    signed = _sign(payload)
+    from mcp_proxy.config import get_settings as _proxy_settings
+    _pub_url = _proxy_settings().proxy_public_url
+    _use_secure = _pub_url.startswith("https") if _pub_url else False
+    response.set_cookie(
+        _OIDC_STATE_COOKIE, signed,
+        max_age=_OIDC_STATE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=_use_secure,
+    )
+
+
+def get_oidc_state(request: Request) -> dict | None:
+    """Read and verify the OIDC state cookie. Returns None if missing / invalid / expired."""
+    cookie = request.cookies.get(_OIDC_STATE_COOKIE)
+    if not cookie:
+        return None
+    payload_str = _verify(cookie)
+    if not payload_str:
+        return None
+    try:
+        data = json.loads(payload_str)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if data.get("exp", 0) < time.time():
+        return None
+    return data
+
+
+def clear_oidc_state(response: Response) -> None:
+    """Delete the OIDC state cookie."""
+    from mcp_proxy.config import get_settings as _proxy_settings
+    _pub_url = _proxy_settings().proxy_public_url
+    _use_secure = _pub_url.startswith("https") if _pub_url else False
+    response.delete_cookie(
+        _OIDC_STATE_COOKIE, samesite="lax", secure=_use_secure,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Admin password (bcrypt, stored in proxy_config.admin_password_hash)
 # ─────────────────────────────────────────────────────────────────────────────
 
