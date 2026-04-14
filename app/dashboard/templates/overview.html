@@ -2,121 +2,212 @@
 {% block title %}Overview{% endblock %}
 {% block header_title %}Overview{% endblock %}
 {% block content %}
-<div id="page-content" data-sse-page="overview" class="max-w-6xl">
+<div id="page-content" data-sse-page="overview" class="max-w-6xl space-y-6">
+
+    <style>
+        .heading { font-family: 'Chakra Petch', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .tnum { font-variant-numeric: tabular-nums; }
+        .hairline { border-color: rgba(255,255,255,0.06); }
+        .card { background: linear-gradient(180deg, rgba(9,14,22,0.9) 0%, rgba(6,10,16,0.9) 100%); border: 1px solid rgba(255,255,255,0.06); }
+        .cell { border-right: 1px solid rgba(255,255,255,0.06); }
+        .cell:last-child { border-right: none; }
+        .dot-ok { background:#00e5c7; box-shadow: 0 0 6px rgba(0,229,199,0.7); }
+        .dot-warn { background:#f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.6); }
+        .dot-err { background:#ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.6); }
+        @keyframes fade-up { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }
+        .fade-up { animation: fade-up 360ms cubic-bezier(.2,.7,.3,1) both; }
+        .fade-up.d1 { animation-delay: 40ms; } .fade-up.d2 { animation-delay: 100ms; }
+        .fade-up.d3 { animation-delay: 160ms; } .fade-up.d4 { animation-delay: 220ms; }
+    </style>
+
+    <!-- Operational tape — status of the broker as a single glance -->
+    <section class="card rounded-sm fade-up">
+        <div class="grid grid-cols-2 md:grid-cols-4">
+            <div class="px-5 py-3 cell flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full dot-ok"></span>
+                <div>
+                    <p class="mono text-[10px] uppercase tracking-[0.2em] text-white/45">broker</p>
+                    <p class="heading text-[13px] font-semibold text-white uppercase tracking-wider">Online</p>
+                </div>
+            </div>
+            <div class="px-5 py-3 cell flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full {% if policy_enforced %}dot-ok{% else %}dot-warn{% endif %}"></span>
+                <div>
+                    <p class="mono text-[10px] uppercase tracking-[0.2em] text-white/45">policy</p>
+                    <p class="heading text-[13px] font-semibold {% if policy_enforced %}text-white{% else %}text-amber-300{% endif %} uppercase tracking-wider">
+                        {% if policy_enforced %}Enforced{% else %}Demo Mode{% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="px-5 py-3 cell flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full dot-ok"></span>
+                <div>
+                    <p class="mono text-[10px] uppercase tracking-[0.2em] text-white/45">events · last 1h</p>
+                    <p class="heading text-[13px] font-semibold text-white uppercase tracking-wider tnum mono">{{ stats.events_last_hour }}</p>
+                </div>
+            </div>
+            <div class="px-5 py-3 flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full {% if stats.orgs_pending and stats.orgs_pending > 0 %}dot-warn{% else %}dot-ok{% endif %}"></span>
+                <div>
+                    <p class="mono text-[10px] uppercase tracking-[0.2em] text-white/45">onboarding queue</p>
+                    <p class="heading text-[13px] font-semibold {% if stats.orgs_pending and stats.orgs_pending > 0 %}text-amber-300{% else %}text-white{% endif %} uppercase tracking-wider tnum mono">
+                        {{ stats.orgs_pending or 0 }} pending
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
 
     <!-- Page header -->
-    <div class="mb-6">
-        <h2 class="text-lg font-semibold text-white uppercase tracking-wider">Network Overview</h2>
-        <p class="text-xs text-gray-600 mt-0.5">Federated trust broker — live status</p>
+    <div class="flex items-end justify-between fade-up d1">
+        <div>
+            <p class="mono text-[10px] uppercase tracking-[0.22em] text-white/40">/dashboard/overview</p>
+            <h2 class="heading text-xl font-semibold text-white uppercase tracking-wider mt-1">Network Overview</h2>
+        </div>
+        <p class="mono text-[10px] text-white/30 uppercase tracking-wider">refreshing via sse</p>
     </div>
 
-    <!-- Policy enforcement toggle -->
-    <div class="mb-6 bg-surface-900/80 border {% if policy_enforced %}border-gray-800/60{% else %}border-amber-600/40{% endif %} rounded-lg p-4 flex items-center justify-between backdrop-blur-sm">
-        <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded {% if policy_enforced %}bg-emerald-500/10{% else %}bg-amber-500/10{% endif %} flex items-center justify-center flex-shrink-0">
-                <svg class="w-4 h-4 {% if policy_enforced %}text-emerald-400{% else %}text-amber-400{% endif %}" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+    <!-- Stats strip — numeric ledger -->
+    <section class="card rounded-sm fade-up d2">
+        <div class="grid grid-cols-2 md:grid-cols-4">
+            <!-- Orgs -->
+            <div class="px-5 py-5 cell">
+                <div class="flex items-center justify-between">
+                    <p class="mono text-[10px] uppercase tracking-[0.22em] text-white/45">organizations</p>
+                    <a href="/dashboard/orgs" class="mono text-[10px] uppercase tracking-wider text-[#00e5c7]/80 hover:text-[#00e5c7] transition-colors">ls →</a>
+                </div>
+                <p class="heading text-[40px] leading-none font-semibold text-white mt-3 tnum mono">{{ stats.orgs }}</p>
+                <div class="mt-2 flex items-center gap-3 mono text-[10px] uppercase tracking-wider">
+                    <span class="text-[#00e5c7]">● {{ stats.orgs_active }} active</span>
+                    {% if stats.orgs_pending %}<span class="text-amber-300">◐ {{ stats.orgs_pending }} pending</span>{% endif %}
+                </div>
             </div>
-            <div>
-                <p class="text-xs font-semibold text-white uppercase tracking-wider">Policy Enforcement</p>
-                {% if policy_enforced %}
-                <p class="text-[10px] text-emerald-400 mt-0.5 uppercase tracking-wider">Active — all policies evaluated</p>
-                {% else %}
-                <p class="text-[10px] text-amber-400 mt-0.5 uppercase tracking-wider">Disabled — demo mode, all sessions allowed</p>
+            <!-- Agents -->
+            <div class="px-5 py-5 cell">
+                <div class="flex items-center justify-between">
+                    <p class="mono text-[10px] uppercase tracking-[0.22em] text-white/45">agents</p>
+                    <a href="/dashboard/agents" class="mono text-[10px] uppercase tracking-wider text-[#00e5c7]/80 hover:text-[#00e5c7] transition-colors">ls →</a>
+                </div>
+                <p class="heading text-[40px] leading-none font-semibold text-white mt-3 tnum mono">{{ stats.agents }}</p>
+                <div class="mt-2 mono text-[10px] uppercase tracking-wider text-[#00e5c7]">● {{ stats.agents_active }} active</div>
+            </div>
+            <!-- Sessions -->
+            <div class="px-5 py-5 cell">
+                <div class="flex items-center justify-between">
+                    <p class="mono text-[10px] uppercase tracking-[0.22em] text-white/45">sessions · live</p>
+                    <a href="/dashboard/sessions" class="mono text-[10px] uppercase tracking-wider text-[#00e5c7]/80 hover:text-[#00e5c7] transition-colors">tail →</a>
+                </div>
+                <p class="heading text-[40px] leading-none font-semibold {% if stats.sessions_active > 0 %}text-[#00e5c7]{% else %}text-white{% endif %} mt-3 tnum mono">{{ stats.sessions_active }}</p>
+                <div class="mt-2 mono text-[10px] uppercase tracking-wider text-white/40">active sockets</div>
+            </div>
+            <!-- Audit -->
+            <div class="px-5 py-5">
+                <div class="flex items-center justify-between">
+                    <p class="mono text-[10px] uppercase tracking-[0.22em] text-white/45">audit chain</p>
+                    <a href="/dashboard/audit" class="mono text-[10px] uppercase tracking-wider text-[#00e5c7]/80 hover:text-[#00e5c7] transition-colors">verify →</a>
+                </div>
+                <p class="heading text-[40px] leading-none font-semibold text-white mt-3 tnum mono">{{ stats.audit_events }}</p>
+                <div class="mt-2 mono text-[10px] uppercase tracking-wider text-white/40">entries · append-only</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Split: recent activity + network posture -->
+    <div class="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-6 fade-up d3">
+
+        <!-- Recent activity feed -->
+        <section class="card rounded-sm">
+            <div class="px-5 py-3 border-b hairline flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="w-1 h-4 bg-[#00e5c7]"></span>
+                    <h3 class="heading text-[12px] font-semibold text-white uppercase tracking-[0.2em]">Recent Activity</h3>
+                </div>
+                <a href="/dashboard/audit" class="mono text-[10px] text-[#00e5c7]/80 hover:text-[#00e5c7] uppercase tracking-wider transition-colors">full audit →</a>
+            </div>
+            <div class="divide-y divide-white/5">
+                {% for event in recent_events %}
+                <div class="px-5 py-2.5 flex items-center gap-4 hover:bg-white/[0.015] transition-colors">
+                    <span class="w-1.5 h-1.5 rounded-full flex-shrink-0
+                        {% if event.result == 'ok' %}dot-ok{% elif event.result == 'denied' %}dot-err{% else %}dot-warn{% endif %}"></span>
+                    <time class="mono text-[10px] text-white/35 tnum w-[60px] flex-shrink-0">
+                        {{ event.created_at.strftime('%H:%M:%S') if event.created_at else '--:--:--' }}
+                    </time>
+                    <div class="flex-1 min-w-0">
+                        <p class="mono text-[12px] text-white/85 truncate">{{ event.event_type }}</p>
+                        <p class="mono text-[10px] text-white/35 truncate">{{ event.agent_id or event.org_id or '—' }}</p>
+                    </div>
+                    <span class="mono text-[10px] uppercase tracking-wider flex-shrink-0
+                        {% if event.result == 'ok' %}text-[#00e5c7]{% elif event.result == 'denied' %}text-red-400{% else %}text-amber-300{% endif %}">
+                        {{ event.result }}
+                    </span>
+                </div>
+                {% endfor %}
+                {% if not recent_events %}
+                <div class="px-5 py-14 text-center">
+                    <p class="mono text-[11px] uppercase tracking-wider text-white/25">/dev/null · no events</p>
+                </div>
                 {% endif %}
             </div>
-        </div>
-        <form method="post" action="/dashboard/admin/policy-toggle">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            {% if policy_enforced %}
-            <button type="submit" class="px-3 py-1.5 text-[10px] font-medium rounded bg-amber-600/20 text-amber-400 border border-amber-600/40 hover:bg-amber-600/30 uppercase tracking-wider transition-colors">
-                Disable for Demo
-            </button>
-            {% else %}
-            <button type="submit" class="px-3 py-1.5 text-[10px] font-medium rounded bg-emerald-600/20 text-emerald-400 border border-emerald-600/40 hover:bg-emerald-600/30 uppercase tracking-wider transition-colors">
-                Re-enable
-            </button>
-            {% endif %}
-        </form>
-    </div>
+        </section>
 
-    <!-- Stats cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <!-- Organizations -->
-        <div class="bg-surface-900/80 border border-gray-800/60 rounded-lg p-5 relative overflow-hidden card-glow backdrop-blur-sm">
-            <div style="position:absolute;top:-12px;right:-12px;width:64px;height:64px;background:radial-gradient(circle,rgba(0,229,199,0.08) 0%,transparent 70%);pointer-events:none;"></div>
-            <div class="flex items-center gap-2.5 mb-3">
-                <div class="w-7 h-7 rounded bg-accent-400/10 flex items-center justify-center flex-shrink-0">
-                    <svg class="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0H5m14 0h2m-16 0H3m2 0v-2m14 2v-2"/></svg>
-                </div>
-                <p class="text-[10px] text-gray-500 uppercase tracking-wider">Organizations</p>
-            </div>
-            <p class="font-heading text-3xl font-semibold text-white">{{ stats.orgs }}</p>
-            <p class="text-[10px] text-emerald-400 mt-1 uppercase tracking-wider">{{ stats.orgs_active }} active</p>
-        </div>
-        <!-- Agents -->
-        <div class="bg-surface-900/80 border border-gray-800/60 rounded-lg p-5 relative overflow-hidden card-glow backdrop-blur-sm">
-            <div style="position:absolute;top:-12px;right:-12px;width:64px;height:64px;background:radial-gradient(circle,rgba(14,165,233,0.1) 0%,transparent 70%);pointer-events:none;"></div>
-            <div class="flex items-center gap-2.5 mb-3">
-                <div class="w-7 h-7 rounded bg-info-400/10 flex items-center justify-center flex-shrink-0">
-                    <svg class="w-4 h-4 text-info-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                </div>
-                <p class="text-[10px] text-gray-500 uppercase tracking-wider">Agents</p>
-            </div>
-            <p class="font-heading text-3xl font-semibold text-white">{{ stats.agents }}</p>
-            <p class="text-[10px] text-emerald-400 mt-1 uppercase tracking-wider">{{ stats.agents_active }} active</p>
-        </div>
-        <!-- Sessions -->
-        <div class="bg-surface-900/80 border border-emerald-900/40 rounded-lg p-5 relative overflow-hidden card-glow backdrop-blur-sm">
-            <div style="position:absolute;top:-12px;right:-12px;width:64px;height:64px;background:radial-gradient(circle,rgba(16,185,129,0.12) 0%,transparent 70%);pointer-events:none;"></div>
-            <div class="flex items-center gap-2.5 mb-3">
-                <div class="w-7 h-7 rounded bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
-                    <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.348 14.651a3.75 3.75 0 010-5.303m5.304 0a3.75 3.75 0 010 5.303m-7.425 2.122a6.75 6.75 0 010-9.546m9.546 0a6.75 6.75 0 010 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.788m13.788 0c3.808 3.808 3.808 9.98 0 13.788"/></svg>
-                </div>
-                <p class="text-[10px] text-gray-500 uppercase tracking-wider">Sessions</p>
-            </div>
-            <p class="font-heading text-3xl font-semibold text-emerald-400">{{ stats.sessions_active }}</p>
-            <p class="text-[10px] text-emerald-400 mt-1 uppercase tracking-wider">active now</p>
-        </div>
-        <!-- Audit Events -->
-        <div class="bg-surface-900/80 border border-gray-800/60 rounded-lg p-5 relative overflow-hidden card-glow backdrop-blur-sm">
-            <div style="position:absolute;top:-12px;right:-12px;width:64px;height:64px;background:radial-gradient(circle,rgba(245,158,11,0.08) 0%,transparent 70%);pointer-events:none;"></div>
-            <div class="flex items-center gap-2.5 mb-3">
-                <div class="w-7 h-7 rounded bg-amber-500/10 flex items-center justify-center flex-shrink-0">
-                    <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15a2.25 2.25 0 012.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V19.5a2.25 2.25 0 002.25 2.25h.75"/></svg>
-                </div>
-                <p class="text-[10px] text-gray-500 uppercase tracking-wider">Audit Events</p>
-            </div>
-            <p class="font-heading text-3xl font-semibold text-white">{{ stats.audit_events }}</p>
-            <p class="text-[10px] text-gray-600 mt-1 uppercase tracking-wider">total recorded</p>
-        </div>
-    </div>
+        <!-- Posture / controls -->
+        <aside class="space-y-4">
 
-    <!-- Recent audit -->
-    <div class="bg-surface-900/80 border border-gray-800/60 rounded-lg backdrop-blur-sm">
-        <div class="px-5 py-3 border-b border-gray-800/60 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-                <svg class="w-3.5 h-3.5 text-gray-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <h3 class="text-xs font-semibold text-white uppercase tracking-wider">Recent Activity</h3>
-            </div>
-            <a href="/dashboard/audit" class="text-[10px] text-accent-400 hover:text-accent-500 uppercase tracking-wider transition-colors">View all →</a>
-        </div>
-        <div class="divide-y divide-gray-800/40">
-            {% for event in recent_events %}
-            <div class="px-5 py-3 flex items-center gap-4 table-row-hover transition-colors">
-                <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 {% if event.result == 'ok' %}bg-emerald-500{% elif event.result == 'denied' %}bg-red-500{% else %}bg-yellow-500{% endif %}"></span>
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm text-gray-300 truncate font-mono">{{ event.event_type }}</p>
-                    <p class="text-[10px] text-gray-600 truncate font-mono">{{ event.agent_id or event.org_id or '-' }}</p>
+            <!-- Policy enforcement -->
+            <div class="card rounded-sm p-5 {% if not policy_enforced %}border-amber-500/40{% endif %}">
+                <div class="flex items-center justify-between mb-3">
+                    <p class="heading text-[12px] font-semibold text-white uppercase tracking-[0.2em]">Policy Enforcement</p>
+                    <span class="mono text-[10px] uppercase tracking-wider {% if policy_enforced %}text-[#00e5c7]{% else %}text-amber-300{% endif %}">
+                        {% if policy_enforced %}active{% else %}disabled{% endif %}
+                    </span>
                 </div>
-                <time class="text-[10px] text-gray-600 flex-shrink-0 font-mono">{{ event.created_at.strftime('%H:%M:%S') if event.created_at else '-' }}</time>
+                <p class="text-xs text-white/55 leading-relaxed">
+                    {% if policy_enforced %}
+                        All cross-org session requests are evaluated against configured allow/deny policies.
+                    {% else %}
+                        Demo mode: every session is allowed without policy evaluation. Re-enable before production.
+                    {% endif %}
+                </p>
+                <form method="post" action="/dashboard/admin/policy-toggle" class="mt-4">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if policy_enforced %}
+                    <button type="submit" class="w-full mono text-[10px] uppercase tracking-[0.22em] py-2 rounded-sm border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 transition-colors">
+                        Disable for demo
+                    </button>
+                    {% else %}
+                    <button type="submit" class="w-full mono text-[10px] uppercase tracking-[0.22em] py-2 rounded-sm border border-[#00e5c7]/40 text-[#00e5c7] hover:bg-[#00e5c7]/10 transition-colors">
+                        Re-enable enforcement
+                    </button>
+                    {% endif %}
+                </form>
             </div>
-            {% endfor %}
-            {% if not recent_events %}
-            <div class="px-5 py-12 text-center">
-                <p class="text-xs text-gray-600">No events yet</p>
+
+            <!-- Federation mesh (placeholder until proxy-connection count is wired) -->
+            <div class="card rounded-sm p-5">
+                <div class="flex items-center justify-between mb-3">
+                    <p class="heading text-[12px] font-semibold text-white uppercase tracking-[0.2em]">Federation Mesh</p>
+                    <span class="mono text-[10px] uppercase tracking-wider text-white/35">sse · fanout</span>
+                </div>
+                <div class="space-y-2.5">
+                    <div class="flex items-center justify-between mono text-[11px]">
+                        <span class="text-white/55 uppercase tracking-wider">events · last 1h</span>
+                        <span class="text-white tnum">{{ stats.events_last_hour }}</span>
+                    </div>
+                    <div class="flex items-center justify-between mono text-[11px]">
+                        <span class="text-white/55 uppercase tracking-wider">active orgs</span>
+                        <span class="text-white tnum">{{ stats.orgs_active }}</span>
+                    </div>
+                    <div class="flex items-center justify-between mono text-[11px]">
+                        <span class="text-white/55 uppercase tracking-wider">live sessions</span>
+                        <span class="text-[#00e5c7] tnum">{{ stats.sessions_active }}</span>
+                    </div>
+                </div>
+                <div class="mt-4 pt-4 border-t hairline">
+                    <a href="/dashboard/orgs" class="mono text-[10px] uppercase tracking-[0.22em] text-[#00e5c7]/80 hover:text-[#00e5c7] transition-colors">Inspect organizations →</a>
+                </div>
             </div>
-            {% endif %}
-        </div>
+        </aside>
     </div>
 </div>
 {% endblock %}
