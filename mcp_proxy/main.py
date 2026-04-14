@@ -350,6 +350,9 @@ app.include_router(local_ws_router)
 from mcp_proxy.enrollment.router import router as enrollment_router
 app.include_router(enrollment_router)
 
+from mcp_proxy.audit.router import router as audit_router
+app.include_router(audit_router)
+
 from mcp_proxy.dashboard.router import router as dashboard_router
 app.include_router(dashboard_router)
 

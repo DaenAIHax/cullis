@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cullis_connector.tools import diagnostic, discovery, session
+from cullis_connector.tools import diagnostic, discovery, high_level, session
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -25,6 +25,7 @@ def register_all(mcp: "FastMCP") -> None:
     diagnostic.register(mcp)
     discovery.register(mcp)
     session.register(mcp)
+    high_level.register(mcp)
 
 
 __all__ = ["register_all"]
