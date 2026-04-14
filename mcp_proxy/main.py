@@ -105,12 +105,19 @@ async def lifespan(app: FastAPI):
     # and the routing decision returns "intra".
     from mcp_proxy.local.persistence import restore_sessions
     from mcp_proxy.local.session import LocalSessionStore
+    from mcp_proxy.local.ws_manager import LocalConnectionManager
     local_store = LocalSessionStore()
     try:
         await restore_sessions(local_store)
     except Exception as exc:
         _log.warning("Failed to restore local sessions from DB: %s", exc)
     app.state.local_session_store = local_store
+
+    # Phase 3b — local WS manager. Phase 3c will plug this into message
+    # delivery (push-vs-queue decision). Today the endpoint accepts
+    # connections so SDKs can start depending on it behind the same
+    # PROXY_INTRA_ORG flag.
+    app.state.local_ws_manager = LocalConnectionManager()
 
     _log.info(
         "MCP Proxy started (host=%s, port=%d, env=%s)",
@@ -120,6 +127,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
+    ws_manager = getattr(app.state, "local_ws_manager", None)
+    if ws_manager is not None:
+        await ws_manager.shutdown()
     bridge = getattr(app.state, "broker_bridge", None)
     if bridge is not None:
         await bridge.shutdown()
@@ -297,6 +307,9 @@ app.include_router(ingress_router)
 
 from mcp_proxy.egress.router import router as egress_router
 app.include_router(egress_router)
+
+from mcp_proxy.local.ws_router import router as local_ws_router
+app.include_router(local_ws_router)
 
 from mcp_proxy.dashboard.router import router as dashboard_router
 app.include_router(dashboard_router)
