@@ -173,6 +173,42 @@ else
     fail "B3.8 bob@orgb browser OIDC"
 fi
 
+# B3.9 — Unauthenticated access to proxy dashboard is blocked
+anon_rc=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9100/proxy/overview)
+if [[ "$anon_rc" == "303" || "$anon_rc" == "302" || "$anon_rc" == "401" || "$anon_rc" == "403" ]]; then
+    pass "B3.9 anonymous GET /proxy/overview blocked (HTTP $anon_rc)"
+else
+    fail "B3.9 anonymous access NOT blocked (HTTP $anon_rc — LEAK)"
+fi
+
+# B3.10 — Session isolation: bob's cookie must not grant access to proxy-a
+#
+# Full OIDC login for bob on proxy-b captures a session cookie, then we replay
+# that same cookie jar against proxy-a. Expected: 303/401/403 (bob's session
+# is bound to proxy-b's signing key + org; proxy-a must reject it).
+bob_login_and_try_other() {
+    local cj; cj=$(mktemp)
+    local au lp fa cu
+    au=$(curl -s -o /dev/null -w "%{redirect_url}" -c "$cj" -b "$cj" \
+        "http://localhost:9200/proxy/oidc/start") || { rm -f "$cj"; echo X; return; }
+    lp=$(curl -s --resolve "keycloak-b:8280:127.0.0.1" -c "$cj" -b "$cj" -L "$au")
+    fa=$(echo "$lp" | grep -oE 'action="[^"]+"' | head -1 | sed 's/action="//;s/"$//;s/&amp;/\&/g')
+    cu=$(curl -s -o /dev/null -w "%{redirect_url}" --resolve "keycloak-b:8280:127.0.0.1" -c "$cj" -b "$cj" \
+        -d "username=bob&password=bob-sandbox&credentialId=" "$fa")
+    curl -s -o /dev/null -c "$cj" -b "$cj" "$cu" >/dev/null   # seal bob session
+    # Replay bob's cookie jar against proxy-a (different port, different tenant)
+    local cross
+    cross=$(curl -s -o /dev/null -w "%{http_code}" -b "$cj" http://localhost:9100/proxy/overview)
+    rm -f "$cj"
+    echo "$cross"
+}
+cross_rc=$(bob_login_and_try_other)
+if [[ "$cross_rc" == "303" || "$cross_rc" == "302" || "$cross_rc" == "401" || "$cross_rc" == "403" ]]; then
+    pass "B3.10 bob's cookie rejected by proxy-a (HTTP $cross_rc — isolated)"
+else
+    fail "B3.10 bob's cookie accepted by proxy-a (HTTP $cross_rc — LEAK)"
+fi
+
 # Upcoming
 skip "B4 SPIRE + SVID agent"         "Blocco 4 not yet implemented"
 skip "B5 full 10-assertion smoke"    "Blocco 5 not yet implemented"
