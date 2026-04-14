@@ -39,6 +39,9 @@ def test_build_server_registers_tools_and_sets_state(tmp_path: Path):
         "close_session",
         "list_sessions",
         "select_session",
+        "send_to_agent",
+        "await_response",
+        "get_audit_trail",
     }
     # Legacy `connect` tool removed in Phase 2b — identity now loaded from
     # ~/.cullis/identity/ populated by `cullis-connector enroll`.
