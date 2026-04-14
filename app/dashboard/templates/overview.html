@@ -10,8 +10,7 @@
         <p class="text-xs text-gray-600 mt-0.5">Federated trust broker — live status</p>
     </div>
 
-    <!-- Policy enforcement toggle (admin only) -->
-    {% if session and session.is_admin %}
+    <!-- Policy enforcement toggle -->
     <div class="mb-6 bg-surface-900/80 border {% if policy_enforced %}border-gray-800/60{% else %}border-amber-600/40{% endif %} rounded-lg p-4 flex items-center justify-between backdrop-blur-sm">
         <div class="flex items-center gap-3">
             <div class="w-8 h-8 rounded {% if policy_enforced %}bg-emerald-500/10{% else %}bg-amber-500/10{% endif %} flex items-center justify-center flex-shrink-0">
@@ -39,7 +38,6 @@
             {% endif %}
         </form>
     </div>
-    {% endif %}
 
     <!-- Stats cards -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

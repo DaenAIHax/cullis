@@ -48,7 +48,6 @@ from app.broker.router import router as broker_router
 from app.policy.router import router as policy_router
 from app.onboarding.router import onboarding_router, admin_router
 from app.dashboard.router import router as dashboard_router
-from app.dashboard.agent_console import router as agent_console_router
 
 settings = get_settings()
 
@@ -368,7 +367,6 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # ── Non-versioned routes ──────────────────────────────────────────────────────
 app.include_router(dashboard_router)
-app.include_router(agent_console_router)
 
 
 @app.get("/", include_in_schema=False)

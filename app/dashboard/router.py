@@ -307,319 +307,11 @@ async def admin_change_password(request: Request, db: AsyncSession = Depends(get
              kms_backend=settings.kms_backend, hash_present=True))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Organization Settings (CA certificate upload)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request, db: AsyncSession = Depends(get_db)):
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    if session.is_admin:
-        return RedirectResponse(url="/dashboard", status_code=303)
-
-    org = await get_org_by_id(db, session.org_id)
-    if not org:
-        return RedirectResponse(url="/dashboard/login", status_code=303)
-
-    meta = _json.loads(org.metadata_json or "{}")
-    ca_locked = bool(org.ca_certificate) and meta.get("ca_locked", False)
-    oidc_mapping = meta.get("oidc_role_mapping") or {}
-
-    return templates.TemplateResponse("settings.html",
-        _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
-             oidc_mapping=oidc_mapping,
-             error=None, success=None))
+# Org-tenant self-service settings (CA upload, CA generate, OIDC role mapping)
+# were removed in the network-admin-only refactor (ADR-001). Admin still
+# manages per-org CA via /dashboard/orgs/{org_id}/upload-ca.
 
 
-@router.post("/settings/ca", response_class=HTMLResponse)
-async def settings_upload_ca(request: Request, db: AsyncSession = Depends(get_db)):
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    if session.is_admin:
-        return RedirectResponse(url="/dashboard", status_code=303)
-    if not await verify_csrf(request, session):
-        org = await get_org_by_id(db, session.org_id)
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org,
-                 error="Invalid CSRF token.", success=None))
-
-    form_data = await request.form()
-    ca_pem = form_data.get("ca_certificate", "").strip()
-
-    org = await get_org_by_id(db, session.org_id)
-    if not org:
-        return RedirectResponse(url="/dashboard/login", status_code=303)
-
-    # Check if already locked
-    meta = _json.loads(org.metadata_json or "{}")
-    if bool(org.ca_certificate) and meta.get("ca_locked", False):
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=True,
-                 error="CA certificate is locked. Contact admin to unlock.", success=None))
-
-    if not ca_pem or "-----BEGIN CERTIFICATE-----" not in ca_pem:
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=False,
-                 error="Invalid certificate. Paste a valid PEM certificate.", success=None))
-
-    # Validate the PEM — must be a CA certificate
-    try:
-        from cryptography.x509 import load_pem_x509_certificate
-        from cryptography.x509.oid import ExtensionOID
-        _ca_cert = load_pem_x509_certificate(ca_pem.encode())
-        # Verify BasicConstraints CA=true
-        try:
-            _bc = _ca_cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS)
-            if not _bc.value.ca:
-                return templates.TemplateResponse("settings.html",
-                    _ctx(request, session, active="settings", org=org,
-                         error="Certificate is not a CA (BasicConstraints CA=false).", success=None))
-        except Exception:
-            return templates.TemplateResponse("settings.html",
-                _ctx(request, session, active="settings", org=org,
-                     error="Certificate missing BasicConstraints extension. Must be a CA certificate.", success=None))
-    except Exception:
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org,
-                 error="Could not parse the certificate. Ensure it is valid PEM format.", success=None))
-
-    await update_org_ca_cert(db, session.org_id, ca_pem)
-
-    # Lock the CA field
-    meta["ca_locked"] = True
-    org.metadata_json = _json.dumps(meta)
-    await db.commit()
-
-    await log_event(db, "registry.ca_certificate_uploaded", "ok",
-                    org_id=session.org_id,
-                    details={"source": "dashboard"})
-
-    org = await get_org_by_id(db, session.org_id)
-    return templates.TemplateResponse("settings.html",
-        _ctx(request, session, active="settings", org=org, ca_locked=True,
-             error=None, success="CA certificate uploaded and locked."))
-
-
-@router.post("/settings/generate-ca", response_class=HTMLResponse)
-async def settings_generate_ca(request: Request, db: AsyncSession = Depends(get_db)):
-    """Generate a demo CA certificate for the organization.
-
-    The CA private key is stored in the broker's Vault instance.
-    This is NOT secure for production — the broker should never hold
-    org CA private keys.  Use BYOCA (Bring Your Own CA) in production.
-    """
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    if session.is_admin:
-        return RedirectResponse(url="/dashboard", status_code=303)
-    if not await verify_csrf(request, session):
-        org = await get_org_by_id(db, session.org_id)
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org,
-                 error="Invalid CSRF token.", success=None))
-
-    org = await get_org_by_id(db, session.org_id)
-    if not org:
-        return RedirectResponse(url="/dashboard/login", status_code=303)
-
-    # Refuse if CA already exists
-    meta = _json.loads(org.metadata_json or "{}")
-    if org.ca_certificate and meta.get("ca_locked", False):
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=True,
-                 error="CA certificate is already locked.", success=None))
-
-    # Generate org CA using the same logic as generate_certs.py
-    import datetime as _dt
-    from cryptography import x509 as _x509
-    from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
-    from cryptography.hazmat.primitives.asymmetric import ec as _ec, rsa as _rsa
-    from cryptography.x509.oid import NameOID as _NameOID
-
-    form = await request.form()
-    key_type = (form.get("key_type") or "rsa").strip().lower()
-    if key_type == "ec":
-        ca_key = _ec.generate_private_key(_ec.SECP256R1())
-    elif key_type == "rsa":
-        ca_key = _rsa.generate_private_key(public_exponent=65537, key_size=4096)
-    else:
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org,
-                 error=f"Unsupported key type {key_type!r}.", success=None))
-    now = _dt.datetime.now(_dt.timezone.utc)
-    subject = _x509.Name([
-        _x509.NameAttribute(_NameOID.COMMON_NAME, f"{org.display_name} CA"),
-        _x509.NameAttribute(_NameOID.ORGANIZATION_NAME, session.org_id),
-    ])
-    ca_cert = (
-        _x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(ca_key.public_key())
-        .serial_number(_x509.random_serial_number())
-        .not_valid_before(now)
-        .not_valid_after(now + _dt.timedelta(days=365 * 5))
-        .add_extension(_x509.BasicConstraints(ca=True, path_length=0), critical=True)
-        .add_extension(
-            _x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
-            critical=False,
-        )
-        .sign(ca_key, _hashes.SHA256())
-    )
-
-    ca_key_pem = ca_key.private_bytes(
-        encoding=_ser.Encoding.PEM,
-        format=_ser.PrivateFormat.PKCS8,  # TraditionalOpenSSL only encodes RSA
-        encryption_algorithm=_ser.NoEncryption(),
-    ).decode()
-    ca_cert_pem = ca_cert.public_bytes(_ser.Encoding.PEM).decode()
-
-    # Store private key in Vault at secret/data/org/{org_id}
-    import os
-    import httpx
-    vault_addr = os.environ.get("VAULT_ADDR", "http://localhost:8200")
-    vault_token = os.environ.get("VAULT_TOKEN", "dev-root-token")
-    vault_path = f"secret/data/org/{session.org_id}"
-    vault_payload = {"data": {"private_key_pem": ca_key_pem, "ca_cert_pem": ca_cert_pem}}
-
-    try:
-        allow_http = os.environ.get("VAULT_ALLOW_HTTP", "").lower() == "true"
-        async with httpx.AsyncClient(verify=not allow_http) as client:
-            resp = await client.post(
-                f"{vault_addr}/v1/{vault_path}",
-                headers={"X-Vault-Token": vault_token, "Content-Type": "application/json"},
-                json=vault_payload,
-                timeout=10,
-            )
-            if resp.status_code not in (200, 204):
-                raise RuntimeError(f"Vault returned HTTP {resp.status_code}")
-    except Exception as exc:
-        # Fallback: save to disk (dev only)
-        import logging
-        logging.getLogger("agent_trust").warning(
-            "Vault unavailable for org CA storage, falling back to disk: %s", exc)
-        certs_dir = pathlib.Path(__file__).parent.parent.parent / "certs" / session.org_id
-        certs_dir.mkdir(parents=True, exist_ok=True)
-        (certs_dir / "ca-key.pem").write_text(ca_key_pem)
-        (certs_dir / "ca-key.pem").chmod(0o600)
-        (certs_dir / "ca.pem").write_text(ca_cert_pem)
-
-    # Also save to disk so bundle download works
-    certs_dir = pathlib.Path(__file__).parent.parent.parent / "certs" / session.org_id
-    certs_dir.mkdir(parents=True, exist_ok=True)
-    (certs_dir / "ca-key.pem").write_text(ca_key_pem)
-    (certs_dir / "ca-key.pem").chmod(0o600)
-    (certs_dir / "ca.pem").write_text(ca_cert_pem)
-
-    # Store public cert in org record and lock
-    await update_org_ca_cert(db, session.org_id, ca_cert_pem)
-    meta["ca_locked"] = True
-    meta["ca_source"] = "broker-generated-demo"
-    org.metadata_json = _json.dumps(meta)
-    await db.commit()
-
-    await log_event(db, "registry.ca_certificate_generated", "ok",
-                    org_id=session.org_id,
-                    details={"source": "dashboard", "mode": "demo",
-                             "warning": "CA private key stored on broker — not for production"})
-
-    org = await get_org_by_id(db, session.org_id)
-    return templates.TemplateResponse("settings.html",
-        _ctx(request, session, active="settings", org=org, ca_locked=True,
-             error=None,
-             success="Demo CA generated. WARNING: The private key is stored on this broker. "
-                     "Use Bring Your Own CA (BYOCA) for production deployments."))
-
-
-@router.post("/settings/oidc-mapping", response_class=HTMLResponse)
-async def settings_oidc_mapping(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    Update the org's OIDC role mapping (claim_path / admin_values / default_role).
-
-    Empty form values clear the mapping (org reverts to legacy behavior:
-    any IdP-authenticated user becomes org admin).
-    """
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    if session.is_admin:
-        return RedirectResponse(url="/dashboard", status_code=303)
-    if not await verify_csrf(request, session):
-        org = await get_org_by_id(db, session.org_id)
-        meta = _json.loads(org.metadata_json or "{}") if org else {}
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org,
-                 ca_locked=bool(org and org.ca_certificate) and meta.get("ca_locked", False),
-                 error="Invalid CSRF token.", success=None))
-
-    form_data = await request.form()
-    claim_path = form_data.get("claim_path", "").strip()
-    admin_values_raw = form_data.get("admin_values", "").strip()
-    default_role = form_data.get("default_role", "deny").strip()
-    request_scopes_raw = form_data.get("request_scopes", "").strip()
-
-    org = await get_org_by_id(db, session.org_id)
-    if not org:
-        return RedirectResponse(url="/dashboard/login", status_code=303)
-    meta = _json.loads(org.metadata_json or "{}")
-    ca_locked = bool(org.ca_certificate) and meta.get("ca_locked", False)
-
-    from app.registry.org_store import update_org_oidc_role_mapping
-
-    # Clear mapping if both fields are empty
-    if not claim_path and not admin_values_raw:
-        await update_org_oidc_role_mapping(db, session.org_id, None)
-        await log_event(db, "dashboard.oidc_mapping_cleared", "ok",
-                        org_id=session.org_id)
-        org = await get_org_by_id(db, session.org_id)
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
-                 error=None,
-                 success="OIDC role mapping cleared. Org reverts to legacy behavior."))
-
-    # Both fields required when configuring
-    if not claim_path or not admin_values_raw:
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
-                 error="Both claim path and admin values are required.", success=None))
-
-    if default_role not in ("deny", "org"):
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
-                 error="Default role must be 'deny' or 'org'.", success=None))
-
-    # Parse comma-separated lists
-    admin_values = [v.strip() for v in admin_values_raw.split(",") if v.strip()]
-    if not admin_values:
-        return templates.TemplateResponse("settings.html",
-            _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
-                 error="At least one admin value is required.", success=None))
-
-    request_scopes = [s.strip() for s in request_scopes_raw.split(",") if s.strip()]
-
-    mapping = {
-        "claim_path": claim_path,
-        "admin_values": admin_values,
-        "default_role": default_role,
-    }
-    if request_scopes:
-        mapping["request_scopes"] = request_scopes
-
-    await update_org_oidc_role_mapping(db, session.org_id, mapping)
-    await log_event(db, "dashboard.oidc_mapping_updated", "ok",
-                    org_id=session.org_id,
-                    details={"claim_path": claim_path,
-                             "admin_values_count": len(admin_values),
-                             "default_role": default_role})
-
-    org = await get_org_by_id(db, session.org_id)
-    return templates.TemplateResponse("settings.html",
-        _ctx(request, session, active="settings", org=org, ca_locked=ca_locked,
-             error=None, success="OIDC role mapping updated."))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -841,51 +533,46 @@ async def overview(request: Request, db: AsyncSession = Depends(get_db)):
 
     # Note: the /setup-before-login invariant is enforced at /dashboard/login
     # now — any logged-in session implies user_set=true, so no redirect here.
+    # Network-admin console: all stats are network-wide.
 
-    org_filter = session.org_id  # None for admin = all
+    orgs_total = (await db.execute(select(func.count(OrganizationRecord.org_id)))).scalar() or 0
+    orgs_active = (await db.execute(
+        select(func.count(OrganizationRecord.org_id)).where(OrganizationRecord.status == "active")
+    )).scalar() or 0
+    orgs_pending = (await db.execute(
+        select(func.count(OrganizationRecord.org_id)).where(OrganizationRecord.status == "pending")
+    )).scalar() or 0
 
-    # Stats — scoped by role
-    if session.is_admin:
-        orgs_total = (await db.execute(select(func.count(OrganizationRecord.org_id)))).scalar() or 0
-        orgs_active = (await db.execute(
-            select(func.count(OrganizationRecord.org_id)).where(OrganizationRecord.status == "active")
-        )).scalar() or 0
-    else:
-        orgs_total = 1
-        orgs_active = 1
+    agents_total = (await db.execute(select(func.count(AgentRecord.agent_id)))).scalar() or 0
+    agents_active = (await db.execute(
+        select(func.count(AgentRecord.agent_id)).where(AgentRecord.is_active.is_(True))
+    )).scalar() or 0
 
-    agents_q = select(func.count(AgentRecord.agent_id))
-    agents_active_q = select(func.count(AgentRecord.agent_id)).where(AgentRecord.is_active.is_(True))
-    if org_filter:
-        agents_q = agents_q.where(AgentRecord.org_id == org_filter)
-        agents_active_q = agents_active_q.where(AgentRecord.org_id == org_filter)
-    agents_total = (await db.execute(agents_q)).scalar() or 0
-    agents_active = (await db.execute(agents_active_q)).scalar() or 0
+    sessions_active = (await db.execute(
+        select(func.count(SessionRecord.session_id)).where(SessionRecord.status == "active")
+    )).scalar() or 0
 
-    sessions_q = select(func.count(SessionRecord.session_id)).where(SessionRecord.status == "active")
-    if org_filter:
-        sessions_q = sessions_q.where(or_(
-            SessionRecord.initiator_org_id == org_filter,
-            SessionRecord.target_org_id == org_filter,
-        ))
-    sessions_active = (await db.execute(sessions_q)).scalar() or 0
+    audit_events = (await db.execute(select(func.count(AuditLog.id)))).scalar() or 0
 
-    audit_q = select(func.count(AuditLog.id))
-    if org_filter:
-        audit_q = audit_q.where(AuditLog.org_id == org_filter)
-    audit_events = (await db.execute(audit_q)).scalar() or 0
+    # Recent audit events (network-wide)
+    recent_events = (await db.execute(
+        select(AuditLog).order_by(AuditLog.id.desc()).limit(15)
+    )).scalars().all()
 
-    # Recent events
-    recent_q = select(AuditLog).order_by(AuditLog.id.desc()).limit(15)
-    if org_filter:
-        recent_q = recent_q.where(AuditLog.org_id == org_filter)
-    recent_events = (await db.execute(recent_q)).scalars().all()
+    # Federation-health proxy metric: audit events in the last hour is a
+    # cheap signal of network traffic that doesn't need a new metrics store.
+    import datetime as _dt_stats
+    _one_hour_ago = _dt_stats.datetime.now(_dt_stats.timezone.utc) - _dt_stats.timedelta(hours=1)
+    events_last_hour = (await db.execute(
+        select(func.count(AuditLog.id)).where(AuditLog.timestamp >= _one_hour_ago)
+    )).scalar() or 0
 
     stats = {
-        "orgs": orgs_total, "orgs_active": orgs_active,
+        "orgs": orgs_total, "orgs_active": orgs_active, "orgs_pending": orgs_pending,
         "agents": agents_total, "agents_active": agents_active,
         "sessions_active": sessions_active,
         "audit_events": audit_events,
+        "events_last_hour": events_last_hour,
     }
 
     from app.config import is_policy_enforced
@@ -1063,8 +750,6 @@ async def agents_list(request: Request, db: AsyncSession = Depends(get_db)):
         return session
 
     q = select(AgentRecord).order_by(AgentRecord.org_id, AgentRecord.agent_id)
-    if not session.is_admin:
-        q = q.where(AgentRecord.org_id == session.org_id)
     agents = (await db.execute(q)).scalars().all()
 
     binding_statuses = {}
@@ -1108,11 +793,6 @@ async def sessions_list(
     q = select(SessionRecord).order_by(SessionRecord.created_at.desc())
     if status:
         q = q.where(SessionRecord.status == status)
-    if not session.is_admin:
-        q = q.where(or_(
-            SessionRecord.initiator_org_id == session.org_id,
-            SessionRecord.target_org_id == session.org_id,
-        ))
     q = q.limit(100)
 
     result = await db.execute(q)
@@ -1165,8 +845,6 @@ async def audit_log(
         return session
 
     query = select(AuditLog).order_by(AuditLog.id.desc())
-    if not session.is_admin:
-        query = query.where(AuditLog.org_id == session.org_id)
 
     if q:
         q = q[:100]  # Limit search term length to prevent expensive LIKE queries
@@ -1250,8 +928,6 @@ async def rfq_list(request: Request, db: AsyncSession = Depends(get_db)):
         return session
 
     q = select(RfqRecord).order_by(RfqRecord.created_at.desc()).limit(100)
-    if not session.is_admin:
-        q = q.where(RfqRecord.initiator_org_id == session.org_id)
     rfqs = (await db.execute(q)).scalars().all()
 
     return templates.TemplateResponse("rfqs.html",
@@ -1270,9 +946,6 @@ async def rfq_detail(request: Request, rfq_id: str, db: AsyncSession = Depends(g
     )).scalar_one_or_none()
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found")
-
-    if not session.is_admin and rfq.initiator_org_id != session.org_id:
-        raise HTTPException(status_code=403, detail="Access denied")
 
     responses = (await db.execute(
         select(RfqResponseRecord).where(RfqResponseRecord.rfq_id == rfq_id)
@@ -1298,9 +971,6 @@ async def rfq_approve(request: Request, rfq_id: str, db: AsyncSession = Depends(
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found")
 
-    if not session.is_admin and rfq.initiator_org_id != session.org_id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
     form = await request.form()
     response_id = form.get("response_id")
     responder_agent_id = form.get("responder_agent_id", "")
@@ -1325,7 +995,7 @@ async def rfq_approve(request: Request, rfq_id: str, db: AsyncSession = Depends(
         txn_type="CREATE_ORDER",
         resource_id=rfq_id,
         payload_hash=payload_hash,
-        approved_by=session.org_id if not session.is_admin else "admin",
+        approved_by="admin",
         rfq_id=rfq_id,
         target_agent_id=responder_agent_id,
     )
@@ -1387,11 +1057,6 @@ async def badge_pending_sessions(request: Request, db: AsyncSession = Depends(ge
     if not session.logged_in:
         return ""
     count_q = select(func.count(SessionRecord.session_id)).where(SessionRecord.status == "pending")
-    if not session.is_admin:
-        count_q = count_q.where(or_(
-            SessionRecord.initiator_org_id == session.org_id,
-            SessionRecord.target_org_id == session.org_id,
-        ))
     count = (await db.execute(count_q)).scalar() or 0
     if count > 0:
         return f'<span class="px-1.5 py-0.5 rounded-full text-xs bg-yellow-500/20 text-yellow-400">{count}</span>'
@@ -1410,7 +1075,7 @@ async def dashboard_sse(request: Request):
 
     from app.dashboard.sse import sse_manager
 
-    client_id, queue = sse_manager.connect(org_id=session.org_id, is_admin=session.is_admin)
+    client_id, queue = sse_manager.connect(org_id=None, is_admin=True)
 
     async def event_stream():
         try:
@@ -1476,7 +1141,7 @@ async def org_onboard_generate_ca(request: Request):
             _lim.register("onboard-generate-ca", window_seconds=60, max_requests=20)
             globals()["_onboard_ca_limiter"] = _lim
         await globals()["_onboard_ca_limiter"].check(
-            subject=session.org_id or "admin", bucket="onboard-generate-ca",
+            subject="admin", bucket="onboard-generate-ca",
         )
     except HTTPException as _e:
         if _e.status_code == 429:
@@ -1826,8 +1491,6 @@ async def agent_register_form(request: Request, db: AsyncSession = Depends(get_d
         return session
 
     q = select(OrganizationRecord).where(OrganizationRecord.status == "active").order_by(OrganizationRecord.org_id)
-    if not session.is_admin:
-        q = q.where(OrganizationRecord.org_id == session.org_id)
     orgs = (await db.execute(q)).scalars().all()
 
     return templates.TemplateResponse("agent_register.html",
@@ -1841,8 +1504,6 @@ async def agent_register_submit(request: Request, db: AsyncSession = Depends(get
         return session
     if not await verify_csrf(request, session):
         q = select(OrganizationRecord).where(OrganizationRecord.status == "active").order_by(OrganizationRecord.org_id)
-        if not session.is_admin:
-            q = q.where(OrganizationRecord.org_id == session.org_id)
         orgs = (await db.execute(q)).scalars().all()
         return templates.TemplateResponse("agent_register.html",
             _ctx(request, session, active="agents", form={}, orgs=orgs,
@@ -2179,8 +1840,6 @@ async def agent_detail(request: Request, agent_id: str,
          .where(AuditLog.agent_id == agent_id)
          .order_by(AuditLog.id.desc())
          .limit(10))
-    if not session.is_admin:
-        q = q.where(AuditLog.org_id == session.org_id)
     audit_events = (await db.execute(q)).scalars().all()
 
     broker_url = _broker_url_from_request(request)
@@ -2651,18 +2310,11 @@ async def policies_list(request: Request, db: AsyncSession = Depends(get_db)):
     if isinstance(session, RedirectResponse):
         return session
 
-    if session.is_admin:
-        result = await db.execute(
-            select(PolicyRecord)
-            .where(PolicyRecord.policy_type == "session")
-            .order_by(PolicyRecord.org_id, PolicyRecord.policy_id)
-        )
-    else:
-        result = await db.execute(
-            select(PolicyRecord)
-            .where(PolicyRecord.policy_type == "session", PolicyRecord.org_id == session.org_id)
-            .order_by(PolicyRecord.policy_id)
-        )
+    result = await db.execute(
+        select(PolicyRecord)
+        .where(PolicyRecord.policy_type == "session")
+        .order_by(PolicyRecord.org_id, PolicyRecord.policy_id)
+    )
     records = result.scalars().all()
 
     policy_list = []
