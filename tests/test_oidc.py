@@ -7,13 +7,12 @@ see the module history for the deleted coverage.
 """
 import time
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 
 from httpx import AsyncClient
 
 from app.dashboard.oidc import (
     create_oidc_state, _pkce_code_challenge, OidcFlowState,
-    OidcIdentity,
 )
 
 pytestmark = pytest.mark.asyncio
