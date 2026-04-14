@@ -101,6 +101,18 @@ class Settings(BaseSettings):
     vault_token: str = ""
     vault_secret_path: str = "secret/data/broker"
 
+    # Audit hash chain TSA anchoring (issue #75). When enabled, a
+    # background worker periodically timestamps each per-org chain head
+    # with an external TSA so the broker operator cannot silently
+    # rewrite history. Backend "mock" writes a deterministic broker-
+    # signed anchor (ok for dev/demo but NOT dispute-grade); "rfc3161"
+    # uses a real TSA per RFC 3161 (requires the `rfc3161-client`
+    # runtime dep, set url via audit_tsa_url).
+    audit_tsa_enabled: bool = False
+    audit_tsa_backend: str = "mock"  # "mock" | "rfc3161"
+    audit_tsa_url: str = "http://timestamp.digicert.com"
+    audit_tsa_interval_seconds: int = 3600  # default: hourly anchor
+
     class Config:
         env_file = ".env"
         extra = "ignore"

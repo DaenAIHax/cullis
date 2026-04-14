@@ -658,11 +658,41 @@ async def export_audit_logs(
         )
 
     # Default: NDJSON (newline-delimited JSON)
+    # Each line is one of:
+    #   {"kind":"entry", ...audit row fields...}
+    #   {"kind":"anchor", "org_id":..., "chain_seq":..., "row_hash":...,
+    #    "tsa_token_b64":..., "tsa_url":..., "created_at":...}
+    # The anchor lines let an offline verifier confirm each per-org
+    # chain head was timestamped by an external TSA (or the mock).
+    import base64
+    from sqlalchemy import select
+    from app.db.audit import AuditTsaAnchor
+    anchor_stmt = select(AuditTsaAnchor)
+    if org_id is not None:
+        anchor_stmt = anchor_stmt.where(AuditTsaAnchor.org_id == org_id)
+    anchor_stmt = anchor_stmt.order_by(
+        AuditTsaAnchor.org_id.asc(), AuditTsaAnchor.chain_seq.asc()
+    )
+    anchors = (await db.execute(anchor_stmt)).scalars().all()
+
+    # Match the broker's hash-computation timestamp form: tz-aware UTC.
+    # SQLite may return tz-naive datetimes on refresh; coerce before
+    # serialization so the CLI re-hashes identically.
+    from datetime import timezone as _tz
+
+    def _iso(ts):
+        if ts is None:
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        return ts.isoformat()
+
     def _generate():
         for e in entries:
             yield json_mod.dumps({
+                "kind": "entry",
                 "id": e.id,
-                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                "timestamp": _iso(e.timestamp),
                 "event_type": e.event_type,
                 "agent_id": e.agent_id,
                 "session_id": e.session_id,
@@ -674,6 +704,16 @@ async def export_audit_logs(
                 "chain_seq": e.chain_seq,
                 "peer_org_id": e.peer_org_id,
                 "peer_row_hash": e.peer_row_hash,
+            }) + "\n"
+        for a in anchors:
+            yield json_mod.dumps({
+                "kind": "anchor",
+                "org_id": a.org_id,
+                "chain_seq": a.chain_seq,
+                "row_hash": a.row_hash,
+                "tsa_token_b64": base64.b64encode(a.tsa_token).decode("ascii"),
+                "tsa_url": a.tsa_url,
+                "created_at": _iso(a.created_at),
             }) + "\n"
 
     return StreamingResponse(
