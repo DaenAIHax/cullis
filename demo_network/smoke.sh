@@ -143,8 +143,8 @@ assert_dashboard_signing_key_persistent() {
             return 0
         }
 
-    if ! grep -q atn_session "$jar_dir/cookies" 2>/dev/null; then
-        warn "A4: no atn_session cookie in jar — login probably rejected. Skipping."
+    if ! grep -q cullis_session "$jar_dir/cookies" 2>/dev/null; then
+        warn "A4: no cullis_session cookie in jar — login probably rejected. Skipping."
         return 0
     fi
 

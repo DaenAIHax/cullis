@@ -129,7 +129,7 @@ a live demo).
    `POST /v1/admin/orgs/{id}/approve` (status flips to `active`).
 7. **Inside each proxy container**, runs `setup_proxy_org.py --phase=agent`:
    - issues an x509 cert signed by the Org CA with SPIFFE SAN
-     `spiffe://atn.local/<org>/<agent>`,
+     `spiffe://cullis.local/<org>/<agent>`,
    - mints an internal API key (`sk_local_*`),
    - registers the agent + binding in the broker registry,
    - the binding is auto-approved by the org.

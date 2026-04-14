@@ -37,8 +37,8 @@ def agent_id_to_spiffe(org_id: str, agent_name: str, trust_domain: str) -> str:
     Convert org_id and agent_name into a SPIFFE ID.
 
     Example:
-        agent_id_to_spiffe("manufacturer", "sales-agent", "atn.local")
-        -> "spiffe://atn.local/manufacturer/sales-agent"
+        agent_id_to_spiffe("manufacturer", "sales-agent", "cullis.local")
+        -> "spiffe://cullis.local/manufacturer/sales-agent"
     """
     _validate_trust_domain(trust_domain)
     _validate_path_component(org_id, "org_id")
@@ -51,7 +51,7 @@ def spiffe_to_agent_id(spiffe_id: str) -> tuple[str, str]:
     Convert a SPIFFE ID into (org_id, agent_name).
 
     Example:
-        spiffe_to_agent_id("spiffe://atn.local/manufacturer/sales-agent")
+        spiffe_to_agent_id("spiffe://cullis.local/manufacturer/sales-agent")
         -> ("manufacturer", "sales-agent")
 
     Raises ValueError if the format is invalid.
@@ -72,8 +72,8 @@ def internal_id_to_spiffe(agent_id: str, trust_domain: str) -> str:
     Convert the internal format 'org::agent-name' into a SPIFFE ID.
 
     Example:
-        internal_id_to_spiffe("manufacturer::sales-agent", "atn.local")
-        -> "spiffe://atn.local/manufacturer/sales-agent"
+        internal_id_to_spiffe("manufacturer::sales-agent", "cullis.local")
+        -> "spiffe://cullis.local/manufacturer/sales-agent"
 
     Raises ValueError if agent_id does not contain '::'.
     """
@@ -91,7 +91,7 @@ def spiffe_to_internal_id(spiffe_id: str) -> str:
     Convert a SPIFFE ID into the internal format 'org::agent-name'.
 
     Example:
-        spiffe_to_internal_id("spiffe://atn.local/manufacturer/sales-agent")
+        spiffe_to_internal_id("spiffe://cullis.local/manufacturer/sales-agent")
         -> "manufacturer::sales-agent"
     """
     org_id, agent_name = spiffe_to_agent_id(spiffe_id)

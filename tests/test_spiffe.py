@@ -22,8 +22,8 @@ from tests.conftest import ADMIN_HEADERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_agent_id_to_spiffe_base():
-    assert agent_id_to_spiffe("manufacturer", "sales-agent", "atn.local") == \
-        "spiffe://atn.local/manufacturer/sales-agent"
+    assert agent_id_to_spiffe("manufacturer", "sales-agent", "cullis.local") == \
+        "spiffe://cullis.local/manufacturer/sales-agent"
 
 
 def test_agent_id_to_spiffe_dominio_con_punto():
@@ -32,23 +32,23 @@ def test_agent_id_to_spiffe_dominio_con_punto():
 
 
 def test_spiffe_to_agent_id_base():
-    org, agent = spiffe_to_agent_id("spiffe://atn.local/manufacturer/sales-agent")
+    org, agent = spiffe_to_agent_id("spiffe://cullis.local/manufacturer/sales-agent")
     assert org == "manufacturer"
     assert agent == "sales-agent"
 
 
 def test_roundtrip_internal_to_spiffe_e_ritorno():
     agent_id = "banca-x::kyc-agent-v1"
-    spiffe_id = internal_id_to_spiffe(agent_id, "atn.local")
-    assert spiffe_id == "spiffe://atn.local/banca-x/kyc-agent-v1"
+    spiffe_id = internal_id_to_spiffe(agent_id, "cullis.local")
+    assert spiffe_id == "spiffe://cullis.local/banca-x/kyc-agent-v1"
     assert spiffe_to_internal_id(spiffe_id) == agent_id
 
 
 def test_roundtrip_spiffe_to_internal_e_ritorno():
-    spiffe_id = "spiffe://atn.local/acme-corp/support-agent"
+    spiffe_id = "spiffe://cullis.local/acme-corp/support-agent"
     internal = spiffe_to_internal_id(spiffe_id)
     assert internal == "acme-corp::support-agent"
-    assert internal_id_to_spiffe(internal, "atn.local") == spiffe_id
+    assert internal_id_to_spiffe(internal, "cullis.local") == spiffe_id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,18 +56,18 @@ def test_roundtrip_spiffe_to_internal_e_ritorno():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_validate_spiffe_id_valido():
-    assert validate_spiffe_id("spiffe://atn.local/org/agent") is True
+    assert validate_spiffe_id("spiffe://cullis.local/org/agent") is True
 
 
 @pytest.mark.parametrize("invalido, descrizione", [
     ("",                              "vuoto"),
-    ("http://atn.local/org/agent",    "schema errato"),
+    ("http://cullis.local/org/agent",    "schema errato"),
     ("spiffe:///org/agent",           "trust domain mancante"),
-    ("spiffe://atn.local/",           "path vuota"),
-    ("spiffe://atn.local",            "path assente"),
+    ("spiffe://cullis.local/",           "path vuota"),
+    ("spiffe://cullis.local",            "path assente"),
     ("spiffe://ATN.LOCAL/org/agent",  "trust domain con uppercase"),
-    ("spiffe://atn.local/org/agent?x=1", "query string presente"),
-    ("spiffe://atn.local/org/agent#frag", "fragment presente"),
+    ("spiffe://cullis.local/org/agent?x=1", "query string presente"),
+    ("spiffe://cullis.local/org/agent#frag", "fragment presente"),
 ])
 def test_validate_spiffe_id_invalido(invalido, descrizione):
     with pytest.raises(ValueError):
@@ -76,12 +76,12 @@ def test_validate_spiffe_id_invalido(invalido, descrizione):
 
 def test_spiffe_to_agent_id_path_troppo_profonda():
     with pytest.raises(ValueError):
-        spiffe_to_agent_id("spiffe://atn.local/org/agent/extra")
+        spiffe_to_agent_id("spiffe://cullis.local/org/agent/extra")
 
 
 def test_internal_id_to_spiffe_formato_errato():
     with pytest.raises(ValueError):
-        internal_id_to_spiffe("agent-senza-doppi-due-punti", "atn.local")
+        internal_id_to_spiffe("agent-senza-doppi-due-punti", "cullis.local")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ def test_make_agent_cert_con_trust_domain_ha_spiffe_san():
     """Cert generato con trust_domain deve avere il SAN URI SPIFFE corretto."""
     agent_id = "spiffe-org::agent-with-san"
     org_id = "spiffe-org"
-    trust_domain = "atn.local"
+    trust_domain = "cullis.local"
 
     _, cert = make_agent_cert(agent_id, org_id, trust_domain=trust_domain)
 
@@ -113,7 +113,7 @@ def test_make_agent_cert_con_trust_domain_ha_spiffe_san():
     spiffe_sans = [u for u in uri_sans if u.startswith("spiffe://")]
 
     assert len(spiffe_sans) == 1
-    assert spiffe_sans[0] == "spiffe://atn.local/spiffe-org/agent-with-san"
+    assert spiffe_sans[0] == "spiffe://cullis.local/spiffe-org/agent-with-san"
 
 
 def test_san_uri_corrisponde_al_cn():
@@ -142,7 +142,7 @@ async def _register_agent_with_spiffe(
     client: AsyncClient,
     agent_id: str,
     org_id: str,
-    trust_domain: str = "atn.local",
+    trust_domain: str = "cullis.local",
 ):
     """Registra org + CA + agente + binding approvato, con SAN SPIFFE nel cert."""
     org_secret = org_id + "-secret"
@@ -184,7 +184,7 @@ async def test_jwt_sub_e_spiffe_id(client: AsyncClient, dpop):
     """
     agent_id = "spiffe-jwt-org::agent-1"
     org_id = "spiffe-jwt-org"
-    trust_domain = "atn.local"
+    trust_domain = "cullis.local"
 
     await _register_agent_with_spiffe(client, agent_id, org_id, trust_domain)
 
@@ -247,7 +247,7 @@ async def test_autenticazione_con_san_corretto(client: AsyncClient, dpop):
 
     await _register_agent_with_spiffe(client, agent_id, org_id)
 
-    assertion = make_assertion(agent_id, org_id, trust_domain="atn.local")
+    assertion = make_assertion(agent_id, org_id, trust_domain="cullis.local")
     proof = dpop.proof("POST", "/v1/auth/token")
     resp = await client.post(
         "/v1/auth/token",
@@ -291,7 +291,7 @@ async def test_autenticazione_fallisce_con_san_sbagliato(client: AsyncClient, dp
         headers={"x-org-id": org_id, "x-org-secret": org_secret},
     )
 
-    # Cert con SAN che punta a un trust domain DIVERSO da atn.local
+    # Cert con SAN che punta a un trust domain DIVERSO da cullis.local
     assertion = make_assertion(agent_id, org_id, trust_domain="evil.example.com")
     proof = dpop.proof("POST", "/v1/auth/token")
     resp = await client.post(
@@ -316,7 +316,7 @@ async def test_registry_espone_agent_uri(client: AsyncClient, dpop):
     await _register_agent_with_spiffe(client, agent_id, org_id)
 
     # Ottieni token per fare la query
-    token = await dpop.get_token(client, agent_id, org_id, trust_domain="atn.local")
+    token = await dpop.get_token(client, agent_id, org_id, trust_domain="cullis.local")
 
     resp = await client.get(
         "/v1/registry/agents",
@@ -328,4 +328,4 @@ async def test_registry_espone_agent_uri(client: AsyncClient, dpop):
     agent = next(a for a in agents if a["agent_id"] == agent_id)
     assert "agent_uri" in agent
     assert agent["agent_uri"].startswith("spiffe://")
-    assert agent["agent_uri"] == f"spiffe://atn.local/{org_id}/agent-1"
+    assert agent["agent_uri"] == f"spiffe://cullis.local/{org_id}/agent-1"

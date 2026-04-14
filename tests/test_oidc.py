@@ -134,7 +134,7 @@ async def test_oidc_start_org_with_config(client: AsyncClient):
     assert "code_challenge" in location
     assert "state=" in location
     # State cookie should be set
-    assert "atn_oidc_state" in resp.headers.get("set-cookie", "")
+    assert "cullis_oidc_state" in resp.headers.get("set-cookie", "")
 
 
 async def test_oidc_callback_no_state_cookie(client: AsyncClient):
@@ -185,7 +185,7 @@ async def test_oidc_callback_success_org(client: AsyncClient):
     assert resp.status_code == 303
     assert resp.headers.get("location") == "/dashboard"
     # Session cookie should be set
-    assert "atn_session" in resp.headers.get("set-cookie", "")
+    assert "cullis_session" in resp.headers.get("set-cookie", "")
 
 
 async def test_oidc_callback_state_mismatch(client: AsyncClient):

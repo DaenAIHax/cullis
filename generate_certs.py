@@ -182,7 +182,7 @@ def gen_agent_cert(
     org_id: str,
     org_ca_key,
     org_ca_cert: x509.Certificate,
-    trust_domain: str = "atn.local",
+    trust_domain: str = "cullis.local",
     key_type: str = "rsa",
 ) -> None:
     """Generate (or skip) the agent certificate with SPIFFE SAN URI."""

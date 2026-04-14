@@ -24,7 +24,7 @@ from starlette.responses import RedirectResponse
 
 _log = logging.getLogger("agent_trust")
 
-_COOKIE_NAME = "atn_session"
+_COOKIE_NAME = "cullis_session"
 _COOKIE_MAX_AGE = 8 * 3600  # 8 hours
 
 
@@ -148,7 +148,7 @@ def require_login(request: Request) -> DashboardSession | RedirectResponse:
 
 
 # ── OIDC flow state cookie ──────────────────────────────────────────────────
-_OIDC_STATE_COOKIE = "atn_oidc_state"
+_OIDC_STATE_COOKIE = "cullis_oidc_state"
 _OIDC_STATE_MAX_AGE = 600  # 10 minutes
 
 

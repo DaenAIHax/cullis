@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     admin_secret: str = "change-me-in-production"
     dashboard_signing_key: str = ""  # separate key for dashboard cookie HMAC; auto-generated if empty
 
-    trust_domain: str = "atn.local"
+    trust_domain: str = "cullis.local"
     require_spiffe_san: bool = False
 
     anthropic_api_key: str = ""

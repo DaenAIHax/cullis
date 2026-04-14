@@ -2439,7 +2439,7 @@ def _generate_agent_cert(agent_id: str, org_id: str, org_ca_key, org_ca_cert):
 
     now = datetime.datetime.now(datetime.timezone.utc)
     _, agent_name = agent_id.split("::", 1)
-    spiffe_id = f"spiffe://atn.local/{org_id}/{agent_name}"
+    spiffe_id = f"spiffe://cullis.local/{org_id}/{agent_name}"
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = x509.Name([
