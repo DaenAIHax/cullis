@@ -14,12 +14,14 @@ is internal-facing (loopback or LAN); if logs capture URLs, redact the
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Query, WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from mcp_proxy.db import get_agent_by_key_hash
+from mcp_proxy.local import message_queue as local_queue
 from mcp_proxy.local.ws_manager import LocalConnectionManager
 
 logger = logging.getLogger("mcp_proxy.local.ws_router")
@@ -63,6 +65,43 @@ async def local_ws(
 
     try:
         await websocket.send_json({"type": "connected", "agent_id": agent_id})
+
+        # ADR-001 Phase 3c — drain any messages that were enqueued while
+        # this agent was offline. Each replay carries queued:true so the
+        # SDK can skip duplicate business handlers if the flow is idempotent.
+        # Guarded with a timeout so a slow DB can't stall the WS accept
+        # indefinitely — pending rows remain in the queue for the next
+        # reconnect.
+        try:
+            pending = await asyncio.wait_for(
+                local_queue.fetch_pending_for_recipient(agent_id),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Local queue drain timed out for %s", agent_id)
+            pending = []
+        except Exception as exc:
+            logger.warning("Local queue drain failed for %s: %s", agent_id, exc)
+            pending = []
+        for msg in pending:
+            import json as _json
+            try:
+                payload = _json.loads(msg.payload_ciphertext)
+            except Exception:
+                payload = msg.payload_ciphertext
+            await websocket.send_json(
+                {
+                    "type": "new_message",
+                    "session_id": msg.session_id,
+                    "msg_id": msg.msg_id,
+                    "sender_agent_id": msg.sender_agent_id,
+                    "payload": payload,
+                    "enqueued_at": msg.enqueued_at.isoformat()
+                    if msg.enqueued_at else None,
+                    "queued": True,
+                }
+            )
+
         while True:
             # Treat any inbound frame as a keepalive. Phase 3c may add
             # client-initiated ack frames here.
