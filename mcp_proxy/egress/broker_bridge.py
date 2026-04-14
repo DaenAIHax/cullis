@@ -9,7 +9,10 @@ import asyncio
 import logging
 from typing import Any
 
+from fastapi import HTTPException
+
 from cullis_sdk.client import CullisClient
+from mcp_proxy.egress.routing import decide_route
 
 logger = logging.getLogger("mcp_proxy.egress.broker_bridge")
 
@@ -22,11 +25,22 @@ class BrokerBridge:
     Clients are lazily initialized and cached.
     """
 
-    def __init__(self, broker_url: str, org_id: str, agent_manager: Any, *, verify_tls: bool = True):
+    def __init__(
+        self,
+        broker_url: str,
+        org_id: str,
+        agent_manager: Any,
+        *,
+        verify_tls: bool = True,
+        trust_domain: str = "cullis.local",
+        intra_org_routing: bool = False,
+    ):
         self._broker_url = broker_url
         self._org_id = org_id
         self._agent_manager = agent_manager
         self._verify_tls = verify_tls
+        self._trust_domain = trust_domain
+        self._intra_org_routing = intra_org_routing
         self._clients: dict[str, CullisClient] = {}
         self._lock = asyncio.Lock()
 
@@ -115,7 +129,29 @@ class BrokerBridge:
         payload: dict,
         recipient_agent_id: str,
     ) -> None:
-        """Send E2E encrypted message via broker on behalf of internal agent."""
+        """Send E2E encrypted message via broker on behalf of internal agent.
+
+        ADR-001 Phase 2: when the `intra_org_routing` flag is enabled and the
+        recipient resolves to the same (trust_domain, org), short-circuit with
+        501 — real local delivery lands in Phase 3. When the flag is off
+        (default) behavior is unchanged and everything forwards to the broker.
+        """
+        if self._intra_org_routing:
+            route = decide_route(
+                recipient_agent_id,
+                local_org=self._org_id,
+                local_trust_domain=self._trust_domain,
+            )
+            if route == "intra":
+                logger.info(
+                    "intra_org_routing_pending: sender=%s recipient=%s session=%s",
+                    agent_id, recipient_agent_id, session_id,
+                )
+                raise HTTPException(
+                    status_code=501,
+                    detail="intra-org routing not implemented (ADR-001 Phase 3)",
+                )
+
         client = await self.get_client(agent_id)
         try:
             await asyncio.to_thread(

@@ -69,6 +69,17 @@ proxy:
   # configured through the setup wizard (DB-resident).
   orgId: ""
 
+  # -- SPIFFE trust domain this proxy serves (ADR-001 Phase 2). Used by
+  # the routing decision to classify recipients as intra vs cross-org.
+  # Must match the trust domain configured on the broker.
+  trustDomain: "cullis.local"
+
+  # -- Feature flag for intra-org routing decision (ADR-001 Phase 2).
+  # When false (default) every message forwards to the broker as today.
+  # When true, intra-org targets are short-circuited with 501 until
+  # Phase 3 wires real local delivery — do NOT flip until Phase 3 lands.
+  intraOrgRouting: false
+
   # -- Comma-separated CORS origins allowed to call the proxy dashboard.
   # Empty = no CORS middleware (fail-safe).
   allowedOrigins: ""
