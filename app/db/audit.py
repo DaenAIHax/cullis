@@ -18,7 +18,10 @@ import asyncio
 import hashlib
 import json
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Text, and_, select
+from sqlalchemy import (
+    Column, DateTime, Integer, LargeBinary, String, Text, UniqueConstraint,
+    and_, select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import Base
@@ -63,6 +66,32 @@ class AuditLog(Base):
     # Cross-org linkage: on dual-write these point to the companion row.
     peer_org_id = Column(String(128), nullable=True, index=True)
     peer_row_hash = Column(String(64), nullable=True)
+
+
+class AuditTsaAnchor(Base):
+    """RFC 3161 (or mock) timestamp anchor on a per-org chain head.
+
+    Each row proves: "at `created_at`, the external TSA certified that
+    the org's chain had advanced to `chain_seq` with head hash
+    `row_hash`." A verifier replays all chain entries up to chain_seq
+    and checks their computed head matches `row_hash`, then uses the
+    TSA client's `verify(token, row_hash)` to confirm the external
+    authority's signature on that head.
+    """
+    __tablename__ = "audit_tsa_anchors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(String(128), nullable=False, index=True)
+    chain_seq = Column(Integer, nullable=False)
+    row_hash = Column(String(64), nullable=False)
+    tsa_token = Column(LargeBinary, nullable=False)
+    tsa_url = Column(String(256), nullable=False)
+    tsa_cert_chain = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "chain_seq", name="uq_tsa_anchor_org_seq"),
+    )
 
 
 def compute_entry_hash(
