@@ -610,7 +610,6 @@ async def orgs_list(request: Request, db: AsyncSession = Depends(get_db)):
             "status": org.status,
             "webhook_url": org.webhook_url,
             "ca_certificate": org.ca_certificate,
-            "oidc_enabled": org.oidc_enabled,
             "agent_count": agent_counts.get(org.org_id, 0),
         })
 
@@ -1275,13 +1274,9 @@ async def org_onboard_submit(request: Request, db: AsyncSession = Depends(get_db
     )
     await update_org_ca_cert(db, form["org_id"], form["ca_certificate"])
 
-    # Save optional OIDC configuration
-    oidc_issuer = form_data.get("oidc_issuer_url", "").strip() or None
-    oidc_cid = form_data.get("oidc_client_id", "").strip() or None
-    oidc_csec = form_data.get("oidc_client_secret", "").strip() or None
-    if oidc_issuer and oidc_cid:
-        from app.registry.org_store import update_org_oidc
-        await update_org_oidc(db, form["org_id"], oidc_issuer, oidc_cid, oidc_csec)
+    # Note: per-org OIDC settings moved to the proxy in the network-admin
+    # refactor (ADR-001). The onboard form no longer collects
+    # oidc_issuer_url / oidc_client_id / oidc_client_secret.
 
     if action == "approve":
         await set_org_status(db, form["org_id"], "active")

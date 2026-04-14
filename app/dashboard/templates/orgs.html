@@ -101,7 +101,6 @@
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Agents</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">PDP Webhook</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">CA Cert</th>
-                    <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">SSO</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Actions</th>
                 </tr>
             </thead>
@@ -154,13 +153,6 @@
                         </form>
                         {% endif %}
                     </td>
-                    <td class="px-5 py-4">
-                        {% if org.oidc_enabled %}
-                        <span class="text-[10px] text-emerald-400 uppercase tracking-wider">Configured</span>
-                        {% else %}
-                        <span class="text-[10px] text-gray-600 uppercase tracking-wider">Off</span>
-                        {% endif %}
-                    </td>
                     <td class="px-5 py-4 space-x-1">
                         {% if org.status == 'pending' %}
                         <form method="post" action="/dashboard/orgs/{{ org.org_id }}/approve" class="inline">
@@ -198,7 +190,7 @@
                 </tr>
                 {% endfor %}
                 {% if not orgs %}
-                <tr><td colspan="7" class="px-5 py-16 text-center">
+                <tr><td colspan="6" class="px-5 py-16 text-center">
                     <p class="text-sm text-gray-600">No organizations registered</p>
                 </td></tr>
                 {% endif %}

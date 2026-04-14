@@ -1,5 +1,19 @@
 """
 ORM model and queries for the organization registry.
+
+DEPRECATION NOTE (ADR-001, network-admin-only refactor)
+-------------------------------------------------------
+The columns ``oidc_issuer_url``, ``oidc_client_id`` and
+``oidc_client_secret`` on ``OrganizationRecord`` are now dead data. The
+broker dashboard no longer honors per-org OIDC (tenant login moved to
+the proxy), so nothing reads or writes those columns from the broker
+codebase anymore. The columns and the legacy ``oidc_enabled`` property
+are retained purely for schema stability — dropping them requires an
+Alembic migration and coordination with any historical backups, which
+we deliberately defer.
+
+Similarly, ``metadata_json['oidc_role_mapping']`` is no longer consumed
+by any code path. The helpers that used to read/write it were removed.
 """
 import json
 import bcrypt
@@ -21,16 +35,15 @@ class OrganizationRecord(Base):
     metadata_json = Column(Text, default="{}")
     ca_certificate = Column(Text, nullable=True)
     webhook_url = Column(String(512), nullable=True)  # PDP webhook — None = default-deny
+    # DEPRECATED: per-org OIDC settings. Kept on the schema for backward
+    # compatibility; never read/written by current broker code. See module
+    # docstring for rationale.
     oidc_issuer_url = Column(String(512), nullable=True)
     oidc_client_id = Column(String(256), nullable=True)
     oidc_client_secret = Column(String(512), nullable=True)
 
     def verify_secret(self, plain: str) -> bool:
         return bcrypt.checkpw(plain.encode(), self.secret_hash.encode())
-
-    @property
-    def oidc_enabled(self) -> bool:
-        return bool(self.oidc_issuer_url and self.oidc_client_id)
 
     @property
     def extra(self) -> dict:
@@ -124,69 +137,9 @@ async def update_org_ca_cert(
     return record
 
 
-async def update_org_oidc(
-    db: AsyncSession,
-    org_id: str,
-    issuer_url: str | None,
-    client_id: str | None,
-    client_secret: str | None,
-) -> OrganizationRecord | None:
-    record = await get_org_by_id(db, org_id)
-    if record is None:
-        return None
-    record.oidc_issuer_url = issuer_url
-    record.oidc_client_id = client_id
-    if client_secret:
-        from app.kms.factory import get_kms_provider
-        kms = get_kms_provider()
-        record.oidc_client_secret = await kms.encrypt_secret(client_secret)
-    else:
-        record.oidc_client_secret = client_secret
-    await db.commit()
-    await db.refresh(record)
-    return record
-
-
-async def get_org_oidc_secret(org: OrganizationRecord) -> str | None:
-    """Decrypt the OIDC client secret. Returns None if not set."""
-    if not org.oidc_client_secret:
-        return None
-    from app.kms.factory import get_kms_provider
-    kms = get_kms_provider()
-    return await kms.decrypt_secret(org.oidc_client_secret)
-
-
-def get_oidc_role_mapping(org: OrganizationRecord) -> dict | None:
-    """
-    Read the OIDC role mapping config from the org metadata.
-
-    Returns None if not configured (legacy backward-compatible behavior).
-    """
-    return org.extra.get("oidc_role_mapping") or None
-
-
-async def update_org_oidc_role_mapping(
-    db: AsyncSession,
-    org_id: str,
-    mapping: dict | None,
-) -> OrganizationRecord | None:
-    """
-    Set or clear the OIDC role mapping config for an org.
-
-    Pass `mapping=None` to remove the mapping (org reverts to legacy behavior).
-    """
-    record = await get_org_by_id(db, org_id)
-    if record is None:
-        return None
-    metadata = record.extra
-    if mapping is None:
-        metadata.pop("oidc_role_mapping", None)
-    else:
-        metadata["oidc_role_mapping"] = mapping
-    record.metadata_json = json.dumps(metadata)
-    await db.commit()
-    await db.refresh(record)
-    return record
+# update_org_oidc / get_org_oidc_secret / get_oidc_role_mapping /
+# update_org_oidc_role_mapping were removed — per-org OIDC mapping is no
+# longer handled on the broker. See the module docstring.
 
 
 async def list_orgs(db: AsyncSession) -> list[OrganizationRecord]:

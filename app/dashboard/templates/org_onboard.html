@@ -142,27 +142,9 @@
                     document.getElementById('ca-key-modal').classList.add('hidden');
                 }
             </script>
-            <details class="border border-gray-800/60 rounded p-4">
-                <summary class="text-xs font-medium text-gray-400 cursor-pointer uppercase tracking-wider">OIDC Configuration (optional)</summary>
-                <div class="mt-3 space-y-3">
-                    <div>
-                        <label class="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">OIDC Issuer URL</label>
-                        <input type="url" name="oidc_issuer_url" placeholder="https://your-company.okta.com" value="{{ form.oidc_issuer_url or '' }}"
-                               class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white placeholder-gray-600 font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">OIDC Client ID</label>
-                        <input type="text" name="oidc_client_id" placeholder="your-client-id" value="{{ form.oidc_client_id or '' }}"
-                               class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white placeholder-gray-600 font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-[10px] font-medium text-gray-500 mb-1 uppercase tracking-wider">OIDC Client Secret</label>
-                        <input type="password" name="oidc_client_secret" placeholder="your-client-secret"
-                               class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-sm text-white placeholder-gray-600">
-                    </div>
-                    <p class="text-[10px] text-gray-600">Configure to allow organization members to log in via their company's identity provider instead of the shared secret.</p>
-                </div>
-            </details>
+            <!-- Per-org OIDC was moved to the proxy (ADR-001) — the broker
+                 dashboard no longer collects org-side issuer / client-id. -->
+
             <div class="pt-1">
                 <button type="submit" name="action" value="approve"
                         class="px-5 py-2 text-xs font-semibold rounded transition-all"
