@@ -234,7 +234,7 @@
             {% set _open = org.org_id in (open_orgs | default([])) %}
             <details class="group border-b border-gray-800/40 last:border-b-0"{% if _open %} open{% endif %}>
                 <summary class="flex items-center gap-3 px-5 py-3.5 cursor-pointer hover:bg-surface-950/60 transition-colors"
-                         hx-get="/proxy/agents/federated/{{ org.org_id }}"
+                         hx-get="/proxy/federated/{{ org.org_id }}"
                          hx-trigger="toggle once from:closest details[open]"
                          hx-target="next .fed-body"
                          hx-swap="innerHTML">
@@ -252,7 +252,7 @@
                 </summary>
                 <div class="fed-body pb-2 bg-surface-950/40">
                     {% if _open %}
-                    <div hx-get="/proxy/agents/federated/{{ org.org_id }}"
+                    <div hx-get="/proxy/federated/{{ org.org_id }}"
                          hx-trigger="load"
                          hx-swap="outerHTML">
                         <div class="py-3 pl-8 text-xs text-gray-600">Loading…</div>

@@ -2510,7 +2510,7 @@ async def _load_display_name() -> str:
 # Federated-agents partial (accordion expansion)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/agents/federated/{org_id}", response_class=HTMLResponse)
+@router.get("/federated/{org_id}", response_class=HTMLResponse)
 async def federated_org_agents(request: Request, org_id: str):
     """HTMX partial: list the cached federated agents for a given peer org.
 
