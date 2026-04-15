@@ -9,6 +9,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 import httpx
 
@@ -75,6 +76,26 @@ class SendMessageRequest(BaseModel):
 class DiscoverRequest(BaseModel):
     capabilities: list[str] | None = None
     q: str | None = None
+
+
+class ResolveRequest(BaseModel):
+    """ADR-001 §10 — resolve a recipient and return routing path + metadata.
+
+    The SDK calls this before sending so it can choose the right wire
+    format: mtls-only (signed, not encrypted) for intra-org in the
+    mtls-only transport mode, or envelope (E2E encrypted) otherwise.
+    """
+    recipient_id: str
+
+
+class ResolveResponse(BaseModel):
+    path: Literal["intra-org", "cross-org"]
+    target_agent_id: str
+    target_org_id: str
+    target_spiffe: str | None = None
+    transport: Literal["envelope", "mtls-only"]
+    egress_inspection: bool = False
+    target_cert_pem: str | None = None
 
 
 class InvokeToolRequest(BaseModel):
@@ -566,6 +587,93 @@ async def ack_message(
         detail=f"session={session_id} msg_id={msg_id}",
     )
     return {"status": "acked", "msg_id": msg_id}
+
+
+@router.post("/resolve", response_model=ResolveResponse)
+async def resolve_recipient(
+    body: ResolveRequest,
+    request: Request,
+    agent: InternalAgent = Depends(get_agent_from_api_key),
+):
+    """Resolve a recipient and tell the SDK how to send.
+
+    ADR-001 §10: routing decision happens here, before the sender
+    encrypts anything. Response tells the SDK which wire format to use
+    (envelope vs mtls-only) and whether egress inspection is required.
+
+    Invariants:
+      - path == "intra-org" iff SPIFFE trust_domain and org both match local
+        (or recipient uses internal `org::agent` form with matching org).
+      - transport == "mtls-only" only when path is intra-org AND the proxy
+        is configured with transport_intra_org != "envelope".
+      - target_cert_pem is populated for intra-org mtls-only so the SDK
+        can validate the peer certificate at mTLS handshake time.
+    """
+    from sqlalchemy import text
+
+    from mcp_proxy.db import get_db
+    from mcp_proxy.spiffe import InvalidRecipient, parse_recipient
+
+    settings = get_settings()
+
+    try:
+        trust_domain, target_org, target_agent = parse_recipient(body.recipient_id)
+    except InvalidRecipient as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    route = decide_route(
+        body.recipient_id,
+        local_org=settings.org_id,
+        local_trust_domain=settings.trust_domain,
+    )
+
+    target_spiffe: str | None = None
+    if trust_domain is not None:
+        target_spiffe = f"spiffe://{trust_domain}/{target_org}/{target_agent}"
+
+    if route == "intra":
+        intra_enabled = settings.intra_org_routing
+        transport: Literal["envelope", "mtls-only"] = "envelope"
+        if intra_enabled and settings.transport_intra_org in ("mtls-only", "hybrid"):
+            transport = "mtls-only"
+
+        target_cert_pem: str | None = None
+        if transport == "mtls-only":
+            async with get_db() as conn:
+                result = await conn.execute(
+                    text(
+                        "SELECT cert_pem, is_active FROM local_agents "
+                        "WHERE agent_id = :agent_id"
+                    ),
+                    {"agent_id": target_agent},
+                )
+                row = result.mappings().first()
+                if row is None or not row["is_active"]:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"intra-org target not found: {target_agent}",
+                    )
+                target_cert_pem = row["cert_pem"]
+
+        return ResolveResponse(
+            path="intra-org",
+            target_agent_id=target_agent,
+            target_org_id=target_org,
+            target_spiffe=target_spiffe,
+            transport=transport,
+            egress_inspection=settings.egress_inspection_enabled,
+            target_cert_pem=target_cert_pem,
+        )
+
+    return ResolveResponse(
+        path="cross-org",
+        target_agent_id=target_agent,
+        target_org_id=target_org,
+        target_spiffe=target_spiffe,
+        transport="envelope",
+        egress_inspection=settings.egress_inspection_enabled,
+        target_cert_pem=None,
+    )
 
 
 @router.post("/discover")
