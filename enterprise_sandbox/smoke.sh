@@ -245,14 +245,24 @@ else
     fail "B4.3 spire-agent healthy"
 fi
 
-# B4.4 + B4.5 — End-to-end SPIFFE auth to broker is BLOCKED until the broker
-# learns to derive agent_id/org_id from a SPIFFE SAN URI when the cert lacks
-# CN/O (SPIRE-issued SVIDs do). Tracked separately — the SPIRE half (the
-# whole point of this Blocco) is verified by B4.1-3 above. Once the broker
-# work lands, agent-a/agent-b containers in compose will become healthy
-# without further sandbox changes.
-skip "B4.4 agent broker auth via SVID"   "blocked: broker needs SPIFFE-aware x509 verifier"
-skip "B4.5 cross-org session over SPIFFE" "blocked: same — see issue tracking SPIFFE-aware broker auth"
+# B4.4 — agent-a authenticates to broker via SVID (no CN/O, full 3-level
+# chain leaf ← SPIRE intermediate ← Org CA). The container writes
+# /tmp/ready only after CullisClient.from_spiffe_workload_api returns a
+# token, and that file is what the Docker healthcheck reads.
+if docker compose ps agent-a --format json | grep -q '"Health":"healthy"'; then
+    pass "B4.4 agent-a SPIFFE auth OK (container healthy, /tmp/ready marker set)"
+else
+    fail "B4.4 agent-a SPIFFE auth"
+fi
+
+# B4.5 — same for agent-b under a different trust_domain (orgb.test).
+# Exercises the per-org trust_domain lookup and the independent Org CA
+# chain walk for a second tenant.
+if docker compose ps agent-b --format json | grep -q '"Health":"healthy"'; then
+    pass "B4.5 agent-b SPIFFE auth OK (container healthy, /tmp/ready marker set)"
+else
+    fail "B4.5 agent-b SPIFFE auth"
+fi
 
 echo ""
 echo "[smoke] PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"

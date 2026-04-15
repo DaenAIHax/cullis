@@ -348,17 +348,13 @@ services:
     # selector. Without this, attestation fails with "could not resolve
     # caller information".
     pid: "service:spire-agent-a"
-    # Container exits ~5s after start: the broker rejects SPIRE-issued SVIDs
-    # because they have no CN/O subject (only the SPIFFE URI in SAN). Once
-    # the broker grows SPIFFE-aware x509 auth, re-enable the healthcheck
-    # below and remove restart: "no". Tracked in a separate issue.
-    restart: "no"
-    # healthcheck:
-    #   test: ["CMD", "test", "-f", "/tmp/ready"]
-    #   interval: 3s
-    #   timeout: 2s
-    #   retries: 20
-    #   start_period: 20s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 20s
 
   # ── Org B proxy ────────────────────────────────────────────────────────────
 
@@ -506,11 +502,10 @@ services:
       - spire-b-agent-socket:/run/spire/sockets:ro
     networks: [orgb-internal, public-wan]
     pid: "service:spire-agent-b"
-    # See agent-a comment — same broker SPIFFE-aware auth gap.
-    restart: "no"
-    # healthcheck:
-    #   test: ["CMD", "test", "-f", "/tmp/ready"]
-    #   interval: 3s
-    #   timeout: 2s
-    #   retries: 20
-    #   start_period: 20s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 20s

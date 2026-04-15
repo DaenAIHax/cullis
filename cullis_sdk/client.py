@@ -166,7 +166,7 @@ class CullisClient:
                 f"CULLIS_ORG_ID={config['org_id']}",
             ]
             Path(save_config).write_text("\n".join(env_lines) + "\n")
-            log(f"Config saved to {save_config}")
+            log("sdk", f"Config saved to {save_config}")
 
         # Build a proxy-oriented client (stores API key + proxy URL for egress calls)
         instance = cls.__new__(cls)
@@ -186,7 +186,7 @@ class CullisClient:
         instance._proxy_agent_id = config["agent_id"]
         instance._proxy_org_id = config["org_id"]
 
-        log(f"Enrolled as {config['agent_id']} via proxy {config['proxy_url']}")
+        log("sdk", f"Enrolled as {config['agent_id']} via proxy {config['proxy_url']}")
         return instance
 
     def proxy_headers(self) -> dict:
@@ -242,7 +242,7 @@ class CullisClient:
 
         instance = cls(broker_url, verify_tls=verify_tls, timeout=timeout)
         instance.login_from_pem(resolved_agent_id, org_id, svid.cert_pem, svid.key_pem)
-        log(f"Authenticated {resolved_agent_id} via SPIFFE ({svid.spiffe_id})")
+        log("sdk", f"Authenticated {resolved_agent_id} via SPIFFE ({svid.spiffe_id})")
         return instance
 
     # ── Broker authentication ──────────────────────────────────────
