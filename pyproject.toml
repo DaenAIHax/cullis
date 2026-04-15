@@ -24,6 +24,9 @@ connector = [
     "mcp>=1.0",
     "PyYAML>=6.0",
 ]
+spiffe = [
+    "pyspiffe>=0.1.2",
+]
 
 [project.scripts]
 cullis-connector = "cullis_connector.cli:main"

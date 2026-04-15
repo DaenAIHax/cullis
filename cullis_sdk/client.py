@@ -195,6 +195,56 @@ class CullisClient:
             raise RuntimeError("Not enrolled — use from_enrollment() or set proxy credentials")
         return {"X-API-Key": self._proxy_api_key, "Content-Type": "application/json"}
 
+    # ── SPIFFE Workload API bootstrap ───────────────────────────────
+
+    @classmethod
+    def from_spiffe_workload_api(
+        cls,
+        broker_url: str,
+        *,
+        org_id: str,
+        socket_path: str | None = None,
+        agent_id: str | None = None,
+        verify_tls: bool = True,
+        timeout: float = 10.0,
+    ) -> CullisClient:
+        """Bootstrap a broker-connected client using a SPIFFE X.509-SVID.
+
+        Fetches the workload's SVID from the local SPIFFE Workload API
+        (typically a SPIRE agent Unix socket), then authenticates to the
+        broker using that certificate. Requires the ``[spiffe]`` extra.
+
+        The Org CA must be configured as the SPIRE server's UpstreamAuthority
+        so that SVIDs chain to a root the broker trusts.
+
+        Args:
+            broker_url: Cullis broker base URL.
+            org_id: Cullis org identifier (the broker's view of the org).
+            socket_path: Workload API socket. Defaults to
+                ``SPIFFE_ENDPOINT_SOCKET`` env var.
+            agent_id: Override the default SPIFFE ID → agent_id mapping.
+                If None, uses ``{org_id}::{last_spiffe_path_segment}``.
+            verify_tls: Whether to verify the broker's TLS cert.
+            timeout: HTTP timeout in seconds.
+
+        Example::
+
+            client = CullisClient.from_spiffe_workload_api(
+                "https://broker.cullis.test",
+                org_id="orga",
+                socket_path="/tmp/spire-agent/public/api.sock",
+            )
+        """
+        from cullis_sdk.spiffe import fetch_x509_svid, default_agent_id
+
+        svid = fetch_x509_svid(socket_path)
+        resolved_agent_id = agent_id or default_agent_id(svid.spiffe_id, org_id)
+
+        instance = cls(broker_url, verify_tls=verify_tls, timeout=timeout)
+        instance.login_from_pem(resolved_agent_id, org_id, svid.cert_pem, svid.key_pem)
+        log(f"Authenticated {resolved_agent_id} via SPIFFE ({svid.spiffe_id})")
+        return instance
+
     # ── Broker authentication ──────────────────────────────────────
 
     def login(self, agent_id: str, org_id: str, cert_path: str, key_path: str) -> None:
