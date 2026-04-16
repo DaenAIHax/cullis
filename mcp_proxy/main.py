@@ -272,6 +272,17 @@ async def lifespan(app: FastAPI):
     if _jwks_client:
         await _jwks_client.close()
     await dispose_db()
+
+    # Isolation hygiene: ``app`` is a module-level singleton that
+    # survives across test lifespans. Leaving shutdown bridges + disposed
+    # clients attached to ``app.state`` poisons the next lifespan's
+    # setup — a federated test after a standalone one could see
+    # broker_bridge still None because the next startup short-circuits
+    # before reassigning. Clear the handles explicitly.
+    app.state.broker_bridge = None
+    app.state.reverse_proxy_client = None
+    app.state.reverse_proxy_broker_url = None
+    app.state.agent_manager = None
     _log.info("MCP Proxy shutdown complete")
 
 
