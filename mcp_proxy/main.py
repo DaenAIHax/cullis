@@ -510,6 +510,10 @@ app.include_router(mcp_aggregator_router)
 from mcp_proxy.egress.router import router as egress_router
 app.include_router(egress_router)
 
+# ADR-008 Phase 1 PR #1 — sessionless one-shot endpoints.
+from mcp_proxy.egress.oneshot import router as oneshot_router
+app.include_router(oneshot_router)
+
 from mcp_proxy.local.ws_router import router as local_ws_router
 app.include_router(local_ws_router)
 

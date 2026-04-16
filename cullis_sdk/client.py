@@ -723,6 +723,122 @@ class CullisClient:
                 })
         return out
 
+    # ── ADR-008 Phase 1 — sessionless one-shot ─────────────────────
+
+    def send_oneshot(
+        self,
+        recipient_id: str,
+        payload: dict,
+        *,
+        correlation_id: str | None = None,
+        reply_to: str | None = None,
+        ttl_seconds: int = 300,
+    ) -> dict:
+        """Send a sessionless one-shot message via the local proxy.
+
+        Intra-org only in this revision — cross-org recipients raise
+        ``NotImplementedError`` (the proxy returns 501; Phase 2 wires
+        the broker forwarder).
+
+        ``correlation_id`` defaults to a new UUID; pass the original
+        request's correlation_id plus ``reply_to`` to send a reply.
+
+        Returns the proxy's response dict with ``correlation_id``,
+        ``msg_id`` and ``status`` (``enqueued`` or ``duplicate``).
+        """
+        headers = self.proxy_headers()
+
+        resolve_resp = self._http.post(
+            f"{self.base}/v1/egress/resolve",
+            headers=headers,
+            json={"recipient_id": recipient_id},
+        )
+        resolve_resp.raise_for_status()
+        decision = resolve_resp.json()
+        transport = decision["transport"]
+        target_agent_id = decision["target_agent_id"]
+
+        if transport != "mtls-only":
+            raise NotImplementedError(
+                "cross-org one-shot is not wired in this revision — "
+                "Phase 2 adds broker-forwarded envelopes"
+            )
+
+        if not self._signing_key_pem:
+            raise RuntimeError(
+                "mtls-only transport requires a signing key — initialize "
+                "the client via login() or from_spiffe_workload_api()"
+            )
+
+        corr_id = correlation_id or str(uuid.uuid4())
+        nonce = str(uuid.uuid4())
+        timestamp = int(time.time())
+        sender_agent_id = getattr(self, "_proxy_agent_id", None) or self._label
+
+        # Domain separation: signature binding substitutes the session_id
+        # slot with 'oneshot:<correlation_id>' so a session signature
+        # cannot be replayed as a one-shot signature and vice versa.
+        signature = sign_message(
+            self._signing_key_pem,
+            f"oneshot:{corr_id}",
+            sender_agent_id,
+            nonce,
+            timestamp,
+            payload,
+            client_seq=0,
+        )
+
+        body: dict[str, Any] = {
+            "recipient_id": target_agent_id,
+            "payload": payload,
+            "correlation_id": corr_id,
+            "reply_to": reply_to,
+            "mode": "mtls-only",
+            "signature": signature,
+            "nonce": nonce,
+            "timestamp": timestamp,
+            "ttl_seconds": ttl_seconds,
+        }
+        resp = self._http.post(
+            f"{self.base}/v1/egress/message/send",
+            headers=headers,
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def reply_oneshot(
+        self,
+        recipient_id: str,
+        payload: dict,
+        reply_to: str,
+        **kwargs,
+    ) -> dict:
+        """Convenience wrapper over ``send_oneshot`` with ``reply_to`` set."""
+        return self.send_oneshot(
+            recipient_id,
+            payload,
+            reply_to=reply_to,
+            **kwargs,
+        )
+
+    def receive_oneshot(self) -> list[dict]:
+        """Poll the proxy's one-shot inbox for this agent.
+
+        Returns a list of envelope dicts with ``msg_id``,
+        ``correlation_id``, ``reply_to``, ``sender_agent_id``,
+        ``payload_ciphertext`` (the envelope as stored), and the
+        delivery metadata. The caller is expected to parse the
+        envelope (same shape session /send produces) to retrieve the
+        application payload.
+        """
+        resp = self._http.get(
+            f"{self.base}/v1/egress/message/inbox",
+            headers=self.proxy_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json().get("messages", [])
+
     def ack_via_proxy(self, session_id: str, msg_id: str) -> bool:
         """Acknowledge a local-queue message to the proxy (at-least-once)."""
         resp = self._http.post(

@@ -89,18 +89,28 @@ async def local_ws(
                 payload = _json.loads(msg.payload_ciphertext)
             except Exception:
                 payload = msg.payload_ciphertext
-            await websocket.send_json(
-                {
-                    "type": "new_message",
-                    "session_id": msg.session_id,
-                    "msg_id": msg.msg_id,
-                    "sender_agent_id": msg.sender_agent_id,
-                    "payload": payload,
-                    "enqueued_at": msg.enqueued_at.isoformat()
-                    if msg.enqueued_at else None,
-                    "queued": True,
-                }
-            )
+
+            # ADR-008 Phase 1: session messages keep type="new_message"
+            # with session_id set; one-shot messages advertise a distinct
+            # type="oneshot_message" frame carrying correlation_id /
+            # reply_to so SDK consumers can dispatch without peeking
+            # inside the envelope.
+            frame = {
+                "msg_id": msg.msg_id,
+                "sender_agent_id": msg.sender_agent_id,
+                "payload": payload,
+                "enqueued_at": msg.enqueued_at.isoformat()
+                if msg.enqueued_at else None,
+                "queued": True,
+            }
+            if msg.is_oneshot:
+                frame["type"] = "oneshot_message"
+                frame["correlation_id"] = msg.correlation_id
+                frame["reply_to"] = msg.reply_to_correlation_id
+            else:
+                frame["type"] = "new_message"
+                frame["session_id"] = msg.session_id
+            await websocket.send_json(frame)
 
         while True:
             # Treat any inbound frame as a keepalive. Phase 3c may add

@@ -180,11 +180,16 @@ class LocalMessage(Base):
 
     ``delivery_status`` mirrors broker ``ProxyMessageQueueRecord``:
     0 = pending, 1 = delivered, 2 = expired.
+
+    ADR-008 Phase 1: one-shot rows set ``session_id = NULL``,
+    ``is_oneshot = 1`` and track the request↔response pair through
+    ``correlation_id`` / ``reply_to_correlation_id``. Session rows are
+    unaffected.
     """
     __tablename__ = "local_messages"
 
     msg_id = Column(Text, primary_key=True)
-    session_id = Column(Text, nullable=False)
+    session_id = Column(Text, nullable=True)  # ADR-008: NULL for one-shot rows
     seq = Column(Integer, nullable=True)
     sender_agent_id = Column(Text, nullable=False)
     recipient_agent_id = Column(Text, nullable=False)
@@ -198,6 +203,10 @@ class LocalMessage(Base):
     delivered_at = Column(Text, nullable=True)
     expired_at = Column(Text, nullable=True)
     expires_at = Column(Text, nullable=True)
+    # ADR-008 Phase 1 PR #1 — one-shot pattern metadata.
+    is_oneshot = Column(Integer, nullable=False, server_default="0")
+    correlation_id = Column(Text, nullable=True)
+    reply_to_correlation_id = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("idx_local_messages_session", "session_id"),
@@ -207,6 +216,13 @@ class LocalMessage(Base):
             "delivery_status",
         ),
         Index("idx_local_messages_idempotency", "idempotency_key"),
+        Index("idx_local_messages_correlation", "correlation_id"),
+        Index(
+            "idx_local_messages_recipient_oneshot",
+            "recipient_agent_id",
+            "is_oneshot",
+            "delivery_status",
+        ),
         UniqueConstraint("session_id", "seq", name="uq_local_messages_session_seq"),
         UniqueConstraint("nonce", name="uq_local_messages_nonce"),
     )

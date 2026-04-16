@@ -41,13 +41,18 @@ DEFAULT_TTL_SECONDS = 300  # mirror broker M3 default
 @dataclass
 class QueuedLocalMessage:
     msg_id: str
-    session_id: str
+    session_id: str | None  # ADR-008: None for one-shot rows
     sender_agent_id: str
     recipient_agent_id: str
     payload_ciphertext: str
     idempotency_key: str | None
     enqueued_at: datetime
     expires_at: datetime | None
+    # ADR-008 Phase 1: discriminates session vs one-shot at the drain
+    # path; populated from the row.
+    is_oneshot: bool = False
+    correlation_id: str | None = None
+    reply_to_correlation_id: str | None = None
 
 
 @dataclass
@@ -71,6 +76,75 @@ def _parse(raw: str | None) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+async def enqueue_oneshot(
+    *,
+    sender_agent_id: str,
+    recipient_agent_id: str,
+    correlation_id: str,
+    reply_to_correlation_id: str | None,
+    payload_ciphertext: str,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> tuple[str, bool]:
+    """Persist a one-shot message (ADR-008 Phase 1).
+
+    ``session_id`` is NULL, ``is_oneshot=1``. Idempotency piggybacks on
+    the existing ``idempotency_key`` column with a stable ``oneshot:``
+    prefix so a session send and a one-shot send can never collide on
+    the same namespace even if their keys happen to match.
+
+    Returns ``(msg_id, inserted)`` — replay semantics match the session
+    ``enqueue`` helper.
+    """
+    ikey = f"oneshot:{correlation_id}"
+    async with get_db() as conn:
+        existing = await conn.execute(
+            text(
+                """
+                SELECT msg_id FROM local_messages
+                 WHERE recipient_agent_id = :recipient
+                   AND idempotency_key = :ikey
+                """
+            ),
+            {"recipient": recipient_agent_id, "ikey": ikey},
+        )
+        row = existing.first()
+        if row is not None:
+            return row[0], False
+
+        msg_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(seconds=ttl_seconds)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO local_messages
+                    (msg_id, session_id, sender_agent_id, recipient_agent_id,
+                     payload_ciphertext, idempotency_key, delivery_status,
+                     enqueued_at, delivered_at, expires_at,
+                     is_oneshot, correlation_id, reply_to_correlation_id)
+                VALUES
+                    (:msg_id, NULL, :sender, :recipient,
+                     :payload, :ikey, :delivery_status,
+                     :enqueued_at, NULL, :expires_at,
+                     1, :correlation_id, :reply_to_correlation_id)
+                """
+            ),
+            {
+                "msg_id": msg_id,
+                "sender": sender_agent_id,
+                "recipient": recipient_agent_id,
+                "payload": payload_ciphertext,
+                "ikey": ikey,
+                "delivery_status": STATUS_PENDING,
+                "enqueued_at": _iso(now),
+                "expires_at": _iso(expires),
+                "correlation_id": correlation_id,
+                "reply_to_correlation_id": reply_to_correlation_id,
+            },
+        )
+        return msg_id, True
 
 
 async def enqueue(
@@ -147,7 +221,8 @@ async def fetch_pending_for_recipient(
             text(
                 """
                 SELECT msg_id, session_id, sender_agent_id, recipient_agent_id,
-                       payload_ciphertext, idempotency_key, enqueued_at, expires_at
+                       payload_ciphertext, idempotency_key, enqueued_at, expires_at,
+                       is_oneshot, correlation_id, reply_to_correlation_id
                   FROM local_messages
                  WHERE recipient_agent_id = :recipient
                    AND delivery_status = :delivery_status
@@ -173,6 +248,9 @@ async def fetch_pending_for_recipient(
                     idempotency_key=row["idempotency_key"],
                     enqueued_at=_parse(row["enqueued_at"]),
                     expires_at=_parse(row["expires_at"]),
+                    is_oneshot=bool(row["is_oneshot"]),
+                    correlation_id=row["correlation_id"],
+                    reply_to_correlation_id=row["reply_to_correlation_id"],
                 )
             )
         return out
