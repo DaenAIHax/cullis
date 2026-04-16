@@ -219,7 +219,9 @@ services:
       start_period: 10s
 
   proxy-a-init:
-    build: ./proxy-init
+    build:
+      context: ..
+      dockerfile: demo_network/proxy-init/Dockerfile
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -231,13 +233,22 @@ services:
       PROXY_PUBLIC_URL: "https://proxy-a.cullis.test:8443"
       PROXY_DB_PATH: /data/mcp_proxy.db
       STATE_DIR: /state
+      # ADR-007 Phase 1 PR #5b — seed a DB-loaded MCP resource pointing
+      # at the mcp-echo service + a binding for the sender agent. The
+      # aggregator's /v1/mcp tools/list + tools/call then have something
+      # to forward in the A8 smoke step.
+      SEED_MCP_ECHO_RESOURCE: "1"
+      SEED_MCP_ECHO_ENDPOINT: "http://mcp-echo:9200/"
+      SEED_MCP_ECHO_BOUND_AGENT: "demo-org-a::sender"
     volumes:
       - bootstrap-state:/state:ro
       - proxy-a-data:/data
     restart: "no"
 
   proxy-b-init:
-    build: ./proxy-init
+    build:
+      context: ..
+      dockerfile: demo_network/proxy-init/Dockerfile
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -328,7 +339,21 @@ services:
       - test-certs:/certs:ro
     expose: ["9000"]
 
+  mcp-echo:
+    build:
+      context: ./mcp-echo
+    expose: ["9200"]
+    restart: "no"
+
   sender:
+    # ADR-007 Phase 1 PR #5b follow-up: `profiles: [drive]` excludes the
+    # sender from the default `up --wait` pool. `up --wait` treats any
+    # container that exits (even 0) during the wait as a failure; the
+    # sender is a *driver* (runs the 6 phases and exits), not a long-
+    # lived service. smoke.sh first brings up the fleet with `up --wait`
+    # (no sender), then explicitly `docker compose run --rm sender` to
+    # execute the scenarios and surface the exit code.
+    profiles: ["drive"]
     build:
       context: ..
       dockerfile: demo_network/sender/Dockerfile
@@ -337,6 +362,8 @@ services:
         condition: service_healthy
       broker:
         condition: service_healthy
+      mcp-echo:
+        condition: service_started
     environment:
       # ADR-004 — sender reaches the broker via proxy-a (reverse-proxy).
       BROKER_URL:              "https://proxy-a.cullis.test:8443"
@@ -360,8 +387,12 @@ services:
       UNBOUND_AGENT_ID:        "demo-org-a::unbound-agent"
       UNBOUND_AGENT_CERT_PATH: /state/demo-org-a/unbound-agent.pem
       UNBOUND_AGENT_KEY_PATH:  /state/demo-org-a/unbound-agent-key.pem
-      # Phase 5 — MCP Proxy ingress call for the A8 assertion.
+      # Phase 5 — MCP Proxy ingress call.
       INGRESS_URL:             "https://proxy-a.cullis.test:8443/v1/ingress/tools"
+      # ADR-007 Phase 1 / A8 — aggregated MCP endpoint. Phase 6 in send.py
+      # posts tools/list + tools/call and expects the NONCE echoed back
+      # from the mcp-echo container via the proxy forwarder.
+      MCP_AGG_URL:             "https://proxy-a.cullis.test:8443/v1/mcp"
     volumes:
       - bootstrap-state:/state:ro
       - test-certs:/certs:ro

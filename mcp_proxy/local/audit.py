@@ -119,9 +119,12 @@ async def append_local_audit(
                 "placeholder": "",
             },
         )
-        # Postgres returns lastrowid on some drivers; for portability we
-        # query back by (org_id, chain_seq) which is unique by construction.
-        row_id = insert_result.lastrowid
+        # SQLite drivers expose ``lastrowid`` on the CursorResult; asyncpg
+        # *does not* have that attribute at all (raises AttributeError,
+        # not returns None), so the ``is None`` check below never fires
+        # on Postgres. ``getattr(..., None)`` normalises both dialects to
+        # the same "unknown → query back" fallback path.
+        row_id = getattr(insert_result, "lastrowid", None)
         if row_id is None:
             id_row = (await conn.execute(
                 text(

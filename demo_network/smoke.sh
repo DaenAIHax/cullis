@@ -19,7 +19,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-SERVICES_ON_FAILURE=(broker proxy-a proxy-b bootstrap sender checker)
+SERVICES_ON_FAILURE=(broker proxy-a proxy-b bootstrap sender checker mcp-echo)
 
 # PROXY_DB=postgres activates compose.postgres.yml so the proxies run on a
 # real Postgres instead of the default per-proxy SQLite. Used by the CI
@@ -72,13 +72,30 @@ cmd_up() {
     local nonce; nonce="$(gen_nonce)"
     echo "$nonce" > "$NONCE_FILE"
     say "demo_network: starting with SMOKE_NONCE=$nonce"
-    # --wait blocks until healthchecks pass or a one-shot exits. If the
-    # bootstrap or sender crashes, compose returns non-zero and we surface
-    # logs immediately.
+    # Phase A — bring up the service fleet (sender excluded via
+    # `profiles: [drive]` in compose.yml). `up --wait` treats any
+    # container exit as failure, so the transient driver containers
+    # can't live here.
     if ! SMOKE_NONCE="$nonce" $COMPOSE up -d --build --wait 2>&1; then
         dump_failure_logs
         die "demo_network: services failed to reach healthy state"
     fi
+
+    # Phase B — drive the scenarios (A1 round-trip + A5/A6/A8 via
+    # sender phases). `run --rm` propagates the sender's exit code:
+    # a non-zero return means one of the phases SystemExited and we
+    # surface logs for the post-mortem.
+    #
+    # `--no-deps` is critical: without it, compose re-starts every
+    # dependency in the chain — bootstrap in particular has already
+    # exited(0), and re-running it replays the /onboarding/join for
+    # orgs already registered → HTTP 409. The fleet from Phase A is
+    # still running; we just need compose to spawn the sender in it.
+    if ! SMOKE_NONCE="$nonce" $COMPOSE --profile drive run --rm --no-deps --build sender 2>&1; then
+        dump_failure_logs
+        die "demo_network: sender driver failed"
+    fi
+
     ok "demo_network: up (nonce persisted to $NONCE_FILE)"
     cmd_dashboard
 }
@@ -105,6 +122,7 @@ cmd_check() {
             ok "smoke PASS: message round-trip succeeded (nonce=$expected)"
             assert_dashboard_signing_key_persistent
             assert_audit_hash_chain_integrity
+            assert_aggregated_mcp_endpoint "$expected"
             return 0
         fi
         sleep 1
@@ -234,6 +252,27 @@ assert_audit_hash_chain_integrity() {
         warn "A7 output: $verified"
         dump_failure_logs
         die "A7 FAIL: audit hash chain broken"
+    fi
+}
+
+# A8 — aggregated MCP endpoint (ADR-007 Phase 1). The sender container's
+# _phase6 already exercises POST /v1/mcp {tools/list, tools/call echo};
+# if phase6 fails the container exits non-zero and compose --wait aborts
+# before we ever reach cmd_check. This assertion is the evidence check:
+# the mcp-echo container must have logged a tools/call whose arguments
+# contain the current smoke NONCE, proving the proxy forwarded the call
+# end-to-end.
+assert_aggregated_mcp_endpoint() {
+    local expected="$1"
+    say "demo_network: A8 asserting /v1/mcp forwarded to mcp-echo (nonce=$expected)"
+
+    if $COMPOSE logs mcp-echo 2>/dev/null | grep -q "$expected"; then
+        ok "smoke PASS (A8): mcp-echo received echo call with current NONCE"
+    else
+        warn "A8: mcp-echo logs did not contain NONCE=$expected"
+        $COMPOSE logs --tail=200 mcp-echo >&2 || true
+        dump_failure_logs
+        die "A8 FAIL: aggregator did not forward the sender's echo call"
     fi
 }
 

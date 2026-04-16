@@ -214,23 +214,28 @@ def _phase4() -> None:
         client.close()
 
 
-def _phase5() -> None:
-    """MCP Proxy ingress — A8. sender calls GET /v1/ingress/tools on its
-    own proxy (proxy-a). The proxy validates the broker-issued JWT via
+def _phase5(shared_client: "CullisClient | None" = None) -> "CullisClient | None":
+    """MCP Proxy ingress. sender calls GET /v1/ingress/tools on its own
+    proxy (proxy-a). The proxy validates the broker-issued JWT via
     JWKS, checks the DPoP proof, and returns 200 with the allowed tools
-    (empty list since sender's scope doesn't match any proxy tools, but
-    200 is the assertion — it proves the JWKS fetch + DPoP validation
-    wiring at the proxy side still works).
+    (empty list for this agent).
+
+    Returns the logged-in client so the caller can chain _phase6 without
+    re-login (the broker's auth rate limit is 10/60s and the full
+    phase1..phase6 chain would otherwise exceed it once the DPoP nonce
+    retry doubles each login's request count).
     """
     proxy_url = os.environ.get("INGRESS_URL", "")
     if not proxy_url:
         print("sender: [phase5] skipped (INGRESS_URL not set)")
-        return
+        return None
 
     print(f"sender: [phase5] calling proxy ingress {proxy_url}")
-    client = CullisClient(BROKER_URL, verify_tls=CA_BUNDLE)
+    client = shared_client or CullisClient(BROKER_URL, verify_tls=CA_BUNDLE)
+    close_on_exit = shared_client is None
     try:
-        client.login(AGENT_ID, ORG_ID, CERT_PATH, KEY_PATH)
+        if shared_client is None:
+            client.login(AGENT_ID, ORG_ID, CERT_PATH, KEY_PATH)
         # The SDK doesn't have a public helper for non-broker DPoP calls;
         # reuse the internal _dpop_proof + http client directly — this is a
         # smoke test, not production code.
@@ -261,8 +266,99 @@ def _phase5() -> None:
                 f"{resp.text[:300]}"
             )
         print(f"sender: [phase5] OK — ingress returned 200 with {len(resp.json())} tool(s)")
+        return client
     finally:
-        client.close()
+        if close_on_exit:
+            client.close()
+
+
+def _phase6(shared_client: "CullisClient | None" = None) -> None:
+    """ADR-007 Phase 1 A8 — aggregated MCP endpoint end-to-end.
+
+    1. Use an already-logged-in client (passed by _phase5) or fall back
+       to a fresh login. The shared-client path matters because the
+       broker enforces auth rate limit 10/60s; the full phase1..phase6
+       chain issues ≥6 logins × 2 DPoP requests, crossing the limit.
+    2. POST /v1/mcp {tools/list} — expect 'echo' among the bound tools.
+    3. POST /v1/mcp {tools/call name=echo args={message:NONCE}} — expect
+       the NONCE echoed back in ``result.content[0].text``.
+    """
+    agg_url = os.environ.get("MCP_AGG_URL", "")
+    if not agg_url:
+        print("sender: [phase6] skipped (MCP_AGG_URL not set)")
+        return
+
+    print(f"sender: [phase6] calling aggregated MCP {agg_url}")
+    client = shared_client or CullisClient(BROKER_URL, verify_tls=CA_BUNDLE)
+    close_on_exit = shared_client is None
+    try:
+        if shared_client is None:
+            client.login(AGENT_ID, ORG_ID, CERT_PATH, KEY_PATH)
+        import httpx
+        import uuid as _uuid
+
+        def _post_rpc(method: str, params: dict | None = None) -> dict:
+            payload = {"jsonrpc": "2.0", "id": str(_uuid.uuid4()), "method": method}
+            if params is not None:
+                payload["params"] = params
+            nonce = None
+            resp = None
+            with httpx.Client(verify=CA_BUNDLE, timeout=10.0) as h:
+                for _ in range(2):
+                    client._dpop_nonce = nonce
+                    proof = client._dpop_proof("POST", agg_url, access_token=client.token)
+                    resp = h.post(
+                        agg_url,
+                        headers={
+                            "Authorization": f"DPoP {client.token}",
+                            "DPoP": proof,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    if resp.status_code == 401 and "use_dpop_nonce" in resp.text:
+                        nonce = resp.headers.get("DPoP-Nonce")
+                        continue
+                    break
+            if resp is None or resp.status_code != 200:
+                code = resp.status_code if resp is not None else "no-response"
+                body = resp.text[:300] if resp is not None else ""
+                raise SystemExit(f"sender: [phase6] {method} HTTP {code}: {body}")
+            return resp.json()
+
+        # tools/list ────────────────────────────────────────────────
+        list_body = _post_rpc("tools/list")
+        tools = list_body.get("result", {}).get("tools") or []
+        names = [t.get("name") for t in tools]
+        print(f"sender: [phase6] tools/list → {names}")
+        if "echo" not in names:
+            raise SystemExit(
+                f"sender: [phase6] expected 'echo' in tools/list, got {names}"
+            )
+
+        # tools/call echo with the smoke NONCE ──────────────────────
+        call_body = _post_rpc("tools/call", {
+            "name": "echo",
+            "arguments": {"message": NONCE},
+        })
+        result = call_body.get("result") or {}
+        content = result.get("content") or []
+        if not content or not isinstance(content, list):
+            raise SystemExit(
+                f"sender: [phase6] unexpected tools/call result: {call_body!r}"
+            )
+        text_out = content[0].get("text", "")
+        if NONCE not in text_out:
+            raise SystemExit(
+                f"sender: [phase6] NONCE {NONCE!r} not echoed: {text_out!r}"
+            )
+        print(
+            "sender: [phase6] OK — aggregator forwarded to mcp-echo and "
+            "echoed the NONCE"
+        )
+    finally:
+        if close_on_exit:
+            client.close()
 
 
 def main() -> int:
@@ -271,7 +367,16 @@ def main() -> int:
     _phase2()
     _phase3()
     _phase4()
-    _phase5()
+    # Log in once as AGENT_ID and reuse the client across phase5 + phase6
+    # to stay under the broker's auth rate limit (10 req/60s; DPoP nonce
+    # retry doubles the login count).
+    shared = CullisClient(BROKER_URL, verify_tls=CA_BUNDLE)
+    try:
+        shared.login(AGENT_ID, ORG_ID, CERT_PATH, KEY_PATH)
+        _phase5(shared)
+        _phase6(shared)
+    finally:
+        shared.close()
     return 0
 
 

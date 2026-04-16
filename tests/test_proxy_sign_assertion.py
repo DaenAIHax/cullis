@@ -71,7 +71,15 @@ async def _provision_agent_with_cert(app, agent_id: str) -> tuple[str, str]:
     await set_config("org_ca_key", ca_key_pem)
     await set_config("org_ca_cert", ca_cert_pem)
 
-    mgr = app.state.broker_bridge._agent_manager
+    # ``app.state.broker_bridge`` is None in standalone test runs; the
+    # canonical AgentManager reference is on ``app.state.agent_manager``
+    # regardless of lifespan mode (see mcp_proxy/main.py:131). Using the
+    # nested attribute was racy under xdist when a prior test left the
+    # app singleton with broker_bridge=None.
+    mgr = (
+        getattr(app.state, "broker_bridge", None) and
+        app.state.broker_bridge._agent_manager
+    ) or app.state.agent_manager
     await mgr.load_org_ca(ca_key_pem, ca_cert_pem)
 
     cert_pem, key_pem = mgr._generate_agent_cert(agent_id.split("::", 1)[-1])

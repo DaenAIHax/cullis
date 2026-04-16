@@ -25,6 +25,26 @@ services:
       timeout: 3s
       retries: 30
 
+  # ADR-007 Phase 1 PR #5b: proxy-*-init must also see PROXY_DB_URL so
+  # the seed (Alembic chain + proxy_config + optional MCP resource)
+  # lands in the SAME Postgres DB that the proxy reads on boot.
+  # Before this override the init wrote to an orphan SQLite file at
+  # /data/mcp_proxy.db — invisible to the postgres-backed proxy, which
+  # meant policy_rules was never loaded and phase2 PDP-deny broke.
+  proxy-a-init:
+    depends_on:
+      proxy-db:
+        condition: service_healthy
+    environment:
+      PROXY_DB_URL: "postgresql+asyncpg://cullis_proxy:cullis_proxy_dev@proxy-db:5432/proxy_a"
+
+  proxy-b-init:
+    depends_on:
+      proxy-db:
+        condition: service_healthy
+    environment:
+      PROXY_DB_URL: "postgresql+asyncpg://cullis_proxy:cullis_proxy_dev@proxy-db:5432/proxy_b"
+
   proxy-a:
     depends_on:
       proxy-db:
