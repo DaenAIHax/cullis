@@ -10,10 +10,15 @@ Three top-level modes:
   keypair, submit to the Site, print the admin URL, poll until approved,
   persist cert + metadata under ``~/.cullis/identity/``.
 
+* ``cullis-connector install-mcp`` — merge the Cullis MCP entry into
+  Claude Desktop / Cursor / Cline config files. Idempotent, backed-up.
+  The dashboard calls this same code when the user clicks "Configure";
+  the CLI is the scripted path for headless / CI installs.
+
 * ``cullis-connector dashboard`` — local web UI on http://127.0.0.1:7777
-  that wraps enrollment in a three-screen wizard and (from Day 2) can
-  auto-configure Claude Desktop / Cursor / Cline. Intended as the
-  default onboarding path for end users who shouldn't need the CLI.
+  that wraps enrollment in a three-screen wizard and can auto-configure
+  Claude Desktop / Cursor / Cline. Intended as the default onboarding
+  path for end users who shouldn't need the CLI.
 """
 from __future__ import annotations
 
@@ -106,6 +111,33 @@ def _build_parser() -> argparse.ArgumentParser:
         "--device-info",
         default=None,
         help="Free-form host/OS string recorded in the enrollment audit.",
+    )
+
+    install_mcp = subparsers.add_parser(
+        "install-mcp",
+        help="Write the Cullis MCP entry into Claude Desktop / Cursor / Cline.",
+    )
+    _add_shared_args(install_mcp)
+    install_mcp.add_argument(
+        "--ide",
+        dest="ides",
+        action="append",
+        default=None,
+        choices=["claude-desktop", "cursor", "cline"],
+        help="Target a specific IDE (repeatable). Omit to auto-configure "
+             "every detected IDE on this machine.",
+    )
+    install_mcp.add_argument(
+        "--list",
+        dest="ide_list_only",
+        action="store_true",
+        help="Do not write anything — just print detection status per IDE.",
+    )
+    install_mcp.add_argument(
+        "--uninstall",
+        dest="ide_uninstall",
+        action="store_true",
+        help="Remove the Cullis entry from each IDE's MCP config.",
     )
 
     dashboard = subparsers.add_parser(
@@ -220,6 +252,66 @@ def _cmd_enroll(cfg: ConnectorConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_install_mcp(cfg: ConnectorConfig, args: argparse.Namespace) -> int:
+    from cullis_connector.ide_config import (
+        KNOWN_IDES,
+        IDEStatus,
+        detect_all,
+        detect_ide_status,
+        install_mcp,
+        uninstall_mcp,
+    )
+
+    target_ids = args.ides or list(KNOWN_IDES.keys())
+
+    if args.ide_list_only:
+        print(f"{'IDE':<22} {'STATUS':<14} PATH")
+        print("-" * 80)
+        for r in detect_all():
+            if r.ide_id not in target_ids:
+                continue
+            path = str(r.config_path) if r.config_path else "—"
+            print(f"{r.display_name:<22} {r.status.value:<14} {path}")
+            if r.note:
+                print(f"{'':<22} {'':<14} ↳ {r.note}")
+        return 0
+
+    backup_dir = cfg.config_dir / "backups"
+    any_error = False
+
+    for ide_id in target_ids:
+        detection = detect_ide_status(ide_id)
+
+        # Skip IDEs that aren't on this machine unless the user asked
+        # explicitly — then we still try, so mistakes produce clear errors.
+        if detection.status == IDEStatus.MISSING and not args.ides:
+            print(f"[skip] {detection.display_name}: {detection.note or 'not detected'}")
+            continue
+
+        if args.ide_uninstall:
+            result = uninstall_mcp(ide_id, backup_dir=backup_dir)
+            verb = "uninstall"
+        else:
+            result = install_mcp(ide_id, backup_dir=backup_dir)
+            verb = "install"
+
+        name = KNOWN_IDES[ide_id].display_name
+        if result.status == "installed":
+            action = "removed" if args.ide_uninstall else "configured"
+            print(f"[ok]   {name}: {action} at {result.config_path}")
+            if result.backup_path:
+                print(f"       ↳ backup: {result.backup_path}")
+        elif result.status == "already_configured":
+            print(f"[skip] {name}: already {'' if args.ide_uninstall else 'configured '}in place")
+        else:
+            any_error = True
+            print(f"[err]  {name}: {result.error}")
+
+        _log.debug("%s result for %s: %s", verb, ide_id, result)
+
+    return 1 if any_error else 0
+
+
 def _cmd_dashboard(cfg: ConnectorConfig, args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -279,6 +371,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if command == "enroll":
         return _cmd_enroll(cfg, args)
+    if command == "install-mcp":
+        return _cmd_install_mcp(cfg, args)
     if command == "dashboard":
         return _cmd_dashboard(cfg, args)
     return _cmd_serve(cfg)

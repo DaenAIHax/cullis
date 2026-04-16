@@ -41,6 +41,12 @@ from cullis_connector.enrollment import (
     _generate_api_key,
     _start,
 )
+from cullis_connector.ide_config import (
+    IDEStatus,
+    detect_all as ide_detect_all,
+    install_mcp as ide_install_mcp,
+    mcp_entry_snippet,
+)
 from cullis_connector.identity import (
     IdentityBundle,
     generate_keypair,
@@ -330,26 +336,55 @@ def build_app(config: ConnectorConfig) -> FastAPI:
                 "capabilities": list(meta.capabilities or []),
                 "issued_at": meta.issued_at or "—",
                 "ides": _detect_ides(),
+                "mcp_snippet": mcp_entry_snippet(),
             },
         )
 
     @app.post("/configure/{ide_id}")
     def configure_ide(ide_id: str) -> JSONResponse:
-        """Stub for Day 2 — the real IDE JSON-merge logic lands next.
+        """Merge the Cullis MCP entry into the IDE's config file.
 
-        Returning 202 so the waiting button shows a neutral feedback
-        rather than a green check.
+        The heavy lifting is in ``cullis_connector.ide_config`` — this
+        route just wraps it with HTTP status codes and a UI-friendly
+        payload.
         """
-        _log.info("configure/%s requested — Day 2 scaffolding", ide_id)
+        backup_dir = config.config_dir / "backups"
+        result = ide_install_mcp(ide_id, backup_dir=backup_dir)
+
+        if result.status == "installed":
+            _log.info(
+                "ide-config installed for %s → %s (backup=%s)",
+                ide_id, result.config_path, result.backup_path,
+            )
+            return JSONResponse(
+                {
+                    "status": "installed",
+                    "ide_id": ide_id,
+                    "config_path": str(result.config_path) if result.config_path else None,
+                    "backup_path": str(result.backup_path) if result.backup_path else None,
+                    "message": "Configured. Restart the app to pick up Cullis.",
+                },
+                status_code=200,
+            )
+        if result.status == "already_configured":
+            return JSONResponse(
+                {
+                    "status": "already_configured",
+                    "ide_id": ide_id,
+                    "config_path": str(result.config_path) if result.config_path else None,
+                    "message": "Already configured — nothing to do.",
+                },
+                status_code=200,
+            )
+
+        _log.warning("ide-config failed for %s: %s", ide_id, result.error)
         return JSONResponse(
             {
-                "status": "pending",
-                "message": (
-                    "IDE auto-config ships in Day 2. For now, copy the MCP "
-                    "config manually using the button below."
-                ),
+                "status": "error",
+                "ide_id": ide_id,
+                "error": result.error or "Unknown error.",
             },
-            status_code=202,
+            status_code=400,
         )
 
     return app
@@ -369,16 +404,25 @@ def _host_of(url: str) -> str:
 
 
 def _detect_ides() -> list[dict[str, Any]]:
-    """Day-1 placeholder: report all three IDEs as 'detected'.
+    """Map the IDE detector's typed results onto the simpler shape the
+    template expects (id, name, status, note).
 
-    Day 2 will look at concrete paths (``~/Library/Application Support/
-    Claude/claude_desktop_config.json`` etc.) to decide detected vs
-    missing. For now the cards are actionable but the POST is a no-op
-    stub.
+    The template treats ``installed`` / ``detected`` / ``missing`` as
+    three visual states; the less-common ``error`` bucket piggy-backs on
+    ``detected`` (card still clickable, but the note warns the user).
     """
-    return [
-        {"id": "claude-desktop", "name": "Claude Desktop", "status": "detected"},
-        {"id": "cursor", "name": "Cursor", "status": "detected"},
-        {"id": "cline", "name": "Cline (VS Code)", "status": "detected"},
-        {"id": "manual", "name": "Other MCP client", "status": "detected"},
-    ]
+    status_map = {
+        IDEStatus.CONFIGURED: "installed",
+        IDEStatus.DETECTED:   "detected",
+        IDEStatus.MISSING:    "missing",
+        IDEStatus.ERROR:      "detected",
+    }
+    rows = []
+    for r in ide_detect_all():
+        rows.append({
+            "id": r.ide_id,
+            "name": r.display_name,
+            "status": status_map.get(r.status, "missing"),
+            "note": r.note or "",
+        })
+    return rows

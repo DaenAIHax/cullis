@@ -81,24 +81,31 @@
             {% if ide.status != 'missing' %}
             hx-post="/configure/{{ ide.id }}"
             hx-swap="none"
-            hx-on::after-request="if(event.detail.successful){ this.setAttribute('data-status','installed'); this.querySelector('.ide-card-status').textContent='Configured · restart app'; showToast('{{ ide.name }} configured'); }"
+            hx-on::after-request="handleConfigureResult(this, event)"
             {% else %}
             disabled
+            title="{{ ide.note }}"
             {% endif %}>
             <span class="ide-card-name">{{ ide.name }}</span>
             <span class="ide-card-status">
                 {% if ide.status == 'installed' %}Already configured{% elif ide.status == 'detected' %}Ready to configure{% else %}Not detected{% endif %}
             </span>
+            {% if ide.note and ide.status != 'missing' %}
+            <span class="ide-card-status muted" style="font-size: 9px;">{{ ide.note }}</span>
+            {% endif %}
         </button>
         {% endfor %}
+
+        <button type="button" class="ide-card" data-status="detected"
+                onclick="copyText(mcpSnippet)">
+            <span class="ide-card-name">Other MCP client</span>
+            <span class="ide-card-status">Copy JSON snippet</span>
+        </button>
     </div>
 
     <div class="btn-row">
-        <button type="button" class="btn btn-secondary" onclick="copyText('{\n  &quot;mcpServers&quot;: {\n    &quot;cullis&quot;: {\n      &quot;command&quot;: &quot;cullis-connector&quot;,\n      &quot;args&quot;: [&quot;serve&quot;]\n    }\n  }\n}')">
-            Copy MCP config
-        </button>
         <a class="btn btn-ghost" href="https://cullis.io/docs/connector/ide" target="_blank" rel="noopener">
-            Manual setup docs
+            Manual setup docs →
         </a>
     </div>
 </section>
@@ -107,4 +114,36 @@
     You can close this window — the connector keeps running in the background.
 </p>
 
+{% endblock %}
+
+{% block after_body %}
+<script>
+const mcpSnippet = {{ mcp_snippet|tojson }};
+
+function handleConfigureResult(btn, event) {
+    const statusEl = btn.querySelector('.ide-card-status');
+    let payload = null;
+    try { payload = JSON.parse(event.detail.xhr.responseText); } catch (e) {}
+    const ok = event.detail.successful && payload;
+
+    if (!ok) {
+        statusEl.textContent = 'Error · check logs';
+        btn.setAttribute('data-status', 'missing');
+        showToast((payload && payload.error) || 'Configuration failed');
+        return;
+    }
+
+    if (payload.status === 'installed' || payload.status === 'already_configured') {
+        btn.setAttribute('data-status', 'installed');
+        statusEl.textContent = payload.status === 'already_configured'
+            ? 'Already configured'
+            : 'Configured · restart app';
+        showToast(payload.message || 'Configured');
+    } else if (payload.status === 'error') {
+        statusEl.textContent = 'Error · ' + (payload.error || 'unknown');
+        btn.setAttribute('data-status', 'missing');
+        showToast(payload.error || 'Configuration failed');
+    }
+}
+</script>
 {% endblock %}
