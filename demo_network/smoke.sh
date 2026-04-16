@@ -19,7 +19,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-SERVICES_ON_FAILURE=(broker proxy-a proxy-b bootstrap sender checker)
+SERVICES_ON_FAILURE=(broker proxy-a proxy-b bootstrap sender checker mcp-echo)
 
 # PROXY_DB=postgres activates compose.postgres.yml so the proxies run on a
 # real Postgres instead of the default per-proxy SQLite. Used by the CI
@@ -105,6 +105,7 @@ cmd_check() {
             ok "smoke PASS: message round-trip succeeded (nonce=$expected)"
             assert_dashboard_signing_key_persistent
             assert_audit_hash_chain_integrity
+            assert_aggregated_mcp_endpoint "$expected"
             return 0
         fi
         sleep 1
@@ -234,6 +235,27 @@ assert_audit_hash_chain_integrity() {
         warn "A7 output: $verified"
         dump_failure_logs
         die "A7 FAIL: audit hash chain broken"
+    fi
+}
+
+# A8 — aggregated MCP endpoint (ADR-007 Phase 1). The sender container's
+# _phase6 already exercises POST /v1/mcp {tools/list, tools/call echo};
+# if phase6 fails the container exits non-zero and compose --wait aborts
+# before we ever reach cmd_check. This assertion is the evidence check:
+# the mcp-echo container must have logged a tools/call whose arguments
+# contain the current smoke NONCE, proving the proxy forwarded the call
+# end-to-end.
+assert_aggregated_mcp_endpoint() {
+    local expected="$1"
+    say "demo_network: A8 asserting /v1/mcp forwarded to mcp-echo (nonce=$expected)"
+
+    if $COMPOSE logs mcp-echo 2>/dev/null | grep -q "$expected"; then
+        ok "smoke PASS (A8): mcp-echo received echo call with current NONCE"
+    else
+        warn "A8: mcp-echo logs did not contain NONCE=$expected"
+        $COMPOSE logs --tail=200 mcp-echo >&2 || true
+        dump_failure_logs
+        die "A8 FAIL: aggregator did not forward the sender's echo call"
     fi
 }
 
