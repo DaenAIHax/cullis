@@ -25,6 +25,7 @@ Invariants kept during hot-swap:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -302,4 +303,141 @@ async def link_broker_endpoint(request: Request):
             "org_id": org_id,
             "org_status": final_status,
         }
+    return RedirectResponse(url="/proxy/overview", status_code=303)
+
+
+# ── Unlink (federated → standalone at runtime) ───────────────────────────────
+
+
+async def _count_active_cross_org_sessions(app) -> int:
+    """How many sessions are still open at the broker bridge right now?
+
+    Intra-org sessions (local_sessions table) survive an unlink just fine
+    because they never touched the broker. But cross-org sessions own
+    state the broker tracks — walking them off in the middle of a
+    conversation silently drops messages. We treat those as a reason to
+    refuse the unlink unless the operator passes ?force=1.
+    """
+    bridge = getattr(app.state, "broker_bridge", None)
+    if bridge is None:
+        return 0
+    # CullisClient cache = one entry per agent with a live session. This
+    # is a proxy for "something is in flight". The count is coarse — we
+    # prefer false positives (refuse when there are clients cached even
+    # if they're idle) to false negatives.
+    return len(getattr(bridge, "_clients", {}) or {})
+
+
+async def _teardown_broker_bridge(app) -> None:
+    """Reverse everything ``_swap_broker_bridge`` installed.
+
+    The proxy goes back to standalone-shape: no bridge, no reverse-proxy
+    client, federation cache cleared. Local_* tables (intra-org state)
+    are untouched — that's the whole point of having two scopes.
+    """
+    bridge = getattr(app.state, "broker_bridge", None)
+    if bridge is not None:
+        try:
+            await bridge.shutdown()
+        except Exception as exc:
+            _log.warning("bridge shutdown on unlink raised: %s", exc)
+        app.state.broker_bridge = None
+
+    client = getattr(app.state, "reverse_proxy_client", None)
+    if client is not None:
+        try:
+            await client.aclose()
+        except Exception as exc:
+            _log.warning("reverse_proxy_client aclose on unlink raised: %s", exc)
+        app.state.reverse_proxy_client = None
+
+    app.state.reverse_proxy_broker_url = None
+
+    # Stop the federation SSE subscriber if it's running (ADR-001 Phase 4c).
+    sub_stop = getattr(app.state, "federation_subscriber_stop", None)
+    sub_task = getattr(app.state, "federation_subscriber_task", None)
+    if sub_stop is not None:
+        try:
+            sub_stop.set()
+        except Exception:
+            pass
+    if sub_task is not None:
+        try:
+            await asyncio.wait_for(sub_task, timeout=5.0)
+        except (asyncio.TimeoutError, Exception):
+            sub_task.cancel()
+    app.state.federation_subscriber_stop = None
+    app.state.federation_subscriber_task = None
+
+    # Clear the federation cache — the rows would otherwise look live
+    # to /v1/agents/search until the next subscriber rebuild (which
+    # won't happen until the proxy is re-linked to a broker).
+    from sqlalchemy import text as _text
+
+    from mcp_proxy.db import get_db as _get_db
+    async with _get_db() as conn:
+        for table in (
+            "cached_federated_agents",
+            "cached_policies",
+            "cached_bindings",
+            "federation_cursor",
+        ):
+            try:
+                await conn.execute(_text(f"DELETE FROM {table}"))
+            except Exception as exc:
+                _log.warning("failed to clear %s during unlink: %s", table, exc)
+
+
+@admin_router.post("/unlink-broker")
+async def unlink_broker_endpoint(request: Request):
+    """Revert the proxy to standalone shape.
+
+    Refuses when cross-org sessions look active — the ``_clients``
+    cache on the bridge is our proxy for "someone is mid-conversation
+    with a peer org". Pass ``?force=1`` to override.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        raise HTTPException(status_code=401, detail="login required")
+
+    content_type = request.headers.get("content-type", "")
+    force = request.query_params.get("force") in ("1", "true", "yes")
+    if "application/json" not in content_type:
+        # Form POST needs CSRF; JSON-mode (programmatic / smoke scripts)
+        # relies on the session cookie alone.
+        if not await verify_csrf(request, session):
+            raise HTTPException(status_code=403, detail="invalid CSRF token")
+
+    broker_url = await get_config("broker_url") or ""
+    if not broker_url:
+        raise HTTPException(status_code=400, detail="proxy is not linked to a broker")
+
+    if not force:
+        active = await _count_active_cross_org_sessions(request.app)
+        if active > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "cross_org_sessions_active",
+                    "active_clients": active,
+                    "hint": "retry with ?force=1 to drop them",
+                },
+            )
+
+    await _teardown_broker_bridge(request.app)
+
+    # Persist the standalone-again state so the next lifespan boot
+    # doesn't try to reinitialize the bridge.
+    await set_config("broker_url", "")
+    await set_config("org_status", "standalone")
+
+    await log_audit(
+        agent_id="admin",
+        action="admin.unlink_broker",
+        status="success",
+        detail=f"was={broker_url} forced={force}",
+    )
+
+    if "application/json" in content_type:
+        return {"status": "unlinked", "was": broker_url, "forced": force}
     return RedirectResponse(url="/proxy/overview", status_code=303)

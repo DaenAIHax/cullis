@@ -213,3 +213,136 @@ async def test_link_broker_persists_config_for_next_boot(standalone_proxy):
     assert await get_config("broker_url") == "https://broker.example.com"
     assert await get_config("org_id") == "acme"
     assert await get_config("org_status") == "attached"
+
+
+# ── Unlink ───────────────────────────────────────────────────────────────────
+
+async def _link_for_test(client, app) -> None:
+    """Helper: link against a fake broker so we have something to unlink."""
+    async def handler(method, url, json, kwargs):
+        return Response(200, json={"org_id": "acme", "status": "attached"})
+
+    import httpx
+    original = httpx.AsyncClient
+    _fake_broker(handler)
+    try:
+        await client.post(
+            "/v1/admin/link-broker",
+            json={
+                "broker_url": "https://broker.example.com",
+                "invite_token": "tok",
+            },
+        )
+    finally:
+        httpx.AsyncClient = original
+
+
+@pytest.mark.asyncio
+async def test_unlink_restores_standalone_shape(standalone_proxy):
+    app, client = standalone_proxy
+    await _link_for_test(client, app)
+
+    assert getattr(app.state, "broker_bridge", None) is not None
+    assert getattr(app.state, "reverse_proxy_client", None) is not None
+
+    resp = await client.post("/v1/admin/unlink-broker", json={})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "unlinked"
+    assert body["was"] == "https://broker.example.com"
+
+    # Hot-teardown invariants — mirror image of the hot-swap assertions.
+    assert getattr(app.state, "broker_bridge", None) is None
+    assert getattr(app.state, "reverse_proxy_client", None) is None
+    assert getattr(app.state, "reverse_proxy_broker_url", None) is None
+
+    from mcp_proxy.db import get_config
+    assert (await get_config("broker_url")) == ""
+    assert (await get_config("org_status")) == "standalone"
+
+
+@pytest.mark.asyncio
+async def test_unlink_refuses_when_not_linked(standalone_proxy):
+    _, client = standalone_proxy
+    resp = await client.post("/v1/admin/unlink-broker", json={})
+    assert resp.status_code == 400
+    assert "not linked" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_unlink_requires_login(tmp_path, monkeypatch):
+    db_file = tmp_path / "proxy.sqlite"
+    monkeypatch.setenv("MCP_PROXY_DATABASE_URL", f"sqlite+aiosqlite:///{db_file}")
+    monkeypatch.delenv("PROXY_DB_URL", raising=False)
+    monkeypatch.setenv("PROXY_LOCAL_SWEEPER_DISABLED", "1")
+    monkeypatch.setenv("MCP_PROXY_STANDALONE", "true")
+    monkeypatch.delenv("MCP_PROXY_ORG_ID", raising=False)
+
+    from mcp_proxy.config import get_settings
+    get_settings.cache_clear()
+    from mcp_proxy.main import app
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/v1/admin/unlink-broker", json={})
+    assert resp.status_code == 401
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_unlink_clears_federation_cache(standalone_proxy):
+    """After unlink, /v1/agents/search must stop returning stale cached
+    federated rows — otherwise the admin thinks the peers are still
+    reachable while the bridge is gone."""
+    app, client = standalone_proxy
+    await _link_for_test(client, app)
+
+    # Seed a fake federated row so we can observe the cleanup.
+    from sqlalchemy import text
+    from mcp_proxy.db import get_db
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO cached_federated_agents (
+                    agent_id, org_id, display_name, capabilities,
+                    thumbprint, revoked, updated_at
+                ) VALUES (
+                    'fed-bot', 'other-org', 'Fed Bot', '[]',
+                    NULL, 0, '2026-04-16T00:00:00Z'
+                )
+                """
+            ),
+        )
+
+    resp = await client.post("/v1/admin/unlink-broker", json={})
+    assert resp.status_code == 200
+
+    async with get_db() as conn:
+        count = (await conn.execute(
+            text("SELECT COUNT(*) FROM cached_federated_agents")
+        )).scalar()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_unlink_refuses_on_active_clients_without_force(standalone_proxy):
+    """The bridge's _clients dict is our proxy for "something is in flight
+    cross-org". A non-empty cache → refuse unless ?force=1."""
+    app, client = standalone_proxy
+    await _link_for_test(client, app)
+
+    # Seed a fake client in the bridge cache so the count is non-zero.
+    bridge = app.state.broker_bridge
+    bridge._clients["alice"] = object()
+
+    resp = await client.post("/v1/admin/unlink-broker", json={})
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert body["error"] == "cross_org_sessions_active"
+    assert body["active_clients"] == 1
+
+    # Forced unlink goes through despite the cache.
+    resp = await client.post("/v1/admin/unlink-broker?force=1", json={})
+    assert resp.status_code == 200
+    assert getattr(app.state, "broker_bridge", None) is None
