@@ -9,9 +9,7 @@ agent. The forwarder's outbound HTTP is intercepted with
 """
 from __future__ import annotations
 
-import asyncio
 import json
-from typing import Any
 
 import httpx
 import pytest
@@ -22,7 +20,6 @@ from mcp_proxy.auth.dependencies import get_authenticated_agent
 from mcp_proxy.db import dispose_db, get_db, init_db
 from mcp_proxy.local.audit import verify_local_chain
 from mcp_proxy.models import TokenPayload
-from mcp_proxy.tools.context import ToolContext
 from mcp_proxy.tools.registry import ToolDefinition, tool_registry
 from mcp_proxy.tools.resource_loader import load_resources_into_registry
 
