@@ -64,11 +64,20 @@ echo "==> Building ${BIN_NAME} on ${PLATFORM}/${ARCH}"
 # surprising contributors who already manage their own.
 python -m pip install --upgrade pip pyinstaller >&2
 python -m pip install --upgrade \
-    "mcp>=1.0" "httpx>=0.24.0" "cryptography>=41.0.0" "PyYAML>=6.0" >&2
+    "mcp>=1.0" "httpx>=0.24.0" "cryptography>=41.0.0" "PyYAML>=6.0" \
+    "bcrypt>=4.0" \
+    "fastapi>=0.110" "uvicorn[standard]>=0.27" "jinja2>=3.1" "python-multipart>=0.0.9" >&2
 
 STRIP_FLAG=""
 if [[ "${PLATFORM}" == "linux" ]]; then
   STRIP_FLAG="--strip"
+fi
+
+# PyInstaller's --add-data wants different separators per OS. The modern
+# release accepts both but we hedge anyway: ':' on POSIX, ';' on Windows.
+DATA_SEP=":"
+if [[ "${PLATFORM}" == "windows" ]]; then
+  DATA_SEP=";"
 fi
 
 # `cullis_connector.__main__` is the documented module entry point;
@@ -76,6 +85,11 @@ fi
 # We build from the source tree rather than an installed wheel so the
 # binary reflects the current repo state (important for the release
 # workflow, which checks out the tagged commit).
+#
+# The --add-data flags ship the dashboard's templates + static assets as
+# runtime data files — Jinja2 and FastAPI StaticFiles read them off disk
+# next to __file__, and PyInstaller's bootloader extracts them into the
+# _MEIPASS temp dir on launch.
 pyinstaller \
   --name "${BIN_NAME}" \
   --onefile \
@@ -85,8 +99,19 @@ pyinstaller \
   --workpath "build/pyinstaller" \
   --specpath "build/pyinstaller" \
   ${STRIP_FLAG} \
+  --add-data "cullis_connector/templates${DATA_SEP}cullis_connector/templates" \
+  --add-data "cullis_connector/static${DATA_SEP}cullis_connector/static" \
   --collect-submodules cullis_connector \
   --collect-submodules mcp \
+  --collect-submodules fastapi \
+  --collect-submodules starlette \
+  --hidden-import "uvicorn.loops.auto" \
+  --hidden-import "uvicorn.loops.asyncio" \
+  --hidden-import "uvicorn.lifespan.on" \
+  --hidden-import "uvicorn.protocols.http.auto" \
+  --hidden-import "uvicorn.protocols.http.h11_impl" \
+  --hidden-import "uvicorn.protocols.websockets.auto" \
+  --hidden-import "uvicorn.logging" \
   cullis_connector/__main__.py
 
 FINAL_NAME="${BIN_NAME}-${PLATFORM}-${ARCH}"

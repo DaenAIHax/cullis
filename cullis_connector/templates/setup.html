@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Setup{% endblock %}
+{% block content %}
+
+<div class="steps" aria-label="Enrollment progress">
+    <div class="step active">
+        <span class="step-circle">01</span>
+        <span class="step-label">Connect</span>
+    </div>
+    <div class="step-sep"></div>
+    <div class="step">
+        <span class="step-circle">02</span>
+        <span class="step-label">Approve</span>
+    </div>
+    <div class="step-sep"></div>
+    <div class="step">
+        <span class="step-circle">03</span>
+        <span class="step-label">Online</span>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/setup" class="panel">
+    <div class="panel-head">
+        <div class="panel-eyebrow">Enrollment · Step 01</div>
+        <h1 class="panel-title">Connect to your organization</h1>
+        <p class="panel-sub">
+            Point this connector at your company's Cullis proxy. Your admin
+            will review the request and assign you an identity before any
+            traffic flows.
+        </p>
+    </div>
+
+    <div class="field">
+        <label class="field-label" for="site_url">Proxy URL</label>
+        <input
+            id="site_url"
+            name="site_url"
+            type="url"
+            required
+            placeholder="https://cullis.acme.corp:9443"
+            value="{{ site_url or '' }}"
+            class="input mono"
+            autofocus>
+        <span class="field-hint">The address IT gave you — typically ends with <span class="mono">:9443</span>.</span>
+    </div>
+
+    <div class="field">
+        <label class="field-label" for="requester_name">Your name</label>
+        <input
+            id="requester_name"
+            name="requester_name"
+            type="text"
+            required
+            placeholder="Jane Doe"
+            value="{{ requester_name or '' }}"
+            class="input">
+    </div>
+
+    <div class="field">
+        <label class="field-label" for="requester_email">Work email</label>
+        <input
+            id="requester_email"
+            name="requester_email"
+            type="email"
+            required
+            placeholder="jane@acme.corp"
+            value="{{ requester_email or '' }}"
+            class="input mono">
+        <span class="field-hint">Admins use it to verify you're who you claim.</span>
+    </div>
+
+    <div class="field">
+        <label class="field-label" for="reason">Reason <span class="muted">(optional)</span></label>
+        <textarea
+            id="reason"
+            name="reason"
+            placeholder="What you plan to use Cullis for — e.g. 'connecting Cursor to our internal docs agent'"
+            class="textarea">{{ reason or '' }}</textarea>
+    </div>
+
+    <label class="field" style="flex-direction: row; align-items: center; gap: 10px; margin-top: 4px;">
+        <input type="checkbox" name="verify_tls_off" value="1" {% if verify_tls_off %}checked{% endif %}>
+        <span class="field-hint" style="margin: 0;">
+            Disable TLS verification <span class="muted">(development only)</span>
+        </span>
+    </label>
+
+    <div class="btn-row btn-row-end">
+        <button type="submit" class="btn btn-primary">
+            Request enrollment
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+    </div>
+</form>
+
+<p class="footer-hint">
+    Running offline? See <a href="https://cullis.io/docs/connector" target="_blank" rel="noopener">the connector docs</a> for air-gapped install.
+</p>
+
+{% endblock %}

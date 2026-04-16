@@ -478,6 +478,9 @@ app.include_router(audit_router)
 from mcp_proxy.dashboard.router import router as dashboard_router
 app.include_router(dashboard_router)
 
+from mcp_proxy.dashboard.downloads import router as downloads_router
+app.include_router(downloads_router)
+
 # Static assets for the dashboard (compiled Tailwind CSS + bundled htmx).
 # Shake-out P0-09 + P1-10: serve /static/css/tailwind.css and /static/vendor/htmx.min.js
 # locally instead of pulling from cdn.tailwindcss.com / unpkg.com.

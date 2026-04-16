@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Waiting for approval{% endblock %}
+{% block content %}
+
+<div class="steps" aria-label="Enrollment progress">
+    <div class="step done">
+        <span class="step-circle">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span class="step-label">Connect</span>
+    </div>
+    <div class="step-sep done"></div>
+    <div class="step active">
+        <span class="step-circle">02</span>
+        <span class="step-label">Approve</span>
+    </div>
+    <div class="step-sep"></div>
+    <div class="step">
+        <span class="step-circle">03</span>
+        <span class="step-label">Online</span>
+    </div>
+</div>
+
+<section class="panel"
+         hx-get="/api/status"
+         hx-trigger="load delay:2s, every 3s"
+         hx-swap="none">
+    <div class="panel-head">
+        <div class="panel-eyebrow">Enrollment · Step 02</div>
+        <h1 class="panel-title">Waiting for your admin to approve</h1>
+        <p class="panel-sub">
+            Your request reached the proxy. An admin now reviews the details
+            and assigns you an agent identity + capabilities. This page
+            advances automatically the moment they approve.
+        </p>
+    </div>
+
+    <div class="waiting-hero">
+        <div class="radar" aria-hidden="true">
+            <div class="radar-ring r1"></div>
+            <div class="radar-ring r2"></div>
+            <div class="radar-ring r3"></div>
+            <div class="radar-ring r4"></div>
+            <div class="radar-crosshair"></div>
+            <div class="radar-sweep"></div>
+            <div class="radar-blip b1"></div>
+            <div class="radar-blip b2"></div>
+            <div class="radar-blip b3"></div>
+            <div class="radar-center"></div>
+        </div>
+
+        <div class="waiting-text">
+            <h2 class="waiting-title">Signal transmitted</h2>
+            <p class="waiting-meta">
+                Session <span class="mono">{{ session_id[:8] }}…</span>
+                · submitted <span id="elapsed">just now</span>
+            </p>
+        </div>
+    </div>
+
+    <div class="urlbox">
+        <div class="urlbox-inner">
+            <div class="urlbox-eyebrow">Admin review URL</div>
+            <div class="urlbox-val" id="enroll-url">{{ enroll_url }}</div>
+        </div>
+        <button type="button" class="copy-btn" onclick="copyText('{{ enroll_url|e }}')">Copy</button>
+    </div>
+
+    <div class="btn-row">
+        <form method="post" action="/cancel" style="display: inline;">
+            <button type="submit" class="btn btn-ghost">Cancel enrollment</button>
+        </form>
+    </div>
+</section>
+
+<p class="footer-hint">
+    Admins typically approve within minutes. Sessions expire after 30 minutes of inactivity.
+</p>
+
+{% endblock %}
+
+{% block after_body %}
+<script>
+// Elapsed-time ticker
+(function(){
+    var startedAt = {{ started_at_ms }};
+    var el = document.getElementById('elapsed');
+    if (!el) return;
+    function fmt() {
+        var s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        if (s < 5) { el.textContent = 'just now'; return; }
+        if (s < 60) { el.textContent = s + 's ago'; return; }
+        var m = Math.floor(s / 60);
+        el.textContent = m + 'm ' + (s % 60) + 's ago';
+    }
+    fmt();
+    setInterval(fmt, 1000);
+})();
+
+// HTMX poll handler: if status JSON says approved, redirect to connected
+document.body.addEventListener('htmx:afterRequest', function(ev) {
+    if (ev.detail.pathInfo && ev.detail.pathInfo.requestPath === '/api/status') {
+        try {
+            var res = JSON.parse(ev.detail.xhr.responseText);
+            if (res.status === 'approved') {
+                window.location.href = '/connected';
+            } else if (res.status === 'rejected') {
+                window.location.href = '/setup?error=' + encodeURIComponent(res.error || 'Enrollment rejected by admin.');
+            } else if (res.status === 'expired') {
+                window.location.href = '/setup?error=' + encodeURIComponent('Enrollment session expired. Please start again.');
+            } else if (res.status === 'error') {
+                window.location.href = '/setup?error=' + encodeURIComponent(res.error || 'Unknown error.');
+            }
+        } catch (e) { /* non-JSON, ignore */ }
+    }
+});
+</script>
+{% endblock %}

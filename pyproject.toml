@@ -23,6 +23,13 @@ dev = [
 connector = [
     "mcp>=1.0",
     "PyYAML>=6.0",
+    "bcrypt>=4.0",
+]
+dashboard = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
 ]
 spiffe = [
     "spiffe>=0.2.0",
@@ -34,3 +41,12 @@ cullis-proxy = "mcp_proxy.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cullis_sdk", "cullis_connector"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+# Ship the dashboard templates + static assets alongside the Python code.
+# Without this the PyInstaller bundle (Day 3) misses Jinja templates and
+# the pip install misses the stylesheet.
+
+[tool.hatch.build.targets.wheel.force-include]
+"cullis_connector/templates" = "cullis_connector/templates"
+"cullis_connector/static" = "cullis_connector/static"
