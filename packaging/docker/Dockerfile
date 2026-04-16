@@ -33,6 +33,7 @@ COPY . /src
 
 RUN python -m pip install --upgrade pip build \
  && bash packaging/pypi/build.sh \
+ && mkdir -p /dist \
  && mv dist/cullis_connector-*.whl /dist/
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────

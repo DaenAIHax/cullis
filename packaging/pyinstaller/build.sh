@@ -79,8 +79,13 @@ fi
 # PyInstaller's --add-data wants different separators per OS. The modern
 # release accepts both but we hedge anyway: ':' on POSIX, ';' on Windows.
 DATA_SEP=":"
+ADD_DATA_ROOT="${REPO_ROOT}"
 if [[ "${PLATFORM}" == "windows" ]]; then
   DATA_SEP=";"
+  # Git Bash represents Windows paths as /d/a/... which PyInstaller can't
+  # resolve as filesystem paths — it treats them as missing and aborts.
+  # cygpath -w converts them back to native D:\a\... form.
+  ADD_DATA_ROOT="$(cygpath -w "${REPO_ROOT}")"
 fi
 
 # `cullis_connector.__main__` is the documented module entry point;
@@ -102,8 +107,8 @@ pyinstaller \
   --workpath "build/pyinstaller" \
   --specpath "build/pyinstaller" \
   ${STRIP_FLAG} \
-  --add-data "${REPO_ROOT}/cullis_connector/templates${DATA_SEP}cullis_connector/templates" \
-  --add-data "${REPO_ROOT}/cullis_connector/static${DATA_SEP}cullis_connector/static" \
+  --add-data "${ADD_DATA_ROOT}/cullis_connector/templates${DATA_SEP}cullis_connector/templates" \
+  --add-data "${ADD_DATA_ROOT}/cullis_connector/static${DATA_SEP}cullis_connector/static" \
   --collect-submodules cullis_connector \
   --collect-submodules mcp \
   --collect-submodules fastapi \
