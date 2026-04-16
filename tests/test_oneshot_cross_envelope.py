@@ -17,11 +17,10 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from cullis_sdk.client import CullisClient
 from cullis_sdk.crypto.e2e import (
@@ -34,9 +33,7 @@ from tests.cert_factory import (
     DPoPHelper,
     get_agent_key_pem,
     get_agent_pubkey_pem,
-    get_org_ca_pem,
 )
-from tests.conftest import ADMIN_HEADERS
 from tests.test_oneshot_cross import (  # reuse helpers from PR #2 suite
     _register_and_login,
     _mock_oneshot_pdp,  # noqa — autouse fixture re-exported for patch scope
@@ -200,7 +197,7 @@ async def test_sdk_decrypt_oneshot_envelope_roundtrip(client: AsyncClient):
     verifies inner signature against the broker registry cert."""
     dpop_a, dpop_b = DPoPHelper(), DPoPHelper()
     await _register_and_login(client, dpop_a, "env3::alice", "env3")
-    token_b = await _register_and_login(client, dpop_b, "envt3::bob", "envt3")
+    await _register_and_login(client, dpop_b, "envt3::bob", "envt3")
 
     corr = str(uuid.uuid4())
     nonce = str(uuid.uuid4())
