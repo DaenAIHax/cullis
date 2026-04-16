@@ -100,6 +100,7 @@ async def start_enrollment(
                 requester_email=payload.requester_email,
                 reason=payload.reason,
                 device_info=payload.device_info,
+                api_key_hash=payload.api_key_hash,
             )
     except service.EnrollmentError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc

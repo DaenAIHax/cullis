@@ -130,11 +130,19 @@ async def start_enrollment(
     requester_email: str,
     reason: str | None,
     device_info: str | None,
+    api_key_hash: str | None = None,
 ) -> StartedEnrollment:
     """Create a new pending enrollment.
 
     The session_id is a 128-bit URL-safe random token — unguessable so only
     the client that started the flow can poll it.
+
+    ``api_key_hash`` is the bcrypt hash of an X-API-Key that the connector
+    generated locally (the raw key never leaves the requester's machine).
+    If provided, it gets stored now and copied to internal_agents on
+    approve() so the connector can authenticate to /v1/egress/* from day
+    one. Legacy connectors that don't send this still work — the server
+    generates its own key in approve() for backward compatibility.
     """
     fingerprint = _pubkey_fingerprint(pubkey_pem)
     session_id = secrets.token_urlsafe(24)
@@ -146,11 +154,11 @@ async def start_enrollment(
             """INSERT INTO pending_enrollments (
                 session_id, pubkey_pem, pubkey_fingerprint,
                 requester_name, requester_email, reason, device_info,
-                status, created_at, expires_at
+                status, created_at, expires_at, api_key_hash
             ) VALUES (
                 :sid, :pk, :fp,
                 :name, :email, :reason, :device,
-                'pending', :created, :expires
+                'pending', :created, :expires, :keyhash
             )"""
         ),
         {
@@ -163,6 +171,7 @@ async def start_enrollment(
             "device": device_info,
             "created": _iso(now),
             "expires": _iso(expires_at),
+            "keyhash": api_key_hash,
         },
     )
     return StartedEnrollment(session_id=session_id, expires_at=expires_at)
@@ -228,14 +237,16 @@ async def approve(
 
     # Register the approved agent in the main internal_agents registry so it
     # shows up in the dashboard and can authenticate via X-API-Key against
-    # /v1/egress/*. The connector does not use the API key (it authenticates
-    # via cert + DPoP), but it is surfaced on the dashboard for admin rotation
-    # and optional SDK paths. Without this step a device-code enrollment left
-    # the agent invisible in the UI — see the history of this function.
+    # /v1/egress/*. If the connector supplied its own api_key_hash at start
+    # (see 0005 migration), reuse it — the server never sees the raw key.
+    # Legacy connectors that didn't send one get a server-generated hash
+    # here (backward-compatible with pre-#123 clients).
     from mcp_proxy.auth.api_key import generate_api_key, hash_api_key
 
-    raw_api_key = generate_api_key(agent_id)
-    api_key_hash = hash_api_key(raw_api_key)
+    api_key_hash = record.get("api_key_hash")
+    if not api_key_hash:
+        raw_api_key = generate_api_key(agent_id)
+        api_key_hash = hash_api_key(raw_api_key)
     existing = await conn.execute(
         text("SELECT 1 FROM internal_agents WHERE agent_id = :aid"),
         {"aid": agent_id},

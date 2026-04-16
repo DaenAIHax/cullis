@@ -29,6 +29,7 @@ CERT_FILENAME = "agent.crt"
 KEY_FILENAME = "agent.key"
 CA_CHAIN_FILENAME = "ca-chain.pem"
 METADATA_FILENAME = "metadata.json"
+API_KEY_FILENAME = "api_key"
 
 
 class IdentityNotFound(Exception):
@@ -89,11 +90,13 @@ def save_identity(
     private_key: PrivateKeyTypes,
     ca_chain_pem: str | None,
     metadata: IdentityMetadata,
+    api_key: str | None = None,
 ) -> None:
     """Persist the full identity bundle atomically per-file.
 
-    The private key is written with ``chmod 600``; the public cert and
-    metadata stay world-readable (they contain no secret material).
+    The private key and api_key file are written with ``chmod 600``; the
+    public cert and metadata stay world-readable (they contain no secret
+    material).
     """
     identity_dir = _identity_dir(config_dir)
     identity_dir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +127,16 @@ def save_identity(
         json.dumps(metadata.to_dict(), indent=2).encode(),
         mode=0o644,
     )
+
+    # The X-API-Key (if provided) is written as a newline-terminated plain
+    # text file at 0600 — same treatment as the private key. Scripts read
+    # it with `.read_text().strip()` to get the raw sk_local_... value.
+    if api_key:
+        _write_atomic(
+            identity_dir / API_KEY_FILENAME,
+            (api_key + "\n").encode(),
+            mode=0o600,
+        )
 
 
 def load_identity(config_dir: Path) -> IdentityBundle:

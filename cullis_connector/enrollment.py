@@ -23,6 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import os
+import secrets
+
+import bcrypt
 import httpx
 from cryptography import x509
 
@@ -33,6 +37,21 @@ from cullis_connector.identity import (
     save_identity,
 )
 from cullis_connector.identity.store import IdentityMetadata, load_identity
+
+
+_API_KEY_PREFIX = "sk_local_"
+
+
+def _generate_api_key() -> str:
+    """Mirror of mcp_proxy.auth.api_key.generate_api_key — same format
+    (``sk_local_<label>_<32-hex>``) so the server accepts the resulting hash
+    with its existing ``verify_api_key`` helper."""
+    label = os.environ.get("HOSTNAME", "connector").replace(" ", "-")[:32]
+    return f"{_API_KEY_PREFIX}{label}_{secrets.token_hex(16)}"
+
+
+def _bcrypt_hash(raw: str) -> str:
+    return bcrypt.hashpw(raw.encode(), bcrypt.gensalt()).decode()
 
 _log = logging.getLogger("cullis_connector.enrollment")
 
@@ -79,10 +98,18 @@ def enroll(
     private_key = generate_keypair()
     pubkey_pem = public_key_to_pem(private_key.public_key()).decode()
 
+    # Generate an X-API-Key locally. The raw key never leaves this process
+    # until we persist it to disk post-approval. The server receives only
+    # the bcrypt hash and copies it into internal_agents.api_key_hash on
+    # approve() so /v1/egress/* auth works from day one.
+    api_key_raw = _generate_api_key()
+    api_key_hash = _bcrypt_hash(api_key_raw)
+
     start_resp = _start(
         site_url=site_url,
         pubkey_pem=pubkey_pem,
         requester=requester,
+        api_key_hash=api_key_hash,
         verify_tls=verify_tls,
         timeout_s=request_timeout_s,
     )
@@ -139,6 +166,7 @@ def enroll(
         private_key=private_key,
         ca_chain_pem=None,  # Phase 2c will fetch the CA chain from the Site.
         metadata=metadata,
+        api_key=api_key_raw,
     )
 
     print(
@@ -158,6 +186,7 @@ def _start(
     site_url: str,
     pubkey_pem: str,
     requester: RequesterInfo,
+    api_key_hash: str | None,
     verify_tls: bool,
     timeout_s: float,
 ) -> dict[str, Any]:
@@ -170,6 +199,8 @@ def _start(
         body["reason"] = requester.reason
     if requester.device_info:
         body["device_info"] = requester.device_info
+    if api_key_hash:
+        body["api_key_hash"] = api_key_hash
 
     try:
         response = httpx.post(
