@@ -469,6 +469,13 @@ app.include_router(registry_public_key_router)
 from mcp_proxy.reverse_proxy import build_reverse_proxy_router
 app.include_router(build_reverse_proxy_router())
 
+# ADR-006 Fase 2 / PR #8 — WebSocket reverse-proxy for /v1/broker/*. The
+# HTTP forwarder above uses httpx.request which rejects the Upgrade
+# handshake; SDKs hitting /v1/broker/sessions/{id}/messages/stream need
+# this router to survive the upgrade.
+from mcp_proxy.reverse_proxy.websocket import build_websocket_reverse_proxy_router
+app.include_router(build_websocket_reverse_proxy_router())
+
 from mcp_proxy.ingress.router import router as ingress_router
 app.include_router(ingress_router)
 
