@@ -431,9 +431,18 @@ def _win_quote(arg: str) -> str:
 def recommend_command() -> list[str]:
     """Return the command we'd suggest the caller register: the currently
     installed ``cullis-connector`` binary running the dashboard in
-    headless mode (no auto-open browser)."""
+    headless mode (no auto-open browser).
+
+    Resolution order:
+      1. PyInstaller single-file bundle → register ``sys.executable``
+         directly (absolute path of the packaged binary). This matters
+         on Windows where the install dir isn't on PATH.
+      2. ``cullis-connector`` on PATH → register that.
+      3. Dev checkout → fall back to ``python -m cullis_connector``.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "dashboard", "--no-open-browser"]
     binary = shutil.which("cullis-connector")
-    if binary is None:
-        # Dev checkout — fall back to `python -m cullis_connector`.
-        return [sys.executable, "-m", "cullis_connector", "dashboard", "--no-open-browser"]
-    return [binary, "dashboard", "--no-open-browser"]
+    if binary is not None:
+        return [binary, "dashboard", "--no-open-browser"]
+    return [sys.executable, "-m", "cullis_connector", "dashboard", "--no-open-browser"]
