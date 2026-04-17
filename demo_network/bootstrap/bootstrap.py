@@ -1,15 +1,24 @@
-"""
-Demo-network bootstrap: register 2 organizations on the broker, one via the
+"""Demo-network bootstrap: register 2 organizations on the broker, one via the
 generic /onboarding/join flow and one via admin-registration + attach-ca,
 so the smoke exercises both onboarding paths.
 
+Also mints per-agent certs/keys signed by the Org CA, but stops there — the
+Mastio-authoritative registration (ADR-010) happens later in
+``bootstrap_mastio.py`` via ``POST /v1/admin/agents`` once the proxies are
+healthy. Binding create/approve and any test-only revocations live there
+too, since they require the agent to already exist on the Court via the
+federation publisher.
+
 Outputs (into /state, a shared Docker volume):
-  /state/{org_id}/ca.pem        — org CA certificate
-  /state/{org_id}/ca-key.pem    — org CA private key
-  /state/{org_id}/org_secret    — opaque secret used by the proxy to auth
-  /state/{org_id}/display_name  — human-readable label
-  /state/orgs.json              — list of orgs for downstream services
-  /state/bootstrap.done         — flag file; dependents gate on this
+  /state/{org_id}/ca.pem           — org CA certificate
+  /state/{org_id}/ca-key.pem       — org CA private key
+  /state/{org_id}/org_secret       — opaque secret used by the proxy to auth
+  /state/{org_id}/display_name     — human-readable label
+  /state/{org_id}/{role}.pem       — agent leaf cert (org-CA signed)
+  /state/{org_id}/{role}-key.pem   — agent leaf key
+  /state/orgs.json                 — list of orgs for downstream services
+  /state/agents.json               — list of agents for bootstrap_mastio
+  /state/bootstrap.done            — flag file; dependents gate on this
 
 Idempotent: re-runs skip work if /state/bootstrap.done exists.
 """
@@ -126,8 +135,8 @@ def _wait_broker(client: httpx.Client, timeout_s: float = 60.0) -> None:
             if r.status_code == 200:
                 print(f"bootstrap: broker healthy after {time.monotonic() - start:.1f}s")
                 return
-        except Exception as exc:
-            last = exc
+        except Exception:
+            pass
         time.sleep(1)
     raise SystemExit(f"bootstrap: broker never became healthy within {timeout_s}s")
 
@@ -221,119 +230,42 @@ def _gen_agent_cert(agent_id: str, org_id: str, ca_cert_pem: bytes,
     return cert_pem, key_pem
 
 
-def _revoke_agent_binding(client: httpx.Client, org_id: str, agent_id: str) -> None:
-    """Admin-revoke the agent's binding. Session open must fail 403 after."""
-    org_secret = (STATE / org_id / "org_secret").read_text().strip()
-    r = client.get(
-        f"{BROKER_URL}/v1/registry/bindings",
-        params={"org_id": org_id},
-        headers={"x-org-id": org_id, "x-org-secret": org_secret},
-    )
-    r.raise_for_status()
-    bindings = r.json()
-    binding = next((b for b in bindings if b.get("agent_id") == agent_id), None)
-    if binding is None:
-        raise SystemExit(f"bootstrap: no binding found for {agent_id}")
+def _mint_agent_cert(
+    org: dict, role: str, capabilities: list[str],
+    revoke_after_creation: bool = False,
+    revoke_binding_after_creation: bool = False,
+) -> dict:
+    """Generate the agent's cert/key pair and persist it under /state.
 
-    r = client.post(
-        f"{BROKER_URL}/v1/registry/bindings/{binding['id']}/revoke",
-        headers={"x-org-id": org_id, "x-org-secret": org_secret},
-    )
-    if r.status_code != 200:
-        raise SystemExit(f"binding revoke failed for {agent_id}: {r.status_code} {r.text}")
-    print(f"bootstrap: revoked binding {binding['id']} for {agent_id}")
-
-
-def _revoke_agent_cert(client: httpx.Client, org_id: str, agent_id: str, role: str) -> None:
-    """Admin-revoke the agent's current cert. Login afterwards must fail 401."""
-    cert_pem = (STATE / org_id / f"{role}.pem").read_bytes()
-    cert = x509.load_pem_x509_certificate(cert_pem)
-    serial_hex = format(cert.serial_number, "x")
-    try:
-        not_after = cert.not_valid_after_utc
-    except AttributeError:
-        not_after = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
-
-    r = client.post(
-        f"{BROKER_URL}/v1/admin/certs/revoke",
-        json={
-            "serial_hex":     serial_hex,
-            "org_id":         org_id,
-            "agent_id":       agent_id,
-            "reason":         "smoke-A5-test",
-            "revoked_by":     "smoke-bootstrap",
-            "cert_not_after": not_after.isoformat(),
-        },
-        headers=_admin_headers(),
-    )
-    if r.status_code != 200:
-        raise SystemExit(f"cert revoke failed for {agent_id}: {r.status_code} {r.text}")
-    print(f"bootstrap: revoked cert {serial_hex} for {agent_id}")
-
-
-def _provision_agent(client: httpx.Client, org: dict) -> str:
-    """Register an agent + binding for the given org; returns the agent_id."""
+    ADR-010 Phase 6a-4-I: bootstrap no longer registers the agent on the
+    Court. The returned dict is serialized into /state/agents.json so
+    that bootstrap_mastio can seed the Mastio via /v1/admin/agents once
+    the proxies are healthy; the federation publisher then propagates
+    the row to the Court.
+    """
     org_id = org["org_id"]
-    role   = org["agent_role"]
     agent_id = f"{org_id}::{role}"
-    caps = org["capabilities"]
 
     org_dir = STATE / org_id
     ca_cert_pem = (org_dir / "ca.pem").read_bytes()
     ca_key_pem  = (org_dir / "ca-key.pem").read_bytes()
-    org_secret  = (org_dir / "org_secret").read_text().strip()
 
-    # 1. Issue the agent cert (org-signed, SPIFFE SAN).
     cert_pem, key_pem = _gen_agent_cert(agent_id, org_id, ca_cert_pem, ca_key_pem)
     (org_dir / f"{role}.pem").write_bytes(cert_pem)
     (org_dir / f"{role}-key.pem").write_bytes(key_pem)
     (org_dir / f"{role}.pem").chmod(0o644)
     (org_dir / f"{role}-key.pem").chmod(0o644)
 
-    # 2. Register the agent (org-authenticated).
-    r = client.post(
-        f"{BROKER_URL}/v1/registry/agents",
-        json={
-            "agent_id":     agent_id,
-            "org_id":       org_id,
-            "display_name": f"{org['display_name']} {role}",
-            "capabilities": caps,
-            "description":  f"demo smoke {role}",
-        },
-        headers={"x-org-id": org_id, "x-org-secret": org_secret},
-    )
-    if r.status_code not in (201, 409):
-        raise SystemExit(f"register agent {agent_id} failed: {r.status_code} {r.text}")
-
-    # 3. Binding for this agent in its own org (pending → approved).
-    r = client.post(
-        f"{BROKER_URL}/v1/registry/bindings",
-        json={"org_id": org_id, "agent_id": agent_id, "scope": caps},
-        headers={"x-org-id": org_id, "x-org-secret": org_secret},
-    )
-    if r.status_code == 201:
-        binding_id = r.json()["id"]
-    elif r.status_code == 409:
-        # Already exists — fetch its id.
-        r = client.get(
-            f"{BROKER_URL}/v1/registry/bindings",
-            params={"org_id": org_id},
-            headers={"x-org-id": org_id, "x-org-secret": org_secret},
-        )
-        r.raise_for_status()
-        binding_id = next(b["id"] for b in r.json() if b.get("agent_id") == agent_id)
-    else:
-        raise SystemExit(f"binding create failed for {agent_id}: {r.status_code} {r.text}")
-
-    r = client.post(
-        f"{BROKER_URL}/v1/registry/bindings/{binding_id}/approve",
-        headers={"x-org-id": org_id, "x-org-secret": org_secret},
-    )
-    if r.status_code != 200:
-        raise SystemExit(f"binding approve failed for {agent_id}: {r.status_code} {r.text}")
-
-    print(f"bootstrap: agent {agent_id} registered + binding approved")
-    return agent_id
+    print(f"bootstrap: minted cert for {agent_id}")
+    return {
+        "org_id":       org_id,
+        "display_name": f"{org['display_name']} {role}",
+        "agent_id":     agent_id,
+        "role":         role,
+        "capabilities": capabilities,
+        "revoke_cert":  revoke_after_creation,
+        "revoke_binding": revoke_binding_after_creation,
+    }
 
 
 def _onboard_via_attach(client: httpx.Client, org: dict, cert_pem: bytes,
@@ -405,7 +337,7 @@ def main() -> int:
         if missing:
             raise SystemExit(f"bootstrap: orgs not active on broker: {missing}")
 
-        # 4. Sanity-check that both orgs can self-auth with their chosen secret.
+        # Sanity-check that both orgs can self-auth with their chosen secret.
         for org in ORGS:
             org_id = org["org_id"]
             org_secret = (STATE / org_id / "org_secret").read_text().strip()
@@ -419,28 +351,28 @@ def main() -> int:
                     "Secret rotation or registration broken."
                 )
 
-        # 5. For each org, register its primary agent + any extra agents
-        #    (e.g. the banned-sender used to prove the PDP DENY branch).
-        for org in ORGS:
-            _provision_agent(client, org)
-            for extra in org.get("extra_agents") or []:
-                extra_agent_id = _provision_agent(client, {
-                    "org_id":       org["org_id"],
-                    "display_name": org["display_name"],
-                    "agent_role":   extra["role"],
-                    "capabilities": extra["capabilities"],
-                })
-                if extra.get("revoke_after_creation"):
-                    _revoke_agent_cert(client, org["org_id"], extra_agent_id, extra["role"])
-                if extra.get("revoke_binding_after_creation"):
-                    _revoke_agent_binding(client, org["org_id"], extra_agent_id)
+    # Mint per-agent certs and persist the spec list. No broker calls here —
+    # bootstrap_mastio picks up /state/agents.json and calls the Mastio's
+    # /v1/admin/agents once proxies are healthy (ADR-010 Phase 6a-4-I).
+    agents: list[dict] = []
+    for org in ORGS:
+        agents.append(_mint_agent_cert(org, org["agent_role"], org["capabilities"]))
+        for extra in org.get("extra_agents") or []:
+            agents.append(_mint_agent_cert(
+                org, extra["role"], extra["capabilities"],
+                revoke_after_creation=bool(extra.get("revoke_after_creation")),
+                revoke_binding_after_creation=bool(
+                    extra.get("revoke_binding_after_creation")
+                ),
+            ))
 
     (STATE / "orgs.json").write_text(json.dumps([
         {"org_id": o["org_id"], "display_name": o["display_name"], "flow": o["flow"]}
         for o in ORGS
     ], indent=2))
+    (STATE / "agents.json").write_text(json.dumps(agents, indent=2))
     DONE_FLAG.touch()
-    print(f"bootstrap: {len(ORGS)} orgs active and self-authenticated")
+    print(f"bootstrap: {len(ORGS)} orgs active, {len(agents)} agent certs minted")
     return 0
 
 

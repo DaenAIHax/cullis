@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 import httpx
@@ -39,17 +40,43 @@ from sqlalchemy import text
 _log = logging.getLogger("mcp_proxy.federation.publisher")
 
 
-POLL_INTERVAL_S = 30.0
+def _env_float(name: str, default: float) -> float:
+    """Parse a positive-float env var, fall back to ``default`` on junk."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _log.warning("invalid %s=%r — using default %.1fs", name, raw, default)
+        return default
+    if value <= 0:
+        _log.warning("non-positive %s=%r — using default %.1fs", name, raw, default)
+        return default
+    return value
+
+
+# Production defaults match ADR-010 Phase 3. The demo_network smoke pins
+# these tighter via ``MCP_PROXY_FEDERATION_POLL_INTERVAL_S`` so the first
+# push lands seconds after ``bootstrap-mastio`` seeds ``/v1/admin/agents``,
+# instead of blocking the CI smoke on a 30-second tick.
+POLL_INTERVAL_S = _env_float("MCP_PROXY_FEDERATION_POLL_INTERVAL_S", 30.0)
 HTTP_TIMEOUT_S = 10.0
 
 # Aggregate-stats push is less time-critical than per-agent revisions
 # (the Court dashboard tolerates a few minutes of staleness), so the
 # stats loop runs an order of magnitude slower than the agent loop.
-STATS_INTERVAL_S = 300.0
+STATS_INTERVAL_S = _env_float("MCP_PROXY_FEDERATION_STATS_INTERVAL_S", 300.0)
 
 
 async def _fetch_pending(conn) -> list[dict]:
-    """Rows that need a push on this tick."""
+    """Rows that need a push on this tick.
+
+    ``federated`` is a BOOLEAN column (migration 0010). Postgres rejects
+    ``federated = 1`` with ``operator does not exist: boolean = integer``,
+    so the predicate is a bare column reference — valid on both SQLite
+    (truthy integer) and Postgres (native bool) without casts.
+    """
     result = await conn.execute(
         text(
             """
@@ -57,7 +84,7 @@ async def _fetch_pending(conn) -> list[dict]:
                    is_active, federated, federation_revision,
                    last_pushed_revision
               FROM internal_agents
-             WHERE (federated = 1 OR federated_at IS NOT NULL)
+             WHERE (federated OR federated_at IS NOT NULL)
                AND federation_revision > last_pushed_revision
             """
         ),
@@ -77,7 +104,11 @@ async def _mark_pushed(conn, agent_id: str, revision: int) -> None:
         ),
         {
             "rev": revision,
-            "now": datetime.now(timezone.utc).isoformat(),
+            # ``federated_at`` is DateTime(timezone=True) — asyncpg rejects
+            # ISO strings with "expected a datetime.date or datetime.datetime
+            # instance". SQLAlchemy + asyncpg accept a datetime directly on
+            # both SQLite and Postgres.
+            "now": datetime.now(timezone.utc),
             "aid": agent_id,
         },
     )

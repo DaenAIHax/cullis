@@ -29,7 +29,11 @@ Full cycle takes ~50s on a warm cache, ~3min cold (image builds).
               │
    bootstrap ─┤  registers demo-org-a via /onboarding/join
               │  registers demo-org-b via /onboarding/attach
-              │  issues sender/checker x509 certs + bindings
+              │  mints sender/checker x509 certs into /state
+              │
+ bootstrap-  ─┤  pins each Mastio pubkey on the Court
+    mastio    │  seeds /v1/admin/agents on each Mastio (federated=true)
+              │  publisher pushes agents to Court, then bindings approved
               │
    sender ────►  demo-org-a::sender — opens session, sends {nonce}
    checker ◄───  demo-org-b::checker — accepts, stores last payload
@@ -47,7 +51,7 @@ Production-like stack — Postgres + Redis + Vault + policy enforcement ON:
 - Alembic migrations apply cleanly on a fresh **Postgres** DB (including attach-ca)
 - `POST /v1/onboarding/join` works (generic invite)
 - `POST /v1/onboarding/attach` works (org-bound invite + secret rotation + webhook URL)
-- `POST /v1/registry/agents` + `POST /v1/registry/bindings/{id}/approve` work
+- ADR-010 Mastio-sovereign registry: `POST /v1/admin/agents` on each Mastio + federation publisher push to the Court + `POST /v1/registry/bindings/{id}/approve` work
 - x509 agent login via `/v1/auth/token` (DPoP) works — broker JWT signed with a key stored in **Vault**
 - Session open/accept state machine works
 - **Policy enforcement is ON**: broker calls proxy `/pdp/policy` webhook on every session — smoke exercises the full SSRF-protected webhook client path

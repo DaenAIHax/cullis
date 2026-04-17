@@ -287,6 +287,11 @@ services:
       MCP_PROXY_ORG_ID: "demo-org-a"
       MCP_PROXY_ALLOWED_ORIGINS: "https://proxy-a.cullis.test:8443"
       MCP_PROXY_ENVIRONMENT: "development"
+      # ADR-010 Phase 6a-4-I — tighten the federation publisher tick so
+      # agents seeded by ``bootstrap-mastio`` reach the Court within a few
+      # seconds instead of the production-default 30s. Scoped to the demo
+      # smoke; real deployments leave this unset.
+      MCP_PROXY_FEDERATION_POLL_INTERVAL_S: "2"
       SSL_CERT_FILE: /certs/ca.crt
       REQUESTS_CA_BUNDLE: /certs/ca.crt
     volumes:
@@ -317,6 +322,8 @@ services:
       MCP_PROXY_ORG_ID: "demo-org-b"
       MCP_PROXY_ALLOWED_ORIGINS: "https://proxy-b.cullis.test:8443"
       MCP_PROXY_ENVIRONMENT: "development"
+      # ADR-010 Phase 6a-4-I — see proxy-a rationale.
+      MCP_PROXY_FEDERATION_POLL_INTERVAL_S: "2"
       SSL_CERT_FILE: /certs/ca.crt
       REQUESTS_CA_BUNDLE: /certs/ca.crt
     volumes:
@@ -330,15 +337,26 @@ services:
       retries: 20
       start_period: 10s
 
-  # ── ADR-009 Phase 2/4 — pin mastio_pubkey on the Court post-proxy-boot ─────
-
+  # ── ADR-009 Phase 2/4 + ADR-010 Phase 6a-4-I — post-proxy-boot wiring ──────
+  #
+  # After the proxies report healthy, this one-shot:
+  #   1. pins each Mastio's leaf pubkey on the Court (ADR-009 counter-sig),
+  #   2. seeds the per-agent cert+key pairs minted by ``bootstrap`` onto
+  #      the owning Mastio via ``POST /v1/admin/agents`` with
+  #      ``federated=true`` (the federation publisher then propagates to
+  #      the Court — no legacy ``POST /v1/registry/agents`` call),
+  #   3. creates+approves the binding on the Court (retries until the
+  #      publisher has pushed the agent),
+  #   4. performs the A5/A6 test revocations flagged in /state/agents.json.
   bootstrap-mastio:
     build:
       context: ./bootstrap
-    entrypoint: ["python", "/app/pin_mastio.py"]
+    entrypoint: ["python", "/app/bootstrap_mastio.py"]
     depends_on:
       broker:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
       proxy-a:
         condition: service_healthy
       proxy-b:
@@ -346,12 +364,15 @@ services:
     environment:
       BROKER_URL:            "http://broker:8000"
       ADMIN_SECRET:          "demo-admin-secret-change-me"
+      STATE_DIR:             "/state"
       PROXY_A_URL:           "http://proxy-a:9100"
       PROXY_A_ORG:           "demo-org-a"
       PROXY_A_ADMIN_SECRET:  "demo-proxy-admin-a"
       PROXY_B_URL:           "http://proxy-b:9100"
       PROXY_B_ORG:           "demo-org-b"
       PROXY_B_ADMIN_SECRET:  "demo-proxy-admin-b"
+    volumes:
+      - bootstrap-state:/state:ro
     restart: "no"
 
   checker:
