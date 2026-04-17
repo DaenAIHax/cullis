@@ -438,7 +438,6 @@ async def test_manual_unseal_requires_reauth(client: AsyncClient, db_session):
 
 async def test_reauth_ttl_expiry_drops_from_session():
     """Expired re-auth entries are dropped at ``get_session`` read time."""
-    from fastapi import Request
     from app.dashboard.session import (
         get_session, _sign, _COOKIE_NAME, REAUTH_TTL_SECONDS,
     )
