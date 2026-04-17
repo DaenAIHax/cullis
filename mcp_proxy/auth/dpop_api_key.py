@@ -37,6 +37,7 @@ this dep, still with ``off`` as the default until Phase 6 flips it.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 
 from fastapi import HTTPException, Request, status
@@ -149,16 +150,46 @@ async def get_agent_from_dpop_api_key(request: Request) -> InternalAgent:
         require_nonce=_REQUIRE_NONCE_DEFAULT,
     )
 
-    # Phase 2 will check ``proof_jkt`` against the agent's stored
-    # ``dpop_jkt``. Until then accept any cryptographically-valid proof
-    # in optional / required modes — this already closes the
-    # "attacker captured a valid proof, replays it" threat because the
-    # verifier consumes the jti atomically. The remaining hole
-    # (attacker with the same-keypair re-signs a fresh proof) is what
-    # the Phase 2 jkt pin closes.
+    # F-B-11 Phase 2 — pin the proof to the agent's registered JWK.
+    # A cryptographically-valid proof is not sufficient on its own: the
+    # keypair that signed it must be the one the agent registered at
+    # enrollment. Without this pin, an attacker who steals an API-key
+    # but not the agent's private key could still synthesise a valid
+    # proof with their own keypair. The jkt comparison closes that.
+    stored_jkt = getattr(agent, "dpop_jkt", None)
+    if stored_jkt:
+        if not hmac.compare_digest(proof_jkt, stored_jkt):
+            _log.warning(
+                "DPoP proof jkt mismatch (agent=%s, proof_jkt=%s, "
+                "stored_jkt=%s)",
+                agent.agent_id, proof_jkt, stored_jkt,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="DPoP proof was signed by a key not registered "
+                       "for this agent.",
+            )
+    elif mode == "required":
+        # ``required`` mode with no stored jkt = agent has not been
+        # re-enrolled via the Phase 3 flow. Refuse so operators who
+        # flipped the flag see the gap surface instead of silently
+        # accepting every proof. Phase 3 teaches the SDK to push a
+        # JWK during enrollment; existing agents must re-enroll before
+        # the operator flips to ``required``.
+        _log.warning(
+            "DPoP required but agent %s has no registered dpop_jkt — "
+            "re-enrollment needed to populate it (see F-B-11 Phase 3).",
+            agent.agent_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Agent has no DPoP key registered. Re-enroll the "
+                   "Connector so it can publish its JWK thumbprint.",
+        )
+
     _log.debug(
-        "Egress DPoP proof accepted (agent=%s, jkt=%s, mode=%s)",
-        agent.agent_id, proof_jkt, mode,
+        "Egress DPoP proof accepted (agent=%s, jkt=%s, mode=%s, bound=%s)",
+        agent.agent_id, proof_jkt, mode, bool(stored_jkt),
     )
     return agent
 

@@ -191,14 +191,32 @@ async def test_mode_required_rejects_missing_dpop(bypass_legacy, force_mode):
     assert "DPoP" in exc.value.headers.get("WWW-Authenticate", "")
 
 
-async def test_mode_required_accepts_valid_proof(bypass_legacy, force_mode):
+async def test_mode_required_accepts_valid_proof(
+    bound_agent_factory, force_mode,
+):
+    """Mode=required + bound agent + matching proof → accepted.
+
+    Phase 2 tightened the required path: an agent with NULL
+    ``dpop_jkt`` is refused under required mode. The dedicated
+    coverage of that behavior lives in
+    ``test_unbound_agent_rejected_in_required_mode`` below.
+    """
+    from mcp_proxy.auth.dpop import compute_jkt
     force_mode("required")
     api_key = "sk_local_test_" + "c" * 32
-    proof, _, _ = _valid_proof(api_key)
+
+    priv, jwk = make_dpop_key_pair()
+    registered_jkt = compute_jkt(jwk)
+    bound_agent_factory(registered_jkt)
+
+    proof = make_dpop_proof(
+        priv, jwk, "POST", "http://test/v1/egress/message/send",
+        access_token=api_key, nonce=_fresh_nonce(),
+    )
     agent = await get_agent_from_dpop_api_key(
         _make_request(headers={"X-API-Key": api_key, "DPoP": proof})
     )
-    assert agent is _FAKE_AGENT
+    assert agent.dpop_jkt == registered_jkt
 
 
 # ── Proof binding invariants ────────────────────────────────────────
@@ -324,3 +342,171 @@ def test_compute_api_key_ath_matches_rfc9449():
         hashlib.sha256(api_key.encode()).digest()
     ).rstrip(b"=").decode("ascii")
     assert compute_api_key_ath(api_key) == expected
+
+
+# ── F-B-11 Phase 2: JWK thumbprint binding ──────────────────────────
+#
+# After Phase 2, a cryptographically-valid proof is necessary but not
+# sufficient: the keypair that signed it must be the one the agent
+# registered at enrollment. Stored via ``internal_agents.dpop_jkt``
+# (migration 0014) and surfaced on the ``InternalAgent`` model.
+
+
+def _agent_with_jkt(jkt: str) -> InternalAgent:
+    return InternalAgent(
+        agent_id="fb11-phase2-bound-agent",
+        display_name="fb11-p2",
+        capabilities=[],
+        created_at="2026-04-17T00:00:00Z",
+        is_active=True,
+        cert_pem=None,
+        dpop_jkt=jkt,
+    )
+
+
+@pytest.fixture
+def bound_agent_factory(monkeypatch):
+    """Return a helper that installs an agent with the given jkt as the
+    fake legacy-dep return value."""
+    def _install(jkt: str) -> InternalAgent:
+        agent = _agent_with_jkt(jkt)
+
+        async def _ok(_request):
+            return agent
+
+        monkeypatch.setattr(_dpop_api_key_mod, "get_agent_from_api_key", _ok)
+        return agent
+
+    return _install
+
+
+async def test_bound_agent_accepts_proof_from_registered_key(
+    bound_agent_factory, force_mode,
+):
+    """Agent has ``dpop_jkt`` registered. A proof signed by the matching
+    keypair is accepted."""
+    from mcp_proxy.auth.dpop import compute_jkt
+    force_mode("optional")
+    api_key = "sk_local_bound_ok_" + "a" * 32
+
+    priv, jwk = make_dpop_key_pair()
+    registered_jkt = compute_jkt(jwk)
+    bound_agent_factory(registered_jkt)
+
+    proof = make_dpop_proof(
+        priv, jwk, "POST", "http://test/v1/egress/message/send",
+        access_token=api_key, nonce=_fresh_nonce(),
+    )
+    agent = await get_agent_from_dpop_api_key(
+        _make_request(headers={"X-API-Key": api_key, "DPoP": proof})
+    )
+    assert agent.dpop_jkt == registered_jkt
+
+
+async def test_bound_agent_rejects_proof_from_different_key(
+    bound_agent_factory, force_mode,
+):
+    """Proof is cryptographically valid but signed by a keypair the
+    agent never registered → 401 with a body that names the mismatch.
+    This is the core F-B-11 Phase 2 invariant: key-possession proof
+    only counts when it is THIS agent's key."""
+    from mcp_proxy.auth.dpop import compute_jkt
+    force_mode("optional")
+    api_key = "sk_local_bound_mismatch_" + "b" * 32
+
+    # Agent registers key A.
+    priv_a, jwk_a = make_dpop_key_pair()
+    registered_jkt = compute_jkt(jwk_a)
+    bound_agent_factory(registered_jkt)
+
+    # Attacker signs with their own key B.
+    priv_b, jwk_b = make_dpop_key_pair()
+    assert compute_jkt(jwk_b) != registered_jkt, (
+        "sanity: keypairs are distinct"
+    )
+    proof = make_dpop_proof(
+        priv_b, jwk_b, "POST", "http://test/v1/egress/message/send",
+        access_token=api_key, nonce=_fresh_nonce(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_from_dpop_api_key(
+            _make_request(headers={"X-API-Key": api_key, "DPoP": proof})
+        )
+    assert exc.value.status_code == 401
+    assert "not registered" in exc.value.detail.lower()
+
+
+async def test_bound_agent_mismatch_rejected_in_required_mode_too(
+    bound_agent_factory, force_mode,
+):
+    """The jkt pin applies in both ``optional`` and ``required`` modes
+    — once the agent has a stored jkt, any non-matching proof is a
+    hard reject."""
+    from mcp_proxy.auth.dpop import compute_jkt
+    force_mode("required")
+    api_key = "sk_local_bound_required_" + "c" * 32
+
+    priv_a, jwk_a = make_dpop_key_pair()
+    registered_jkt = compute_jkt(jwk_a)
+    bound_agent_factory(registered_jkt)
+
+    priv_b, jwk_b = make_dpop_key_pair()
+    proof = make_dpop_proof(
+        priv_b, jwk_b, "POST", "http://test/v1/egress/message/send",
+        access_token=api_key, nonce=_fresh_nonce(),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_from_dpop_api_key(
+            _make_request(headers={"X-API-Key": api_key, "DPoP": proof})
+        )
+    assert exc.value.status_code == 401
+
+
+async def test_unbound_agent_accepted_in_optional_grace(
+    bypass_legacy, force_mode,
+):
+    """Agent has NULL ``dpop_jkt`` (pre-Phase-3, not re-enrolled). In
+    ``optional`` mode a valid proof is accepted — grace period."""
+    force_mode("optional")
+    api_key = "sk_local_unbound_opt_" + "d" * 32
+    proof, _, _ = _valid_proof(api_key)
+    agent = await get_agent_from_dpop_api_key(
+        _make_request(headers={"X-API-Key": api_key, "DPoP": proof})
+    )
+    assert agent is _FAKE_AGENT  # no jkt set
+    assert agent.dpop_jkt is None
+
+
+async def test_unbound_agent_rejected_in_required_mode(
+    bypass_legacy, force_mode,
+):
+    """Agent has NULL ``dpop_jkt`` but mode is ``required``. Refuse so
+    operators who flipped the flag before every Connector was
+    re-enrolled see the gap surface instead of silently accepting
+    proofs that have no binding. The error body tells the operator
+    what to do next."""
+    force_mode("required")
+    api_key = "sk_local_unbound_req_" + "e" * 32
+    proof, _, _ = _valid_proof(api_key)
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_from_dpop_api_key(
+            _make_request(headers={"X-API-Key": api_key, "DPoP": proof})
+        )
+    assert exc.value.status_code == 401
+    assert "no DPoP key registered" in exc.value.detail.lower() or \
+           "re-enroll" in exc.value.detail.lower()
+
+
+async def test_unbound_agent_still_works_in_off_mode(
+    bypass_legacy, force_mode,
+):
+    """Mode=off short-circuits BEFORE any jkt logic runs. A pre-Phase-3
+    agent + mode=off is exactly the pre-F-B-11 state: legacy bearer
+    works, DPoP header is ignored."""
+    force_mode("off")
+    agent = await get_agent_from_dpop_api_key(
+        _make_request(headers={"X-API-Key": "sk_local_unbound_off_" + "f" * 32})
+    )
+    assert agent is _FAKE_AGENT
+    assert agent.dpop_jkt is None

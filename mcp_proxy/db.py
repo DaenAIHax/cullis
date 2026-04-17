@@ -425,4 +425,7 @@ def _agent_row_to_dict(row: RowMapping) -> dict:
     # by hand (without the column) don't blow up.
     if "device_info" in row.keys():
         out["device_info"] = row["device_info"]
+    # Migration 0014 (F-B-11 Phase 2) — same permissiveness.
+    if "dpop_jkt" in row.keys():
+        out["dpop_jkt"] = row["dpop_jkt"]
     return out

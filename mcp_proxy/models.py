@@ -52,6 +52,11 @@ class InternalAgent(BaseModel):
     created_at: str
     is_active: bool = True
     cert_pem: str | None = None
+    # F-B-11 Phase 2 (#181) — JWK thumbprint (RFC 7638) of the DPoP
+    # keypair this agent registered during enrollment. ``None`` during
+    # the grace period for pre-Phase-3 agents; the dep treats NULL and
+    # the flag mode asymmetrically — see ``dpop_api_key``.
+    dpop_jkt: str | None = None
 
 
 class AuditEntry(BaseModel):

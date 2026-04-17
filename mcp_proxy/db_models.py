@@ -49,6 +49,12 @@ class InternalAgent(Base):
     # Free-form JSON carried from pending_enrollments.device_info on approval
     # (OS, hostname, Connector version). Null for agents created via CLI.
     device_info = Column(Text, nullable=True)
+    # F-B-11 Phase 2 (#181) — RFC 7638 JWK thumbprint of the agent's DPoP
+    # keypair. NULL during the Phase 2–6 grace period; populated by the
+    # Phase 3 enrollment flow and checked by
+    # ``mcp_proxy.auth.dpop_api_key.get_agent_from_dpop_api_key`` when
+    # ``CULLIS_EGRESS_DPOP_MODE`` is ``optional`` or ``required``.
+    dpop_jkt = Column(Text, nullable=True)
 
 
 class AuditLogEntry(Base):
