@@ -216,12 +216,52 @@ def _persist_org(org_id: str, display_name: str, cert_pem: bytes,
         p.chmod(0o644)
 
 
+def _load_existing_org(org_id: str) -> dict | None:
+    """Reload persisted CA + secret from the bootstrap-state volume.
+
+    Returns ``None`` when any of the four files is missing — caller
+    falls back to fresh generation. Used to make ``demo.sh full``
+    idempotent across ``demo.sh up`` runs that don't fully ``down``
+    the stack: the Court's Postgres keeps the org row, so regenerating
+    the secret here would mismatch the stored bcrypt hash on the next
+    login.
+    """
+    d = STATE / org_id
+    required = ("ca.pem", "ca-key.pem", "org_secret", "display_name")
+    if not all((d / f).exists() for f in required):
+        return None
+    try:
+        cert_pem = (d / "ca.pem").read_bytes()
+        key_pem = (d / "ca-key.pem").read_bytes()
+        org_secret = (d / "org_secret").read_text().strip()
+        display_name = (d / "display_name").read_text().strip()
+        cert = x509.load_pem_x509_certificate(cert_pem)
+    except Exception as exc:
+        _warn(f"state files unreadable for {org_id} ({exc}) — regenerating")
+        return None
+    return {
+        "cert": cert, "cert_pem": cert_pem, "key_pem": key_pem,
+        "org_secret": org_secret, "display_name": display_name,
+    }
+
+
 def phase_2_generate_cas() -> dict[str, dict]:
-    """Returns {org_id: {cert, cert_pem, key_pem, org_secret, display_name}}."""
+    """Returns {org_id: {cert, cert_pem, key_pem, org_secret, display_name}}.
+
+    Idempotent: reuses existing state when every required file is present.
+    """
     _header(2, "Generate Org CAs")
     orgs_data: dict[str, dict] = {}
     for org in ORGS:
         oid = org["org_id"]
+        reused = _load_existing_org(oid)
+        if reused is not None:
+            cert = reused["cert"]
+            cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+            _ok(f"org_id={BOLD}{oid}{RESET}  [33mreused from state[0m  CN={cn}")
+            _ok(f"serial={GRAY}{_serial_hex(cert)}{RESET}  thumbprint={CYAN}{_thumbprint(cert)}{RESET}")
+            orgs_data[oid] = reused
+            continue
         cert, cert_pem, key_pem = _gen_org_ca(oid)
         org_secret = secrets.token_urlsafe(32)
         _persist_org(oid, org["display_name"], cert_pem, key_pem, org_secret)
