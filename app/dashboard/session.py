@@ -35,13 +35,39 @@ class DashboardSession:
     org_id: str | None  # always None for admin; kept for template compatibility
     csrf_token: str = ""
     logged_in: bool = True
+    # Audit F-B-2 — per-org re-auth scope. Maps org_id → unix-epoch-seconds
+    # expiry. When the admin completes a re-auth challenge for a specific
+    # org, we stamp this map with ``now + REAUTH_TTL_SECONDS`` and re-issue
+    # the session cookie. Mutations on a sealed org consult this map via
+    # ``has_reauth_scope()``.
+    reauth_orgs: dict[str, int] | None = None
 
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    def has_reauth_scope(self, org_id: str) -> bool:
+        """True iff the session holds an unexpired re-auth token for org_id."""
+        if not self.reauth_orgs:
+            return False
+        exp = self.reauth_orgs.get(org_id, 0)
+        return exp > int(time.time())
 
-_NO_SESSION = DashboardSession(role="none", org_id=None, csrf_token="", logged_in=False)
+
+_NO_SESSION = DashboardSession(
+    role="none", org_id=None, csrf_token="", logged_in=False, reauth_orgs=None,
+)
+
+# Audit F-B-2 — re-auth gate TTL. After completing a password re-challenge
+# scoped to an org, the admin has this many seconds to issue mutations on
+# the sealed org before having to re-authenticate. Kept short on purpose:
+# this is a "break-glass" window, not a working mode.
+REAUTH_TTL_SECONDS = 5 * 60  # 5 minutes
+
+# Maximum number of concurrent per-org re-auth tokens we carry in the
+# cookie. Bounded to keep the cookie size predictable (each entry is ~40
+# bytes before signing). Oldest entries are evicted in FIFO order.
+REAUTH_MAX_ENTRIES = 16
 
 
 _auto_key: str = ""
@@ -103,11 +129,27 @@ def get_session(request: Request) -> DashboardSession:
     if role != "admin":
         return _NO_SESSION
 
+    raw_reauth = data.get("reauth_orgs") or {}
+    # Defensively coerce to dict[str, int] and drop expired entries at
+    # read time — keeps the cookie small and avoids trusting future work
+    # to do the cleanup.
+    now = int(time.time())
+    reauth_orgs: dict[str, int] = {}
+    if isinstance(raw_reauth, dict):
+        for k, v in raw_reauth.items():
+            try:
+                exp = int(v)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(k, str) and exp > now:
+                reauth_orgs[k] = exp
+
     return DashboardSession(
         role=role,
         org_id=None,
         csrf_token=data.get("csrf_token", ""),
         logged_in=True,
+        reauth_orgs=reauth_orgs or None,
     )
 
 
@@ -128,6 +170,7 @@ def set_session(response: Response, role: str = "admin", org_id: str | None = No
         "org_id": None,
         "csrf_token": csrf_token,
         "exp": int(time.time()) + _COOKIE_MAX_AGE,
+        "reauth_orgs": {},
     })
     signed = _sign(payload)
     from app.config import get_settings
@@ -140,6 +183,49 @@ def set_session(response: Response, role: str = "admin", org_id: str | None = No
         secure=is_https,
     )
     return csrf_token
+
+
+def add_reauth_scope(
+    response: Response, session: DashboardSession, org_id: str,
+    ttl_seconds: int = REAUTH_TTL_SECONDS,
+) -> None:
+    """Stamp a per-org re-auth token into the session cookie.
+
+    Audit F-B-2 — called after the admin has proven password ownership
+    for a scoped mutation on a sealed org. Re-issues the session cookie
+    preserving the existing CSRF token so in-flight form submissions
+    keep working. Evicts the oldest entries if we hit
+    ``REAUTH_MAX_ENTRIES`` to bound the cookie size.
+    """
+    if not session.is_admin:
+        raise ValueError("add_reauth_scope called on a non-admin session")
+    existing = dict(session.reauth_orgs or {})
+    now = int(time.time())
+    # Drop already-expired entries before we add a new one.
+    existing = {k: v for k, v in existing.items() if v > now}
+    existing[org_id] = now + ttl_seconds
+    # Bound cookie size — oldest-expiry-first eviction.
+    if len(existing) > REAUTH_MAX_ENTRIES:
+        sorted_items = sorted(existing.items(), key=lambda kv: kv[1], reverse=True)
+        existing = dict(sorted_items[:REAUTH_MAX_ENTRIES])
+
+    payload = json.dumps({
+        "role": session.role,
+        "org_id": None,
+        "csrf_token": session.csrf_token,
+        "exp": now + _COOKIE_MAX_AGE,
+        "reauth_orgs": existing,
+    })
+    signed = _sign(payload)
+    from app.config import get_settings
+    is_https = "https" in get_settings().broker_public_url.lower() if get_settings().broker_public_url else False
+    response.set_cookie(
+        _COOKIE_NAME, signed,
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+    )
 
 
 def clear_session(response: Response) -> None:

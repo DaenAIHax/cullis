@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Re-authenticate — {{ org.org_id }}{% endblock %}
+{% block header_title %}Re-authenticate for {{ org.org_id }}{% endblock %}
+{% block content %}
+<div class="max-w-xl space-y-6">
+
+    <style>
+        .card { background: linear-gradient(180deg, rgba(9,14,22,0.9) 0%, rgba(6,10,16,0.9) 100%); border: 1px solid rgba(255,255,255,0.06); }
+        .field {
+            background: rgba(6,11,19,0.85);
+            border: 1px solid rgba(255,255,255,0.08);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .field:focus { outline: none; border-color: rgba(0,229,199,0.55); box-shadow: 0 0 0 3px rgba(0,229,199,0.08); }
+        .cta-primary {
+            background: linear-gradient(180deg, #a78bfa 0%, #8b5cf6 100%);
+            color: #130418; font-family: 'Chakra Petch', sans-serif;
+            letter-spacing: 0.18em; text-transform: uppercase;
+        }
+        .cta-primary:hover { filter: brightness(1.08); }
+    </style>
+
+    <header>
+        <p class="mono text-[10px] uppercase tracking-[0.22em] text-white/40">/dashboard/orgs/{{ org.org_id }}/unseal-reauth</p>
+        <h2 class="font-heading text-xl font-semibold text-white uppercase tracking-wider mt-1">
+            Re-authenticate · {{ org.org_id }}
+        </h2>
+        <p class="text-xs text-white/50 mt-2">
+            This organization is <span class="text-violet-300">tenant-sealed</span>: it was
+            onboarded through the attach-CA flow, which means the tenant's proxy claimed
+            ownership of its CA. Audit finding <span class="mono text-white/80">F-B-2</span>
+            gates dashboard mutations on sealed orgs behind a short-lived per-org
+            re-auth challenge — prove you know the admin password now, and you get
+            <span class="text-white/70">{{ ttl_seconds // 60 }}&nbsp;minutes</span> of unlocked
+            mutations for <span class="mono text-white/80">{{ org.org_id }}</span>.
+        </p>
+    </header>
+
+    {% if error %}
+    <div class="border border-red-400/40 bg-red-400/5 text-red-200 text-sm px-4 py-3 rounded-sm mono">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <section class="card rounded-sm p-6">
+        <form method="post" action="/dashboard/orgs/{{ org.org_id }}/unseal-reauth" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="next" value="{{ next_url }}">
+
+            <label class="block">
+                <span class="mono text-[10px] uppercase tracking-wider text-white/50">Admin password</span>
+                <input type="password" name="password" required autocomplete="current-password"
+                       class="field rounded-sm w-full mt-1 px-3 py-2 text-sm text-white"
+                       placeholder="••••••••••••">
+            </label>
+
+            <div class="flex items-center justify-between gap-3">
+                <a href="{{ next_url }}"
+                   class="mono text-[11px] uppercase tracking-wider text-white/50 hover:text-white/80 transition-colors">
+                    Cancel
+                </a>
+                <button type="submit"
+                        class="cta-primary px-5 py-2 rounded-sm text-[12px] font-semibold">
+                    Unlock for {{ ttl_seconds // 60 }}&nbsp;min
+                </button>
+            </div>
+        </form>
+    </section>
+
+    <p class="text-[11px] text-white/35">
+        Audit logs will record this unlock as
+        <span class="mono text-white/60">admin.unseal_reauth_granted</span>
+        with the org id, so downstream forensics can tell a vanilla admin
+        mutation from one made under a tenant-scoped re-auth.
+    </p>
+</div>
+{% endblock %}

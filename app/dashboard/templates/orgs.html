@@ -16,6 +16,8 @@
         .pill-susp { color:#fdba74; border-color: rgba(253,186,116,0.35); background: rgba(253,186,116,0.06); }
         .pill-rej { color:#fca5a5; border-color: rgba(252,165,165,0.35); background: rgba(252,165,165,0.06); }
         .pill-muted { color: rgba(255,255,255,0.45); border-color: rgba(255,255,255,0.1); background: transparent; }
+        .pill-sealed { color:#a78bfa; border-color: rgba(167,139,250,0.45); background: rgba(167,139,250,0.08); }
+        .pill-sealed-open { color:#86efac; border-color: rgba(134,239,172,0.45); background: rgba(134,239,172,0.08); }
         .row { border-top: 1px solid rgba(255,255,255,0.04); transition: background 120ms ease; }
         .row:hover { background: rgba(255,255,255,0.015); }
         .row:hover .row-actions { opacity: 1; }
@@ -189,6 +191,7 @@
                         <p class="text-[11px] text-white/45 mt-0.5">{{ org.display_name }}</p>
                     </td>
                     <td class="px-5 py-3">
+                        <div class="flex items-center gap-1.5 flex-wrap">
                         {% if org.status == 'active' %}
                         <span class="pill pill-ok"><span class="w-1 h-1 rounded-full bg-[#00e5c7]"></span>active</span>
                         {% elif org.status == 'pending' %}
@@ -198,6 +201,14 @@
                         {% else %}
                         <span class="pill pill-rej">{{ org.status }}</span>
                         {% endif %}
+                        {% if org.sealed %}
+                            {% if org.reauth_active %}
+                            <span class="pill pill-sealed-open" title="Tenant-sealed org — re-auth active for this session">sealed · open</span>
+                            {% else %}
+                            <span class="pill pill-sealed" title="Tenant-sealed org — dashboard mutations require per-org re-auth (audit F-B-2)">sealed</span>
+                            {% endif %}
+                        {% endif %}
+                        </div>
                     </td>
                     <td class="px-5 py-3 text-right mono text-[13px] text-white/80 tnum">{{ org.agent_count }}</td>
                     <td class="px-5 py-3">
@@ -225,17 +236,27 @@
                         {% endif %}
                     </td>
                     <td class="px-5 py-3">
+                        {% set sealed_locked = org.sealed and not org.reauth_active %}
                         <div class="row-actions flex items-center gap-1.5 justify-end">
+                            {% if sealed_locked %}
+                            <a href="/dashboard/orgs/{{ org.org_id }}/unseal-reauth?next=/dashboard/orgs"
+                               class="mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-sm border border-violet-400/40 text-violet-300 hover:bg-violet-400/10 transition-colors"
+                               title="This org is tenant-sealed. Re-authenticate with your admin password to mutate it (audit F-B-2).">
+                                Unlock · re-auth
+                            </a>
+                            {% endif %}
+                            {% set mut_disabled = 'opacity-30 cursor-not-allowed pointer-events-none' if sealed_locked else '' %}
+                            {% set mut_title = 'Sealed · re-auth required' if sealed_locked else '' %}
                             {% if org.status == 'pending' %}
                             <form method="post" action="/dashboard/orgs/{{ org.org_id }}/approve" class="inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button class="iconbtn ok" title="Approve">
+                                <button class="iconbtn ok {{ mut_disabled }}" title="{{ mut_title or 'Approve' }}" {% if sealed_locked %}disabled aria-disabled="true"{% endif %}>
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                                 </button>
                             </form>
                             <form method="post" action="/dashboard/orgs/{{ org.org_id }}/reject" class="inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button class="iconbtn err" title="Reject">
+                                <button class="iconbtn err {{ mut_disabled }}" title="{{ mut_title or 'Reject' }}" {% if sealed_locked %}disabled aria-disabled="true"{% endif %}>
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                                 </button>
                             </form>
@@ -243,21 +264,21 @@
                             <form method="post" action="/dashboard/orgs/{{ org.org_id }}/unlock-ca" class="inline"
                                   onsubmit="return confirm('Unlock CA certificate for {{ org.org_id }}?')">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button class="iconbtn warn" title="Unlock CA">
+                                <button class="iconbtn warn {{ mut_disabled }}" title="{{ mut_title or 'Unlock CA' }}" {% if sealed_locked %}disabled aria-disabled="true"{% endif %}>
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>
                                 </button>
                             </form>
                             <form method="post" action="/dashboard/orgs/{{ org.org_id }}/suspend" class="inline"
                                   onsubmit="return confirm('Suspend {{ org.org_id }}? All its agents lose authentication.')">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button class="iconbtn warn" title="Suspend">
+                                <button class="iconbtn warn {{ mut_disabled }}" title="{{ mut_title or 'Suspend' }}" {% if sealed_locked %}disabled aria-disabled="true"{% endif %}>
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                 </button>
                             </form>
                             {% elif org.status == 'suspended' %}
                             <form method="post" action="/dashboard/orgs/{{ org.org_id }}/approve" class="inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button class="iconbtn ok" title="Reactivate">
+                                <button class="iconbtn ok {{ mut_disabled }}" title="{{ mut_title or 'Reactivate' }}" {% if sealed_locked %}disabled aria-disabled="true"{% endif %}>
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><circle cx="12" cy="12" r="9" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 </button>
                             </form>
@@ -265,7 +286,7 @@
                             <form method="post" action="/dashboard/orgs/{{ org.org_id }}/delete" class="inline"
                                   onsubmit="return confirm('Delete {{ org.org_id }} and ALL its agents? This cannot be undone.')">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button type="submit" class="iconbtn err" title="Delete">
+                                <button type="submit" class="iconbtn err {{ mut_disabled }}" title="{{ mut_title or 'Delete' }}" {% if sealed_locked %}disabled aria-disabled="true"{% endif %}>
                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M8 7V4a1 1 0 011-1h6a1 1 0 011 1v3"/></svg>
                                 </button>
                             </form>

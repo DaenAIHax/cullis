@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dashboard.session import (
     get_session, set_session, clear_session, require_login, verify_csrf,
-    DashboardSession,
+    add_reauth_scope, DashboardSession, REAUTH_TTL_SECONDS,
 )
 
 from app.db.database import get_db
@@ -36,7 +36,7 @@ from app.db.audit import AuditLog, log_event
 from app.registry.store import AgentRecord, register_agent, rotate_agent_cert
 from app.registry.org_store import (
     OrganizationRecord, register_org, get_org_by_id,
-    update_org_ca_cert, set_org_status,
+    update_org_ca_cert, set_org_status, set_org_sealed,
 )
 from app.registry.binding_store import (
     BindingRecord, create_binding, approve_binding, revoke_binding, get_binding_by_org_agent,
@@ -471,6 +471,66 @@ def _ctx(request: Request, session: DashboardSession, **kwargs) -> dict:
             "jaeger_url": jaeger_url, **kwargs}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit F-B-2 — sealed-org mutation guard.
+#
+# Rationale: the broker dashboard authenticates a single ``admin`` session
+# cookie. Without further scoping, that cookie lets the network operator
+# mutate any tenant's identity plane (CA, bindings, agents, certs) with
+# no cross-check that they actually represent the tenant. The ``sealed``
+# flag on ``organizations`` marks orgs whose proxy claimed ownership via
+# the attach-ca flow; mutations on those orgs require a per-org re-auth
+# challenge stamped on the session cookie within the last
+# ``REAUTH_TTL_SECONDS`` seconds.
+#
+# Guard pattern to apply on every state-changing endpoint scoped to an org:
+#
+#     await _require_sealed_reauth(request, org)  # raises 403 if missing
+#
+# The helper is a no-op for unsealed orgs (legacy behavior preserved).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SEALED_DETAIL = (
+    "Organization is tenant-sealed. Complete the per-org re-auth challenge "
+    "before retrying this action."
+)
+
+
+def _is_sealed(org: OrganizationRecord | None) -> bool:
+    """Return True iff the org exists and its ``sealed`` flag is True."""
+    return bool(getattr(org, "sealed", False)) if org is not None else False
+
+
+async def _require_sealed_reauth(
+    request: Request, org: OrganizationRecord | None,
+) -> None:
+    """Raise 403 if the org is sealed and the admin session lacks a scope.
+
+    Safe to call with ``org=None`` (treated as unsealed — the caller's
+    existence check handles the not-found case on its own).
+    """
+    if not _is_sealed(org):
+        return
+    session = get_session(request)
+    if not session.is_admin:
+        raise HTTPException(status_code=403, detail=_SEALED_DETAIL)
+    if not session.has_reauth_scope(org.org_id):
+        raise HTTPException(status_code=403, detail=_SEALED_DETAIL)
+
+
+def _sealed_mutation_details(
+    org: OrganizationRecord | None, extra: dict | None = None,
+) -> dict:
+    """Standardize audit log details for sealed-org mutations."""
+    base: dict = {"source": "dashboard_admin"}
+    if _is_sealed(org):
+        base["source"] = "dashboard_admin_with_reauth"
+        base["sealed"] = True
+    if extra:
+        base.update(extra)
+    return base
+
+
 # Alphanumeric, hyphens, underscores, colons, dots — max 128 chars
 _ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:@\-]{0,127}$")
 _DISPLAY_NAME_MAX = 256
@@ -602,8 +662,15 @@ async def orgs_list(request: Request, db: AsyncSession = Depends(get_db)):
     for row in (await db.execute(count_q)).all():
         agent_counts[row[0]] = row[1]
 
+    # Audit F-B-2 — expose the sealed flag + the current session's per-org
+    # re-auth status so the template can paint badges and enable/disable
+    # mutation buttons. ``reauth_active`` is recomputed against the live
+    # session (not the org record) so an expiring token flips the UI to
+    # "needs re-auth" without a round-trip.
+    active_session = get_session(request)
     org_list = []
     for org in orgs:
+        sealed = bool(getattr(org, "sealed", False))
         org_list.append({
             "org_id": org.org_id,
             "display_name": org.display_name,
@@ -611,6 +678,10 @@ async def orgs_list(request: Request, db: AsyncSession = Depends(get_db)):
             "webhook_url": org.webhook_url,
             "ca_certificate": org.ca_certificate,
             "agent_count": agent_counts.get(org.org_id, 0),
+            "sealed": sealed,
+            "reauth_active": (
+                sealed and active_session.has_reauth_scope(org.org_id)
+            ),
         })
 
     # Load invite tokens for admin
@@ -1307,10 +1378,12 @@ async def org_approve(request: Request, org_id: str, db: AsyncSession = Depends(
     if not await verify_csrf(request, session):
         return RedirectResponse(url="/dashboard/orgs", status_code=303)
     org = await get_org_by_id(db, org_id)
+    # Audit F-B-2 — sealed orgs require a per-org re-auth scope.
+    await _require_sealed_reauth(request, org)
     if org and org.status == "pending":
         await set_org_status(db, org_id, "active")
         await log_event(db, "onboarding.approved", "ok", org_id=org_id,
-                        details={"source": "dashboard"})
+                        details=_sealed_mutation_details(org))
     return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
 
@@ -1324,10 +1397,12 @@ async def org_reject(request: Request, org_id: str, db: AsyncSession = Depends(g
     if not await verify_csrf(request, session):
         return RedirectResponse(url="/dashboard/orgs", status_code=303)
     org = await get_org_by_id(db, org_id)
+    # Audit F-B-2 — sealed orgs require a per-org re-auth scope.
+    await _require_sealed_reauth(request, org)
     if org and org.status in ("pending", "active"):
         await set_org_status(db, org_id, "rejected")
         await log_event(db, "onboarding.rejected", "denied", org_id=org_id,
-                        details={"source": "dashboard"})
+                        details=_sealed_mutation_details(org))
     return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
 
@@ -1345,10 +1420,12 @@ async def org_suspend(request: Request, org_id: str, db: AsyncSession = Depends(
     if not await verify_csrf(request, session):
         return RedirectResponse(url="/dashboard/orgs", status_code=303)
     org = await get_org_by_id(db, org_id)
+    # Audit F-B-2 — sealed orgs require a per-org re-auth scope.
+    await _require_sealed_reauth(request, org)
     if org and org.status == "active":
         await set_org_status(db, org_id, "suspended")
         await log_event(db, "onboarding.suspended", "ok", org_id=org_id,
-                        details={"source": "dashboard"})
+                        details=_sealed_mutation_details(org))
     return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
 
@@ -1363,7 +1440,11 @@ async def org_delete(request: Request, org_id: str, db: AsyncSession = Depends(g
         return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
     org = await get_org_by_id(db, org_id)
+    # Audit F-B-2 — sealed orgs require a per-org re-auth scope. Delete
+    # cascades into agents+bindings so the gate protects the whole op.
+    await _require_sealed_reauth(request, org)
     if org:
+        was_sealed = _is_sealed(org)
         # Delete all agents belonging to this org
         agents = await db.execute(
             select(AgentRecord).where(AgentRecord.org_id == org_id)
@@ -1377,8 +1458,13 @@ async def org_delete(request: Request, org_id: str, db: AsyncSession = Depends(g
         # Delete the org
         await db.delete(org)
         await db.commit()
-        await log_event(db, "registry.org_deleted", "ok", org_id=org_id,
-                        details={"source": "dashboard"})
+        await log_event(
+            db, "registry.org_deleted", "ok", org_id=org_id,
+            details={
+                "source": "dashboard_admin_with_reauth" if was_sealed else "dashboard_admin",
+                "sealed": was_sealed,
+            },
+        )
 
     return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
@@ -1394,14 +1480,147 @@ async def org_unlock_ca(request: Request, org_id: str, db: AsyncSession = Depend
         return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
     org = await get_org_by_id(db, org_id)
+    # Audit F-B-2 — sealed orgs require a per-org re-auth scope. Unlock-CA
+    # is the literal finding from the audit: without this gate, an admin
+    # can clear the CA lock flag on any tenant and follow up with
+    # upload-ca to swap in their own CA.
+    await _require_sealed_reauth(request, org)
     if org:
         meta = _json.loads(org.metadata_json or "{}")
         meta["ca_locked"] = False
         org.metadata_json = _json.dumps(meta)
         await db.commit()
         await log_event(db, "registry.ca_certificate_unlocked", "ok",
-                        org_id=org_id, details={"source": "dashboard"})
+                        org_id=org_id, details=_sealed_mutation_details(org))
 
+    return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit F-B-2 — unseal-reauth challenge + manual seal/unseal (admin only)
+#
+# Flow:
+#   - GET /orgs/{org_id}/unseal-reauth  → shows a password prompt form.
+#   - POST /orgs/{org_id}/unseal-reauth → verifies the admin password,
+#     stamps a REAUTH_TTL_SECONDS-scoped token into the session cookie,
+#     and redirects the admin back to /dashboard/orgs with a flash
+#     query arg ``reauth=<org_id>`` so the template can surface it.
+#   - POST /orgs/{org_id}/seal         → force-seal an unsealed org.
+#   - POST /orgs/{org_id}/unseal       → unseal a sealed org. Permanent
+#     unseal is itself a sealed-gate-protected mutation (can't be done
+#     with a plain admin session on an org that is currently sealed).
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/orgs/{org_id}/unseal-reauth", response_class=HTMLResponse)
+async def org_unseal_reauth_form(request: Request, org_id: str,
+                                 db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    org = await get_org_by_id(db, org_id)
+    if org is None:
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+    next_url = request.query_params.get("next", "/dashboard/orgs")
+    return templates.TemplateResponse(
+        "org_unseal_reauth.html",
+        _ctx(request, session, active="orgs", org=org, next_url=next_url,
+             error=None, ttl_seconds=REAUTH_TTL_SECONDS),
+    )
+
+
+@router.post("/orgs/{org_id}/unseal-reauth", response_class=HTMLResponse)
+async def org_unseal_reauth_submit(request: Request, org_id: str,
+                                   db: AsyncSession = Depends(get_db)):
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    if not await verify_csrf(request, session):
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+    org = await get_org_by_id(db, org_id)
+    if org is None:
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+    from app.kms.admin_secret import (
+        get_admin_secret_hash, verify_admin_password,
+    )
+    form_data = await request.form()
+    password = form_data.get("password", "")
+    next_url = form_data.get("next", "/dashboard/orgs")
+    # Only allow same-origin redirects — reject absolute URLs to prevent an
+    # admin being bounced off the dashboard after re-auth.
+    if not isinstance(next_url, str) or not next_url.startswith("/"):
+        next_url = "/dashboard/orgs"
+
+    stored_hash = await get_admin_secret_hash()
+    if not password or not verify_admin_password(password, stored_hash):
+        await log_event(db, "admin.unseal_reauth_failed", "denied",
+                        org_id=org_id, details={"source": "dashboard"})
+        return templates.TemplateResponse(
+            "org_unseal_reauth.html",
+            _ctx(request, session, active="orgs", org=org,
+                 next_url=next_url, error="Incorrect password.",
+                 ttl_seconds=REAUTH_TTL_SECONDS),
+            status_code=403,
+        )
+
+    response = RedirectResponse(url=next_url, status_code=303)
+    add_reauth_scope(response, session, org_id)
+    await log_event(db, "admin.unseal_reauth_granted", "ok",
+                    org_id=org_id,
+                    details={"source": "dashboard",
+                             "ttl_seconds": REAUTH_TTL_SECONDS})
+    return response
+
+
+@router.post("/orgs/{org_id}/seal", response_class=HTMLResponse)
+async def org_seal(request: Request, org_id: str, db: AsyncSession = Depends(get_db)):
+    """Manually flip the tenant-sealed flag ON for an org.
+
+    Always safe without re-auth: sealing *adds* protection, so an admin
+    who controls the cookie can only make the situation more restrictive.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    if not await verify_csrf(request, session):
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+    org = await get_org_by_id(db, org_id)
+    if org and not org.sealed:
+        await set_org_sealed(db, org_id, True)
+        await log_event(db, "registry.org_sealed", "ok", org_id=org_id,
+                        details={"source": "dashboard_admin", "sealed": True})
+    return RedirectResponse(url="/dashboard/orgs", status_code=303)
+
+
+@router.post("/orgs/{org_id}/unseal", response_class=HTMLResponse)
+async def org_unseal(request: Request, org_id: str, db: AsyncSession = Depends(get_db)):
+    """Permanently unseal an org.
+
+    Gated: because unsealing REMOVES protection (future mutations skip
+    the re-auth challenge), the admin has to prove per-org scope right
+    now. Effectively this means "provide the password one more time".
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not session.is_admin:
+        return RedirectResponse(url="/dashboard", status_code=303)
+    if not await verify_csrf(request, session):
+        return RedirectResponse(url="/dashboard/orgs", status_code=303)
+    org = await get_org_by_id(db, org_id)
+    await _require_sealed_reauth(request, org)
+    if org and org.sealed:
+        await set_org_sealed(db, org_id, False)
+        await log_event(db, "registry.org_unsealed", "ok", org_id=org_id,
+                        details={"source": "dashboard_admin_with_reauth",
+                                 "sealed": False})
     return RedirectResponse(url="/dashboard/orgs", status_code=303)
 
 
@@ -1442,6 +1661,10 @@ async def org_upload_ca_submit(request: Request, org_id: str, db: AsyncSession =
             _ctx(request, session, active="orgs", org=org,
                  error="Invalid CSRF token.", success=None))
 
+    # Audit F-B-2 — uploading a CA on a sealed org effectively rewrites
+    # the tenant's root of trust. Require the per-org re-auth gate.
+    await _require_sealed_reauth(request, org)
+
     form_data = await request.form()
     ca_pem = form_data.get("ca_certificate", "").strip()
 
@@ -1467,7 +1690,7 @@ async def org_upload_ca_submit(request: Request, org_id: str, db: AsyncSession =
 
     await log_event(db, "registry.ca_certificate_uploaded", "ok",
                     org_id=org_id,
-                    details={"source": "dashboard_admin"})
+                    details=_sealed_mutation_details(org))
 
     org = await get_org_by_id(db, org_id)
     return templates.TemplateResponse("org_upload_ca.html",
@@ -1558,6 +1781,22 @@ async def agent_register_submit(request: Request, db: AsyncSession = Depends(get
             _ctx(request, session, active="agents", form=form, orgs=orgs,
                  error=f"Agent '{agent_id}' already exists.", success=None))
 
+    # Audit F-B-2 — registering an agent on a sealed org implicitly
+    # auto-approves a binding and may pin a cert, both of which are
+    # tenant-identity-plane mutations. Require the re-auth gate.
+    target_org = await get_org_by_id(db, org_id)
+    if _is_sealed(target_org):
+        reauth_session = get_session(request)
+        if not reauth_session.has_reauth_scope(org_id):
+            return templates.TemplateResponse(
+                "agent_register.html",
+                _ctx(request, session, active="agents", form=form, orgs=orgs,
+                     error=(f"Org '{org_id}' is tenant-sealed. "
+                            f"Re-authenticate for this org before registering agents."),
+                     success=None),
+                status_code=403,
+            )
+
     caps = [c.strip() for c in capabilities_raw.split(",") if c.strip()] if capabilities_raw else []
     if len(caps) > _CAPABILITY_MAX_COUNT:
         return templates.TemplateResponse("agent_register.html",
@@ -1577,15 +1816,20 @@ async def agent_register_submit(request: Request, db: AsyncSession = Depends(get
     )
     await log_event(db, "registry.agent_registered", "ok",
                     agent_id=agent_id, org_id=org_id,
-                    details={"source": "dashboard", "capabilities": caps})
+                    details=_sealed_mutation_details(
+                        target_org, extra={"capabilities": caps}))
 
-    # Auto-create and auto-approve binding
+    # Auto-create and auto-approve binding. approved_by carries the
+    # sealed-vs-unsealed context for downstream forensics.
+    approved_by = (
+        "dashboard-admin-with-reauth" if _is_sealed(target_org) else "dashboard-admin"
+    )
     existing_binding = await get_binding_by_org_agent(db, org_id, agent_id)
     if existing_binding and existing_binding.status != "approved":
-        await approve_binding(db, existing_binding.id, approved_by="dashboard-admin")
+        await approve_binding(db, existing_binding.id, approved_by=approved_by)
     elif not existing_binding:
         binding = await create_binding(db, org_id, agent_id, scope=caps)
-        await approve_binding(db, binding.id, approved_by="dashboard-admin")
+        await approve_binding(db, binding.id, approved_by=approved_by)
 
     # If a certificate was provided, validate and pin it
     cert_msg = ""
@@ -1617,9 +1861,12 @@ async def agent_register_submit(request: Request, db: AsyncSession = Depends(get
                             cert_msg = " Certificate ignored: not signed by organization CA."
                     if ca_ok:
                         await rotate_agent_cert(db, agent_id, cert_pem)
-                        await log_event(db, "registry.agent_cert_uploaded", "ok",
-                                        agent_id=agent_id, org_id=org_id,
-                                        details={"source": "dashboard", "method": "register"})
+                        await log_event(
+                            db, "registry.agent_cert_uploaded", "ok",
+                            agent_id=agent_id, org_id=org_id,
+                            details=_sealed_mutation_details(
+                                target_org, extra={"method": "register"}),
+                        )
                         cert_msg = " Certificate pinned."
             except Exception:
                 cert_msg = " Certificate ignored: could not parse PEM."
@@ -1673,11 +1920,27 @@ async def agent_manage_submit(request: Request, agent_id: str, db: AsyncSession 
     binding = await get_binding_by_org_agent(db, agent.org_id, agent_id)
     ws_connected = ws_manager.is_connected(agent_id)
 
-    def _render(error=None, success=None):
-        return templates.TemplateResponse("agent_manage.html",
+    def _render(error=None, success=None, status_code=200):
+        return templates.TemplateResponse(
+            "agent_manage.html",
             _ctx(request, session, active="agents",
                  agent=agent, binding=binding, ws_connected=ws_connected,
-                 error=error, success=success))
+                 error=error, success=success),
+            status_code=status_code,
+        )
+
+    # Audit F-B-2 — mutating an agent record on a sealed org requires the
+    # per-org re-auth scope. Check once here so both update_profile and
+    # upload_cert branches are covered.
+    owner_org = await get_org_by_id(db, agent.org_id)
+    if _is_sealed(owner_org) and action in ("update_profile", "upload_cert"):
+        session_live = get_session(request)
+        if not session_live.has_reauth_scope(agent.org_id):
+            return _render(
+                error=(f"Org '{agent.org_id}' is tenant-sealed. "
+                       f"Re-authenticate for this org before mutating its agents."),
+                status_code=403,
+            )
 
     if action == "update_profile":
         display_name = form_data.get("display_name", "").strip()
@@ -1701,9 +1964,14 @@ async def agent_manage_submit(request: Request, agent_id: str, db: AsyncSession 
             binding.scope_json = _json.dumps(caps)
 
         await db.commit()
-        await log_event(db, "registry.agent_updated", "ok",
-                        agent_id=agent_id, org_id=agent.org_id,
-                        details={"source": "dashboard", "fields": ["display_name", "description", "capabilities"]})
+        await log_event(
+            db, "registry.agent_updated", "ok",
+            agent_id=agent_id, org_id=agent.org_id,
+            details=_sealed_mutation_details(
+                owner_org,
+                extra={"fields": ["display_name", "description", "capabilities"]},
+            ),
+        )
         return _render(success="Agent profile updated.")
 
     elif action == "upload_cert":
@@ -1738,7 +2006,7 @@ async def agent_manage_submit(request: Request, agent_id: str, db: AsyncSession 
         new_thumbprint = await rotate_agent_cert(db, agent_id, cert_pem)
         await log_event(db, "registry.agent_cert_uploaded", "ok",
                         agent_id=agent_id, org_id=agent.org_id,
-                        details={"source": "dashboard"})
+                        details=_sealed_mutation_details(owner_org))
         # Refresh agent
         agent = (await db.execute(
             select(AgentRecord).where(AgentRecord.agent_id == agent_id)
@@ -1765,6 +2033,11 @@ async def agent_delete(request: Request, agent_id: str, db: AsyncSession = Depen
     agent = await db.execute(select(AgentRecord).where(AgentRecord.agent_id == agent_id))
     record = agent.scalar_one_or_none()
     if record:
+        # Audit F-B-2 — deleting an agent on a sealed org revokes its
+        # binding and nukes its directory entry. Gate on re-auth.
+        owner_org = await get_org_by_id(db, record.org_id)
+        await _require_sealed_reauth(request, owner_org)
+
         # Revoke binding if exists
         binding = await get_binding_by_org_agent(db, record.org_id, agent_id)
         if binding and binding.status != "revoked":
@@ -1775,7 +2048,7 @@ async def agent_delete(request: Request, agent_id: str, db: AsyncSession = Depen
         await db.commit()
         await log_event(db, "registry.agent_deleted", "ok",
                         agent_id=agent_id, org_id=record.org_id,
-                        details={"source": "dashboard"})
+                        details=_sealed_mutation_details(owner_org))
 
     return RedirectResponse(url="/dashboard/agents", status_code=303)
 
@@ -1882,6 +2155,11 @@ async def agent_upload_cert(request: Request, agent_id: str,
     if not session.is_admin and agent.org_id != session.org_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Audit F-B-2 — pinning a cert on a sealed org's agent rewrites an
+    # identity. Gate on the per-org re-auth scope.
+    owner_org = await get_org_by_id(db, agent.org_id)
+    await _require_sealed_reauth(request, owner_org)
+
     form_data = await request.form()
     cert_pem = form_data.get("cert_pem", "").strip()
 
@@ -1909,13 +2187,13 @@ async def agent_upload_cert(request: Request, agent_id: str,
             f"Certificate CN '{cn_attrs[0].value if cn_attrs else '(none)'}' "
             f"does not match agent ID '{agent_id}'.")
 
-    # Verify cert is signed by the org's CA (if CA is uploaded)
-    org = await get_org_by_id(db, agent.org_id)
-    if org and org.ca_certificate:
+    # Verify cert is signed by the org's CA (if CA is uploaded). Use the
+    # org record we already fetched above for the sealed check.
+    if owner_org and owner_org.ca_certificate:
         try:
             from cryptography.x509 import load_pem_x509_certificate as _load_cert
             from cryptography.hazmat.primitives.asymmetric import padding
-            ca_cert = _load_cert(org.ca_certificate.encode())
+            ca_cert = _load_cert(owner_org.ca_certificate.encode())
             ca_cert.public_key().verify(
                 cert.signature,
                 cert.tbs_certificate_bytes,
@@ -1931,9 +2209,11 @@ async def agent_upload_cert(request: Request, agent_id: str,
     from app.registry.store import rotate_agent_cert
     new_thumbprint = await rotate_agent_cert(db, agent_id, cert_pem)
 
-    await log_event(db, "registry.agent_cert_uploaded", "ok",
-                    agent_id=agent_id, org_id=agent.org_id,
-                    details={"source": "dashboard", "method": "upload"})
+    await log_event(
+        db, "registry.agent_cert_uploaded", "ok",
+        agent_id=agent_id, org_id=agent.org_id,
+        details=_sealed_mutation_details(owner_org, extra={"method": "upload"}),
+    )
 
     # Re-read the agent to show updated thumbprint
     agent = (await db.execute(
@@ -1963,6 +2243,12 @@ async def agent_credentials_download(request: Request, agent_id: str,
         raise HTTPException(status_code=403, detail="Access denied")
 
     org_id = agent.org_id
+
+    # Audit F-B-2 — this endpoint mints fresh (key, cert) material for an
+    # agent and pins the cert thumbprint in the DB. If the owning org is
+    # sealed, the admin must clear the per-org re-auth gate first.
+    owner_org = await get_org_by_id(db, org_id)
+    await _require_sealed_reauth(request, owner_org)
 
     # Load org CA
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
@@ -2010,7 +2296,7 @@ async def agent_credentials_download(request: Request, agent_id: str,
 
     await log_event(db, "registry.agent_credentials_generated", "ok",
                     agent_id=agent_id, org_id=org_id,
-                    details={"source": "dashboard"})
+                    details=_sealed_mutation_details(owner_org))
 
     return StreamingResponse(
         buf,
@@ -2092,6 +2378,12 @@ async def agent_bundle_download(request: Request, agent_id: str, db: AsyncSessio
 
     org_id = agent.org_id
     caps = agent.capabilities
+
+    # Audit F-B-2 — this endpoint mints fresh (key, cert) material and
+    # pins the thumbprint in the DB. Same threat model as /credentials
+    # above — sealed orgs need the per-org re-auth gate.
+    owner_org = await get_org_by_id(db, org_id)
+    await _require_sealed_reauth(request, owner_org)
 
     # Load org CA to sign agent cert
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
@@ -2235,6 +2527,11 @@ async def cert_rotate_submit(request: Request, agent_id: str, db: AsyncSession =
     if not session.is_admin and agent.org_id != session.org_id:
         return RedirectResponse(url="/dashboard/agents", status_code=303)
 
+    # Audit F-B-2 — rotating a cert on a sealed org's agent rewrites its
+    # identity. Gate on the per-org re-auth scope.
+    owner_org = await get_org_by_id(db, agent.org_id)
+    await _require_sealed_reauth(request, owner_org)
+
     form_data = await request.form()
     cert_pem = form_data.get("certificate", "").strip()
 
@@ -2264,11 +2561,11 @@ async def cert_rotate_submit(request: Request, agent_id: str, db: AsyncSession =
                  error=f"Certificate CN does not match agent '{agent_id}'.",
                  success=None))
 
-    # Verify signed by org CA (if CA is configured)
-    org = await get_org_by_id(db, agent.org_id)
-    if org and org.ca_certificate:
+    # Verify signed by org CA (if CA is configured). Reuse owner_org from
+    # the sealed-check step above so we don't hit the DB twice.
+    if owner_org and owner_org.ca_certificate:
         try:
-            org_ca = crypto_x509.load_pem_x509_certificate(org.ca_certificate.encode())
+            org_ca = crypto_x509.load_pem_x509_certificate(owner_org.ca_certificate.encode())
             org_ca.public_key().verify(
                 cert.signature, cert.tbs_certificate_bytes,
                 padding.PKCS1v15(), cert.signature_hash_algorithm,
@@ -2287,8 +2584,11 @@ async def cert_rotate_submit(request: Request, agent_id: str, db: AsyncSession =
 
     await log_event(db, "agent.cert_rotated", "ok",
                     agent_id=agent_id, org_id=agent.org_id,
-                    details={"old_thumbprint": old_thumbprint, "new_thumbprint": new_thumbprint,
-                             "source": "dashboard"})
+                    details=_sealed_mutation_details(
+                        owner_org,
+                        extra={"old_thumbprint": old_thumbprint,
+                               "new_thumbprint": new_thumbprint},
+                    ))
 
     return templates.TemplateResponse("cert_rotate.html",
         _ctx(request, session, active="agents", agent=agent, error=None,
