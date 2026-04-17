@@ -70,9 +70,21 @@ class OrganizationRecord(Base):
 _DUMMY_HASH: str = bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=12)).decode()
 
 
-def verify_org_credentials(org: "OrganizationRecord | None", secret: str) -> bool:
-    """Verify org secret in constant time regardless of whether the org exists."""
-    if org is None or org.status != "active":
+def verify_org_credentials(
+    org: "OrganizationRecord | None",
+    secret: str,
+    active_only: bool = True,
+) -> bool:
+    """Verify org secret in constant time regardless of whether the org exists.
+
+    ``active_only=True`` (default) rejects any non-active org — the policy
+    for every authenticated API surface. ``active_only=False`` is for the
+    status-polling endpoint (``GET /registry/orgs/me``) where ``pending``
+    orgs legitimately need to authenticate to learn when they flip to
+    ``active``. In both modes, a missing org still hits the dummy hash so
+    the 403 path is constant-time (audit F-B-6).
+    """
+    if org is None or (active_only and org.status != "active"):
         # Always run bcrypt to prevent timing leaks
         bcrypt.checkpw(secret.encode(), _DUMMY_HASH.encode())
         return False

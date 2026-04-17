@@ -6,7 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.database import get_db
-from app.registry.org_store import register_org, get_org_by_id, list_orgs, update_org_ca_cert
+from app.registry.org_store import (
+    get_org_by_id,
+    list_orgs,
+    register_org,
+    update_org_ca_cert,
+    verify_org_credentials,
+)
 
 router = APIRouter(prefix="/registry", tags=["registry"])
 
@@ -85,12 +91,20 @@ async def get_own_organization(
 ):
     """Organization self-status check. Uses org credentials, not admin secret.
     Returns org info including status (pending/active/rejected).
-    Used by MCP Proxy to poll for approval status."""
+    Used by MCP Proxy to poll for approval status.
+
+    Audit F-B-6: auth failures collapse to a single 403 whether the org
+    is missing or the secret is wrong, and bcrypt runs on both paths so
+    the two cases are indistinguishable by timing. Non-active orgs are
+    still allowed to authenticate here (and only here) so they can poll
+    their own lifecycle — ``active_only=False``.
+    """
     org = await get_org_by_id(db, x_org_id)
-    if not org:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    if not org.verify_secret(x_org_secret):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid organization credentials")
+    if not verify_org_credentials(org, x_org_secret, active_only=False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid organization credentials",
+        )
     return OrgResponse(
         org_id=org.org_id,
         display_name=org.display_name,
