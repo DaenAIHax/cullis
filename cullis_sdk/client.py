@@ -43,6 +43,47 @@ from cullis_sdk._logging import log, RED
 _PUBKEY_CACHE_TTL = 300  # seconds
 
 
+class InsecureTLSWarning(UserWarning):
+    """Raised when the SDK is configured to skip TLS verification.
+
+    Emitted once per call site; attackers on the network can forge the
+    broker's identity. Meant for dev against a local self-signed broker.
+    """
+
+
+def _check_insecure_tls(verify_tls: bool) -> None:
+    """Warn (and optionally refuse) when TLS verification is disabled.
+
+    Refuses outright when ``CULLIS_ENV=production`` and the caller has
+    NOT also opted in via ``CULLIS_SDK_ALLOW_INSECURE_TLS=1`` — two-key
+    rule so a production deploy can't silently ship with ``verify_tls
+    =False`` left in from a dev config.
+    """
+    if verify_tls:
+        return
+    import os
+    import warnings
+    if (
+        os.environ.get("CULLIS_ENV", "").lower() == "production"
+        and os.environ.get("CULLIS_SDK_ALLOW_INSECURE_TLS") != "1"
+    ):
+        raise ValueError(
+            "verify_tls=False is disabled in production. Provide a "
+            "trust store that covers the broker certificate (system CA "
+            "store or a custom httpx transport) rather than disabling "
+            "verification. Set CULLIS_SDK_ALLOW_INSECURE_TLS=1 only if "
+            "you fully own the network path and accept MITM exposure."
+        )
+    warnings.warn(
+        "CullisClient is constructed with verify_tls=False. TLS "
+        "certificate verification is disabled — any host on the "
+        "network can MITM the broker connection. Use only for local "
+        "dev against a self-signed broker.",
+        InsecureTLSWarning,
+        stacklevel=3,
+    )
+
+
 class CullisClient:
     """Client for the Cullis federated agent trust broker."""
 
@@ -53,6 +94,7 @@ class CullisClient:
         verify_tls: bool = True,
         timeout: float = 10.0,
     ) -> None:
+        _check_insecure_tls(verify_tls)
         self.base = broker_url.rstrip("/")
         self._verify_tls = verify_tls
         self._http = httpx.Client(timeout=timeout, verify=verify_tls)
@@ -173,6 +215,7 @@ class CullisClient:
             client = CullisClient.from_enrollment("https://proxy.example.com/v1/enroll/enroll_buyer_abc123")
             agents = client.discover(capabilities=["order.read"])
         """
+        _check_insecure_tls(verify_tls)
         http = httpx.Client(timeout=timeout, verify=verify_tls)
         try:
             resp = http.get(enroll_url)
@@ -1366,6 +1409,7 @@ class CullisClient:
         if webhook_url:
             body["webhook_url"] = webhook_url
 
+        _check_insecure_tls(verify_tls)
         with httpx.Client(verify=verify_tls) as client:
             resp = client.post(url, json=body)
             resp.raise_for_status()
@@ -1435,6 +1479,12 @@ class WebSocketConnection:
         ws_kwargs: dict = {"open_timeout": 5}
         if ws_url.startswith("wss://") and not self._client._verify_tls:
             ssl_ctx = _ssl.create_default_context()
+            # Python's ssl module raises ValueError if check_hostname=True
+            # is combined with verify_mode=CERT_NONE. The order below
+            # (clear check_hostname FIRST, then lower verify_mode) is
+            # required, not redundant. _check_insecure_tls in the client
+            # constructor already warned/refused; here we just mirror
+            # the HTTP-path opt-out to the WS path.
             ssl_ctx.check_hostname = False
             ssl_ctx.verify_mode = _ssl.CERT_NONE
             ws_kwargs["ssl"] = ssl_ctx

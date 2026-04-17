@@ -85,3 +85,42 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip-audit
+
+      - name: Ban insecure TLS opt-outs in production code
+        # Matches audit F-E-01/F-E-02 class: blanket `verify=False` or
+        # `rejectUnauthorized: false` buried in runtime code is how the
+        # EUDI wallet shipped a MITM-wide-open URLSession. Keep the
+        # guard so new code can't regress.
+        #
+        # Allow-list: tests/, enterprise_sandbox/ (dev-only), demo/,
+        # demo_network/ use self-signed fixtures deliberately. Any
+        # production surface (app/, mcp_proxy/, cullis_sdk/,
+        # cullis_connector/, agents/, sdk-ts/src/) must use the wired
+        # verify_tls flag.
+        run: |
+          set -e
+          # Regex intent: assignment only. Must NOT match the substrings
+          # inside docstrings/comments/error messages that legitimately
+          # *reference* the anti-pattern while explaining the fix.
+          py_hits=$(grep -rn --include='*.py' \
+            -E 'verify\s*=\s*False[\s,)]' \
+            app/ mcp_proxy/ cullis_sdk/ cullis_connector/ agents/ \
+            | grep -vE '^[^:]+:[0-9]+:\s*#' \
+            || true)
+          ts_hits=$(grep -rn --include='*.ts' --include='*.tsx' \
+            -E 'rejectUnauthorized\s*:\s*false|process\.env\.NODE_TLS_REJECT_UNAUTHORIZED\s*=' \
+            sdk-ts/src/ cullis_connector/ \
+            | grep -vE '^[^:]+:[0-9]+:\s*//' \
+            || true)
+          if [ -n "$py_hits" ] || [ -n "$ts_hits" ]; then
+            echo "::error::Insecure TLS opt-out detected in production code."
+            echo "$py_hits"
+            echo "$ts_hits"
+            echo ""
+            echo "Fix: wire the call through the existing verify flag"
+            echo "(e.g. ProxySettings.broker_verify_tls, CullisClient"
+            echo "verify_tls), or move the code into tests/ if it is a"
+            echo "test fixture. See imp/audit_2026_04_17/phase1_E_secrets.md"
+            echo "F-E-01/F-E-02 for the audit reference."
+            exit 1
+          fi

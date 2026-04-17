@@ -73,13 +73,16 @@ async function httpRequest(
   // Node 18+ supports AbortSignal.timeout
   fetchOptions.signal = AbortSignal.timeout(timeoutMs);
 
-  // Note: Node.js native fetch does not support disabling TLS verification
-  // directly. For self-signed certs, set NODE_TLS_REJECT_UNAUTHORIZED=0
-  // in the environment, or use a custom agent via undici.
-  if (!verifyTls && typeof process !== "undefined") {
-    // This is a hint for the user; the actual env var must be set externally
-    // or use the NODE_TLS_REJECT_UNAUTHORIZED workaround.
-  }
+  // NB: this SDK does NOT implement a scoped TLS-verify opt-out. The
+  // historical workaround (NODE_TLS_REJECT_UNAUTHORIZED=0) disables TLS
+  // verification for the ENTIRE Node process, which is unsafe. If you
+  // need to talk to a broker with a private/self-signed CA, add the CA
+  // to Node's trust store via NODE_EXTRA_CA_CERTS=/path/to/ca.pem —
+  // this is scoped to the process but keeps verification ON for every
+  // other connection. The `verifyTls` option is retained so callers can
+  // see the default and for future scoped-dispatcher support; setting
+  // it to `false` currently raises at BrokerClient construction time.
+  void verifyTls;
 
   const response = await fetch(fullUrl, fetchOptions);
   const text = await response.text();
@@ -119,6 +122,22 @@ export class BrokerClient {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.verifyTls = options.verifyTls ?? true;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+
+    // This SDK does not implement a scoped TLS-verify opt-out (see
+    // note in httpRequest). Refuse rather than silently trust the
+    // network: the previous behavior accepted `verifyTls=false` and
+    // did nothing, which hid the problem from callers.
+    if (!this.verifyTls) {
+      throw new Error(
+        "verifyTls=false is not supported. Node's native fetch cannot " +
+        "disable TLS verification per-call, and the process-wide escape " +
+        "hatch NODE_TLS_REJECT_UNAUTHORIZED=0 is unsafe. For a broker " +
+        "with a private or self-signed CA, add the CA PEM to Node's " +
+        "trust store via NODE_EXTRA_CA_CERTS=/path/to/ca.pem — this is " +
+        "scoped to this process and keeps verification enabled for every " +
+        "other connection.",
+      );
+    }
   }
 
   // ── Authentication ───────────────────────────────────────────
