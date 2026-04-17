@@ -496,6 +496,10 @@ app.include_router(admin_info_router)
 from mcp_proxy.admin.mcp_resources import router as admin_mcp_resources_router
 app.include_router(admin_mcp_resources_router)
 
+# ADR-010 Phase 2 — Mastio-authoritative agent registry admin API.
+from mcp_proxy.admin.agents import router as admin_agents_router
+app.include_router(admin_agents_router)
+
 # ADR-006 Fase 1 / PR #3 — proxy-native discovery + public-key endpoints.
 # Must precede the reverse-proxy catch-all: /v1/registry/agents/{id}/public-key
 # would otherwise fall into the `/v1/registry/*` forward prefix and never
@@ -561,7 +565,6 @@ app.include_router(link_broker_admin_router)
 from mcp_proxy.dashboard.policies_local import router as local_policies_router
 app.include_router(local_policies_router)
 
-# ADR-007 Phase 1 PR #5a — dashboard CRUD for MCP resources + bindings.
 from mcp_proxy.dashboard.mcp_resources import router as mcp_resources_dashboard_router
 app.include_router(mcp_resources_dashboard_router)
 

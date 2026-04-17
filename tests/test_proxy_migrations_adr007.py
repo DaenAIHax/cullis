@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from mcp_proxy.db import dispose_db, init_db
 from mcp_proxy.db_models import LocalAgentResourceBinding, LocalMCPResource
 
-HEAD_REVISION = "0009_audit_chain_unique_seq"
+HEAD_REVISION = "0010_internal_agents_federated"
 PREVIOUS_REVISION = "0006_enrollment_api_key_hash"
 
 
