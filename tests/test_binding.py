@@ -35,7 +35,9 @@ async def _upload_ca(client: AsyncClient, org_id: str, org_secret: str):
 async def _register_agent(client: AsyncClient, agent_id: str, org_id: str,
                            capabilities: list[str] | None = None,
                            org_secret: str | None = None):
-    secret = org_secret or (org_id + "-secret")
+    # org_secret kept in the signature for call-site compat; the direct-DB
+    # seeder doesn't need it (ADR-010 Phase 6a-3).
+    del org_secret
     await seed_court_agent(
         agent_id=agent_id,
         org_id=org_id,
