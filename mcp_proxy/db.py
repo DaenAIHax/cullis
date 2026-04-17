@@ -383,7 +383,7 @@ async def set_config(key: str, value: str) -> None:
 
 def _agent_row_to_dict(row: RowMapping) -> dict:
     """Convert a RowMapping to a plain dict with parsed capabilities."""
-    return {
+    out = {
         "agent_id": row["agent_id"],
         "display_name": row["display_name"],
         "capabilities": json.loads(row["capabilities"]),
@@ -392,3 +392,13 @@ def _agent_row_to_dict(row: RowMapping) -> dict:
         "created_at": row["created_at"],
         "is_active": bool(row["is_active"]),
     }
+    # ADR-010 Phase 2/5 — federation flags are optional at read time
+    # because legacy rows predating migration 0010 won't have them
+    # (tests sometimes insert raw rows too).
+    for key in ("federated", "federated_at", "federation_revision",
+                "last_pushed_revision"):
+        if key in row.keys():
+            out[key] = (
+                bool(row[key]) if key == "federated" else row[key]
+            )
+    return out

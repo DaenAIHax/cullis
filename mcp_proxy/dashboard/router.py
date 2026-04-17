@@ -1244,6 +1244,49 @@ CULLIS_BROKER_URL={broker_url}
     )
 
 
+@router.post("/agents/{agent_id:path}/federate")
+async def agent_toggle_federate(request: Request, agent_id: str):
+    """ADR-010 Phase 5 — flip ``internal_agents.federated`` from the
+    dashboard. Bumps ``federation_revision`` so the publisher
+    (Phase 3) picks up the change on its next tick and either pushes
+    (0→1) or revokes (1→0) on the Court."""
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    from mcp_proxy.db import get_agent, get_db, log_audit
+    from sqlalchemy import text as _text
+
+    agent = await get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    new_flag = not bool(agent.get("federated"))
+    async with get_db() as conn:
+        await conn.execute(
+            _text(
+                """
+                UPDATE internal_agents
+                   SET federated = :fed,
+                       federation_revision = federation_revision + 1
+                 WHERE agent_id = :aid
+                """
+            ),
+            {"fed": 1 if new_flag else 0, "aid": agent_id},
+        )
+
+    await log_audit(
+        agent_id=agent_id,
+        action="agent.federated_patched",
+        status="success",
+        detail=f"source=dashboard federated={new_flag}",
+    )
+
+    return RedirectResponse(url="/proxy/agents", status_code=303)
+
+
 @router.post("/agents/{agent_id:path}/deactivate")
 async def agent_deactivate(request: Request, agent_id: str):
     session = require_login(request)

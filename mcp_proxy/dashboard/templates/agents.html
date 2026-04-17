@@ -136,6 +136,7 @@
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Capabilities</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Status</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Certificate</th>
+                    <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider" title="ADR-010: whether this agent is published to the Court (visible cross-org)">Federated</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Created</th>
                     <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Actions</th>
                 </tr>
@@ -182,6 +183,27 @@
                         </span>
                         {% endif %}
                     </td>
+                    <td class="px-5 py-4">
+                        {% if agent.federated is defined and agent.federated %}
+                        <form method="post" action="/proxy/agents/{{ agent.agent_id }}/federate" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit"
+                                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-accent-400/10 text-accent-400 uppercase tracking-wider border border-accent-400/20 hover:bg-accent-400/20 transition-colors"
+                                    title="Click to unpublish from the Court. Revision r{{ agent.federation_revision|default('?') }}.">
+                                <span class="w-1.5 h-1.5 rounded-full bg-accent-400"></span>Federated
+                            </button>
+                        </form>
+                        {% else %}
+                        <form method="post" action="/proxy/agents/{{ agent.agent_id }}/federate" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit"
+                                    class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-700/30 text-gray-500 uppercase tracking-wider border border-gray-700/50 hover:bg-gray-700/60 hover:text-gray-300 transition-colors"
+                                    title="Click to publish this agent to the Court (becomes visible cross-org).">
+                                <span class="w-1.5 h-1.5 rounded-full bg-gray-600"></span>Local only
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
                     <td class="px-5 py-4 text-xs text-gray-500 font-mono whitespace-nowrap">{{ agent.created_at[:19] }}</td>
                     <td class="px-5 py-4">
                         <a href="/proxy/agents/{{ agent.agent_id }}"
@@ -193,7 +215,7 @@
                 {% endfor %}
                 {% if not agents %}
                 <tr>
-                    <td colspan="7" class="px-5 py-16 text-center">
+                    <td colspan="8" class="px-5 py-16 text-center">
                         <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                         <p class="text-sm text-gray-600">No agents registered</p>
                         <p class="text-xs text-gray-700 mt-1">Create an agent to get started with the MCP Proxy.</p>
