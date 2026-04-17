@@ -108,25 +108,49 @@ async def test_factory_returns_redis_when_available(monkeypatch):
         jti_mod.reset_dpop_jti_store()
 
 
-async def test_factory_allows_in_memory_in_production_single_instance(monkeypatch, caplog):
+async def test_factory_allows_in_memory_in_production_single_instance(monkeypatch):
     """Audit F-B-12 — unlike the broker, Mastio supports a legitimate
     single-instance production mode. The factory must NOT raise when
     prod + no Redis; it logs a warning and returns in-memory so
-    single-worker deploys keep working."""
+    single-worker deploys keep working.
+
+    The ``mcp_proxy`` logger is configured with ``propagate=False``
+    (see ``mcp_proxy/logging_setup.py``), which makes pytest's ``caplog``
+    miss records on CI runners where logging is already set up. Capture
+    via a dedicated handler on the target logger instead.
+    """
+    import logging
+
     from mcp_proxy.config import get_settings
 
     monkeypatch.setattr(redis_pool, "get_redis", lambda: None)
     monkeypatch.setenv("MCP_PROXY_ENVIRONMENT", "production")
     get_settings.cache_clear()
 
+    captured: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    handler = _Collector(level=logging.WARNING)
+    logger = logging.getLogger("mcp_proxy")
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+
     jti_mod.reset_dpop_jti_store()
     try:
-        with caplog.at_level("WARNING", logger="mcp_proxy"):
-            store = jti_mod._init_store()
+        store = jti_mod._init_store()
         assert isinstance(store, jti_mod.InMemoryDpopJtiStore)
         # Warning must be emitted so operators see the single-instance constraint.
-        assert any("single-instance" in rec.message for rec in caplog.records)
+        messages = [r.getMessage() for r in captured]
+        assert any("single-instance" in msg for msg in messages), (
+            f"expected single-instance warning, got: {messages}"
+        )
     finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
         get_settings.cache_clear()
         jti_mod.reset_dpop_jti_store()
 

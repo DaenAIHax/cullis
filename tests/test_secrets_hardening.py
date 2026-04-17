@@ -206,29 +206,69 @@ def test_dpop_jti_init_uses_in_memory_in_development(monkeypatch):
 # refusing when REDIS_URL is empty in production — operators deploying
 # multi-worker/HA must set it to avoid the cross-worker DPoP replay +
 # rate-limit budget multiplication.
+#
+# The proxy configures the "mcp_proxy" logger with ``propagate=False``
+# at startup (``mcp_proxy/logging_setup.py``), so pytest's caplog —
+# which attaches to root by default — does not see the records. Capture
+# via a dedicated handler on the target logger instead.
 
-def test_proxy_validate_config_warns_on_prod_without_redis(caplog):
+import logging as _logging
+
+
+class _ListHandler(_logging.Handler):
+    def __init__(self):
+        super().__init__(level=_logging.WARNING)
+        self.records: list[_logging.LogRecord] = []
+
+    def emit(self, record: _logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _capture_mcp_proxy_warnings():
+    handler = _ListHandler()
+    logger = _logging.getLogger("mcp_proxy")
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(_logging.WARNING)
+    return handler, logger, previous_level
+
+
+def _restore_mcp_proxy_logger(handler, logger, previous_level):
+    logger.removeHandler(handler)
+    logger.setLevel(previous_level)
+
+
+def test_proxy_validate_config_warns_on_prod_without_redis():
     settings = _prod_proxy_settings(redis_url="")
-    with caplog.at_level("WARNING", logger="mcp_proxy"):
+    handler, logger, prev = _capture_mcp_proxy_warnings()
+    try:
         # Must NOT raise — single-instance Mastio prod is supported.
         proxy_validate_config(settings)
-    messages = " ".join(rec.message for rec in caplog.records)
+    finally:
+        _restore_mcp_proxy_logger(handler, logger, prev)
+    messages = " ".join(r.getMessage() for r in handler.records)
     assert "MCP_PROXY_REDIS_URL" in messages
     assert "single-instance" in messages or "multi-worker" in messages
     assert "F-B-12" in messages
 
 
-def test_proxy_validate_config_prod_with_redis_no_warning(caplog):
+def test_proxy_validate_config_prod_with_redis_no_warning():
     settings = _prod_proxy_settings(redis_url="redis://redis:6379/0")
-    with caplog.at_level("WARNING", logger="mcp_proxy"):
+    handler, logger, prev = _capture_mcp_proxy_warnings()
+    try:
         proxy_validate_config(settings)
-    messages = " ".join(rec.message for rec in caplog.records)
+    finally:
+        _restore_mcp_proxy_logger(handler, logger, prev)
+    messages = " ".join(r.getMessage() for r in handler.records)
     assert "F-B-12" not in messages
 
 
-def test_proxy_validate_config_dev_without_redis_no_warning(caplog):
+def test_proxy_validate_config_dev_without_redis_no_warning():
     settings = ProxySettings(environment="development", redis_url="")
-    with caplog.at_level("WARNING", logger="mcp_proxy"):
+    handler, logger, prev = _capture_mcp_proxy_warnings()
+    try:
         proxy_validate_config(settings)
-    messages = " ".join(rec.message for rec in caplog.records)
+    finally:
+        _restore_mcp_proxy_logger(handler, logger, prev)
+    messages = " ".join(r.getMessage() for r in handler.records)
     assert "F-B-12" not in messages
