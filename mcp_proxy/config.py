@@ -91,6 +91,21 @@ class ProxySettings(BaseSettings):
     # Accepts redis:// or rediss:// URLs.
     redis_url: str = ""
 
+    # Egress DPoP mode — audit F-B-11 Phase 1 (#181).
+    # Controls whether ``/v1/egress/*`` handlers accept a DPoP proof
+    # (RFC 9449) in addition to the legacy ``X-API-Key`` bearer:
+    #   off      → legacy bearer only (default, runtime unchanged)
+    #   optional → DPoP accepted when headers are present; legacy still
+    #              allowed. Grace-period stance for rolling out Phase 2
+    #              enrollment + Phase 3/4 SDK updates without breaking
+    #              in-flight clients.
+    #   required → DPoP proof mandatory on every egress call; legacy
+    #              bare bearer rejected. Flipped in Phase 6 after every
+    #              enrolled agent has registered a JWK thumbprint.
+    # The DPoP-bound dep lives in ``mcp_proxy.auth.dpop_api_key``; the
+    # per-agent jkt-vs-registered check lands with Phase 2 enrollment.
+    egress_dpop_mode: str = "off"
+
     # ADR-001 Phase 2 — SPIFFE routing decision.
     # trust_domain is the SPIFFE trust domain this proxy serves (matched against
     # recipient SPIFFE IDs to decide intra vs cross-org). intra_org_routing is
