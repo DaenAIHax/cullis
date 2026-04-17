@@ -113,10 +113,22 @@ async def approve_binding(
 
 
 async def revoke_binding(db: AsyncSession, binding_id: int) -> BindingRecord | None:
+    """Revoke a binding and invalidate the agent's active access tokens.
+
+    Audit F-D-1 (revocation-lag): callers that revoke a binding without
+    also invalidating the agent's tokens leave up to a 60-minute window
+    in which the (now unbound) agent can still hit every authenticated
+    REST endpoint. Making token invalidation part of ``revoke_binding``
+    closes the gap for every caller — API, dashboard and future
+    federation event handlers — without requiring each caller to
+    remember the second step. The work stays in the same transaction so
+    either both mutations commit or neither does.
+    """
     from app.broker.federation import (
         EVENT_BINDING_REVOKED,
         publish_federation_event,
     )
+    from app.registry.store import invalidate_agent_tokens
 
     binding = await get_binding(db, binding_id)
     if not binding:
@@ -131,6 +143,11 @@ async def revoke_binding(db: AsyncSession, binding_id: int) -> BindingRecord | N
             "agent_id": binding.agent_id,
         },
     )
+    # Stamp token_invalidated_at on the agent row. Tokens issued before
+    # this call fail the revocation check in app/auth/jwt.py; tokens
+    # issued AFTER re-approve (fresh iat) are unaffected because
+    # iat > invalidated_at.
+    await invalidate_agent_tokens(db, binding.agent_id)
     await db.commit()
     await db.refresh(binding)
     return binding
