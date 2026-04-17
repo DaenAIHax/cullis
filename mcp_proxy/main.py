@@ -154,6 +154,7 @@ async def lifespan(app: FastAPI):
             broker_url, org_id, settings.trust_domain, settings.intra_org_routing,
         )
     else:
+        app.state.broker_bridge = None
         _log.warning("No broker_url configured — egress endpoints will return 503")
 
     # ADR-001 Phase 3a — local session store (intra-org mini-broker).

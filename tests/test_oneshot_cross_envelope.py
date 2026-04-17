@@ -573,11 +573,11 @@ async def test_proxy_resolve_populates_target_cert_pem_cross_org(tmp_path, monke
     fake_bridge = MagicMock()
     fake_bridge.get_peer_public_key = AsyncMock(return_value="-----FAKE CERT-----")
     fake_bridge.shutdown = AsyncMock()
-    app.state.broker_bridge = fake_bridge
 
     transport = _ASGIT(app=app)
     async with _AC(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
+            app.state.broker_bridge = fake_bridge
             raw = generate_api_key("alice")
             await create_agent(
                 agent_id="alice",
@@ -623,11 +623,11 @@ async def test_proxy_resolve_fails_closed_on_bridge_error(tmp_path, monkeypatch)
         side_effect=RuntimeError("broker down"),
     )
     fake_bridge.shutdown = AsyncMock()
-    app.state.broker_bridge = fake_bridge
 
     transport = _ASGIT(app=app)
     async with _AC(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
+            app.state.broker_bridge = fake_bridge
             raw = generate_api_key("alice")
             await create_agent(
                 agent_id="alice",
