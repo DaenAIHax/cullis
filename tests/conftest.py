@@ -183,6 +183,24 @@ def reset_admin_secret_cache():
 
 
 @pytest.fixture(autouse=True)
+def bypass_mastio_countersig(request):
+    """ADR-009 Phase 4 — /v1/auth/token now rejects every org with a
+    NULL mastio_pubkey by default. Patching ``enforce_on_token_request``
+    to a no-op lets the hundreds of pre-existing auth/broker tests keep
+    using the minimal register_org helpers that never pin a mastio key.
+
+    Tests that actively exercise the counter-signature (Phase 1-4 suites,
+    marked with ``mastio_strict``) opt out and hit the real code path.
+    """
+    if request.node.get_closest_marker("mastio_strict"):
+        yield
+        return
+    from app.auth import mastio_countersig as _mc
+    with patch.object(_mc, "enforce_on_token_request", new=AsyncMock(return_value=None)):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def mock_pdp_webhook():
     """
     Mock the PDP webhook caller for all tests.

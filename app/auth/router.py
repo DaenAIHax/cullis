@@ -6,13 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import TokenRequest, TokenResponse, TokenPayload
 from app.auth.jwt import create_access_token, get_current_agent
-from app.auth.mastio_countersig import COUNTERSIG_HEADER, verify_mastio_countersig
+from app.auth import mastio_countersig
+from app.auth.mastio_countersig import COUNTERSIG_HEADER
 from app.auth.x509_verifier import verify_client_assertion
 from app.auth.dpop import verify_dpop_proof, build_htu
 from app.config import get_settings
 from app.db.database import get_db
 from app.db.audit import log_event
-from app.registry.org_store import get_org_by_id
 from app.registry.store import (
     get_agent_by_id, update_agent_cert, refresh_agent_cert_svid,
     invalidate_agent_tokens,
@@ -61,44 +61,27 @@ async def issue_token(
         span.set_attribute("agent.id", agent_id)
         span.set_attribute("org.id", org_id)
 
-        # ── ADR-009 Phase 1/3 — mastio counter-signature ─────────────────────
-        # Phase 1 soft: org with pinned mastio_pubkey must carry a valid
-        # X-Cullis-Mastio-Signature; NULL pubkey was legacy-allowed.
-        # Phase 3 strict: when requires_proxy=true the org refuses the login
-        # even if mastio_pubkey is somehow NULL — prevents the legacy path
-        # from being a bypass after the org has declared "proxy-only".
-        org_record = await get_org_by_id(db, org_id)
-        if org_record is not None:
-            if org_record.requires_proxy and not org_record.mastio_pubkey:
-                AUTH_DENY_COUNTER.add(1, {"reason": "requires_proxy_no_pubkey"})
-                await log_event(
-                    db, "auth.token_request", "denied",
-                    agent_id=agent_id, org_id=org_id,
-                    details={"reason": "requires_proxy_true_but_no_mastio_pubkey"},
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=(
-                        "organization requires proxy-mediated login but no "
-                        "mastio_pubkey is pinned — admin must pin the key "
-                        "before enabling requires_proxy"
-                    ),
-                )
-            if org_record.mastio_pubkey:
-                try:
-                    verify_mastio_countersig(
-                        client_assertion=body.client_assertion,
-                        signature_b64=mastio_signature,
-                        mastio_pubkey_pem=org_record.mastio_pubkey,
-                    )
-                except HTTPException:
-                    AUTH_DENY_COUNTER.add(1, {"reason": "mastio_countersig"})
-                    await log_event(
-                        db, "auth.token_request", "denied",
-                        agent_id=agent_id, org_id=org_id,
-                        details={"reason": "mastio_countersig_missing_or_invalid"},
-                    )
-                    raise
+        # ── ADR-009 — mastio counter-signature (strict, always on) ───────────
+        # After Phase 4 there is no legacy path: an org without a pinned
+        # mastio_pubkey cannot emit a token. ``mastio_countersig`` is
+        # imported at module level so tests/conftest.py can patch
+        # ``mastio_countersig.enforce_on_token_request`` to a no-op for
+        # the bulk of the suite.
+        try:
+            await mastio_countersig.enforce_on_token_request(
+                db=db,
+                org_id=org_id,
+                client_assertion=body.client_assertion,
+                signature_header=mastio_signature,
+            )
+        except HTTPException:
+            AUTH_DENY_COUNTER.add(1, {"reason": "mastio_countersig"})
+            await log_event(
+                db, "auth.token_request", "denied",
+                agent_id=agent_id, org_id=org_id,
+                details={"reason": "mastio_countersig_missing_or_invalid"},
+            )
+            raise
 
         # ── Agent checks ─────────────────────────────────────────────────────
         agent = await get_agent_by_id(db, agent_id)

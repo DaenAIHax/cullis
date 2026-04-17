@@ -68,6 +68,37 @@ def _filter_response_headers(resp: httpx.Response) -> dict[str, str]:
     return out
 
 
+def _maybe_countersign_token_body(
+    path: str, method: str, body: bytes, headers: dict[str, str], app_state,
+) -> None:
+    """ADR-009 Phase 4 — when the reverse-proxy forwards ``POST /v1/auth/token``
+    for an in-process SDK client (sender container with cert + key locally),
+    inject the mastio counter-signature on its behalf. Without this, the
+    Court would refuse the login since Phase 4 removed the NULL-pubkey
+    legacy path. This keeps the SDK transparent — agents that ``login()``
+    directly through the proxy don't need to know about counter-sig.
+
+    Mutates ``headers`` in place. No-op when the proxy has no mastio
+    identity loaded or the body isn't a valid token-request JSON.
+    """
+    if method != "POST" or path != "/v1/auth/token":
+        return
+    if "x-cullis-mastio-signature" in headers:
+        return  # caller already set it — don't overwrite (login_via_proxy path)
+    mgr = getattr(app_state, "agent_manager", None)
+    if mgr is None or not getattr(mgr, "mastio_loaded", False):
+        return
+    try:
+        import json as _json
+        payload = _json.loads(body)
+        assertion = payload.get("client_assertion")
+        if not isinstance(assertion, str):
+            return
+        headers["x-cullis-mastio-signature"] = mgr.countersign(assertion.encode())
+    except Exception as exc:  # defensive — never block the forward
+        _log.warning("reverse-proxy: mastio countersign skipped: %s", exc)
+
+
 async def _forward(request: Request, broker_url: str, client: httpx.AsyncClient) -> Response:
     target = broker_url.rstrip("/") + request.url.path
     if request.url.query:
@@ -75,6 +106,10 @@ async def _forward(request: Request, broker_url: str, client: httpx.AsyncClient)
 
     body = await request.body()
     headers = _filter_request_headers(request.headers.raw)
+
+    _maybe_countersign_token_body(
+        request.url.path, request.method, body, headers, request.app.state,
+    )
 
     # The broker's DPoP htu validator needs to reconstruct the URL the SDK
     # used — but its Host reaches it via X-Forwarded-Host (uvicorn

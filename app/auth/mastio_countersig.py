@@ -23,6 +23,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 COUNTERSIG_HEADER = "X-Cullis-Mastio-Signature"
@@ -93,3 +94,37 @@ def verify_mastio_countersig(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="mastio counter-signature verification failed",
         )
+
+
+async def enforce_on_token_request(
+    db: AsyncSession,
+    org_id: str,
+    client_assertion: str,
+    signature_header: str | None,
+) -> None:
+    """ADR-009 — the single gate on /v1/auth/token.
+
+    Raises 403 if the org has no pinned mastio_pubkey (onboarding
+    incomplete) or if the counter-signature is missing/invalid. Verified
+    via :func:`verify_mastio_countersig` against the pinned PEM.
+
+    Hook point exposed as a module-level function so ``tests/conftest.py``
+    can monkey-patch it to a no-op for the bulk of the suite, while the
+    ADR-009 test files re-enable the real implementation in their scope.
+    """
+    from app.registry.org_store import get_org_by_id
+    org_record = await get_org_by_id(db, org_id)
+    if org_record is None or not org_record.mastio_pubkey:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "organization has no pinned mastio_pubkey — onboarding "
+                "incomplete. Admin must PATCH "
+                "/v1/admin/orgs/{id}/mastio-pubkey first."
+            ),
+        )
+    verify_mastio_countersig(
+        client_assertion=client_assertion,
+        signature_b64=signature_header,
+        mastio_pubkey_pem=org_record.mastio_pubkey,
+    )

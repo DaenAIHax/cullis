@@ -22,7 +22,7 @@ from httpx import AsyncClient
 from tests.cert_factory import make_assertion, get_org_ca_pem
 from tests.conftest import ADMIN_HEADERS
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.mastio_strict]
 
 
 # ── helpers ────────────────────────────────────────────────────────────
@@ -178,10 +178,15 @@ async def test_token_denied_malformed_countersig(client: AsyncClient, dpop):
     assert "base64url" in resp.text or "verification" in resp.text
 
 
-async def test_token_legacy_org_ignores_countersig(client: AsyncClient, dpop):
-    """Org with mastio_pubkey NULL accepts login without any header."""
+async def test_token_denied_when_pubkey_not_pinned(client: AsyncClient, dpop):
+    """ADR-009 Phase 4 — org with mastio_pubkey NULL cannot emit a token.
+
+    The legacy "soft" path was removed; onboarding is expected to PATCH
+    the pubkey in after the proxy boots. Until then /v1/auth/token is
+    closed, even for requests that present a valid DPoP proof + cert.
+    """
     await _prime_nonce(client, dpop)
-    org_id = "cs-legacy"
+    org_id = "cs-nopubkey"
     await _register_agent_with_mastio(
         client, f"{org_id}::charlie", org_id, mastio_pubkey_pem=None,
     )
@@ -194,7 +199,8 @@ async def test_token_legacy_org_ignores_countersig(client: AsyncClient, dpop):
         json={"client_assertion": assertion},
         headers={"DPoP": dpop_proof},
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 403
+    assert "mastio_pubkey" in resp.text or "onboarding incomplete" in resp.text
 
 
 # ── SDK callback unit test ─────────────────────────────────────────────

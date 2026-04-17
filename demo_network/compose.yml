@@ -293,6 +293,12 @@ services:
       - proxy-a-data:/data
       - test-certs:/certs:ro
     expose: ["9100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   proxy-b:
     build:
@@ -317,6 +323,36 @@ services:
       - proxy-b-data:/data
       - test-certs:/certs:ro
     expose: ["9100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ── ADR-009 Phase 2/4 — pin mastio_pubkey on the Court post-proxy-boot ─────
+
+  bootstrap-mastio:
+    build:
+      context: ./bootstrap
+    entrypoint: ["python", "/app/pin_mastio.py"]
+    depends_on:
+      broker:
+        condition: service_healthy
+      proxy-a:
+        condition: service_healthy
+      proxy-b:
+        condition: service_healthy
+    environment:
+      BROKER_URL:            "http://broker:8000"
+      ADMIN_SECRET:          "demo-admin-secret-change-me"
+      PROXY_A_URL:           "http://proxy-a:9100"
+      PROXY_A_ORG:           "demo-org-a"
+      PROXY_A_ADMIN_SECRET:  "demo-proxy-admin-a"
+      PROXY_B_URL:           "http://proxy-b:9100"
+      PROXY_B_ORG:           "demo-org-b"
+      PROXY_B_ADMIN_SECRET:  "demo-proxy-admin-b"
+    restart: "no"
 
   checker:
     build:
@@ -324,6 +360,8 @@ services:
       dockerfile: demo_network/checker/Dockerfile
     depends_on:
       bootstrap:
+        condition: service_completed_successfully
+      bootstrap-mastio:
         condition: service_completed_successfully
     environment:
       # ADR-004 — checker reaches the broker via proxy-b (reverse-proxy).

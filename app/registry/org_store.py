@@ -18,7 +18,6 @@ by any code path. The helpers that used to read/write it were removed.
 import json
 import bcrypt
 from datetime import datetime, timezone
-import sqlalchemy as sa
 from sqlalchemy import Column, String, DateTime, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,18 +44,11 @@ class OrganizationRecord(Base):
     # SPIFFE trust domain of the org, for SVID-only auth (no CN/O in cert).
     # Nullable so legacy orgs keep working via CN/O-based agent certs.
     trust_domain = Column(String(256), nullable=True, unique=True, index=True)
-    # ADR-009 Phase 1 — mastio/proxy ES256 public key (PEM). When set, the
-    # Court enforces an ``X-Cullis-Mastio-Signature`` counter-signature on
-    # auth requests for this org. NULL keeps legacy (agent-direct) behavior.
+    # ADR-009 — mastio/proxy ES256 public key (PEM), pinned at onboarding.
+    # Phase 4 made its presence the sole contract: NULL means "onboarding
+    # incomplete — Court refuses /v1/auth/token for this org". Orgs always
+    # enforce ``X-Cullis-Mastio-Signature`` once this is set.
     mastio_pubkey = Column(Text, nullable=True)
-    # ADR-009 Phase 3 — strict enforcement flag. When TRUE, /v1/auth/token
-    # rejects ANY request missing a valid counter-sig — even if
-    # mastio_pubkey is somehow null (misconfiguration). Closes the last
-    # legacy path. FALSE preserves Phase 1 soft enforcement (enforce only
-    # if pubkey is pinned). Default FALSE keeps pre-ADR-009 orgs working.
-    requires_proxy = Column(
-        sa.Boolean, nullable=False, default=False, server_default=sa.false(),
-    )
 
     def verify_secret(self, plain: str) -> bool:
         return bcrypt.checkpw(plain.encode(), self.secret_hash.encode())
@@ -90,7 +82,6 @@ async def register_org(
     status: str = "active",
     trust_domain: str | None = None,
     mastio_pubkey: str | None = None,
-    requires_proxy: bool = False,
 ) -> OrganizationRecord:
     record = OrganizationRecord(
         org_id=org_id,
@@ -101,7 +92,6 @@ async def register_org(
         status=status,
         trust_domain=trust_domain,
         mastio_pubkey=mastio_pubkey,
-        requires_proxy=requires_proxy,
     )
     db.add(record)
     await db.commit()
@@ -178,21 +168,6 @@ async def update_org_mastio_pubkey(
     if record is None:
         return None
     record.mastio_pubkey = mastio_pubkey
-    await db.commit()
-    await db.refresh(record)
-    return record
-
-
-async def update_org_requires_proxy(
-    db: AsyncSession,
-    org_id: str,
-    requires_proxy: bool,
-) -> OrganizationRecord | None:
-    """Flip the ADR-009 Phase 3 strict-enforcement flag on an org."""
-    record = await get_org_by_id(db, org_id)
-    if record is None:
-        return None
-    record.requires_proxy = requires_proxy
     await db.commit()
     await db.refresh(record)
     return record

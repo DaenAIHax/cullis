@@ -27,7 +27,6 @@ from app.registry.org_store import (
     register_org,
     update_org_ca_cert,
     update_org_mastio_pubkey,
-    update_org_requires_proxy,
     update_org_secret,
     update_org_trust_domain,
     update_org_webhook,
@@ -502,48 +501,6 @@ class MastioPubkeyPatch(BaseModel):
     mastio_pubkey: str | None = Field(None, max_length=1024)
 
 
-class RequiresProxyPatch(BaseModel):
-    requires_proxy: bool
-
-
-@admin_router.patch("/orgs/{org_id}/requires-proxy",
-                    dependencies=[Depends(_require_admin)])
-async def patch_org_requires_proxy(
-    org_id: str,
-    body: RequiresProxyPatch,
-    db: AsyncSession = Depends(get_db),
-):
-    """ADR-009 Phase 3 — flip the strict-enforcement flag on an org.
-
-    When ``requires_proxy=true`` and ``mastio_pubkey`` is NULL the org
-    rejects the request as misconfigured (see /v1/auth/token). Admin
-    must pin a mastio_pubkey first, then flip this flag, to close the
-    legacy (NULL-pubkey) bypass.
-    """
-    org = await get_org_by_id(db, org_id)
-    if org is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
-
-    # Safety: refuse to enable when no pubkey is pinned, so the admin can't
-    # lock themselves out of /auth/token for this org.
-    if body.requires_proxy and not org.mastio_pubkey:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=(
-                "cannot enable requires_proxy while mastio_pubkey is unpinned — "
-                "PATCH /v1/admin/orgs/{id}/mastio-pubkey first"
-            ),
-        )
-
-    await update_org_requires_proxy(db, org_id, body.requires_proxy)
-    await log_event(
-        db, "admin.requires_proxy_patched", "ok",
-        org_id=org_id,
-        details={"requires_proxy": body.requires_proxy},
-    )
-    return {"org_id": org_id, "requires_proxy": body.requires_proxy}
-
-
 @admin_router.patch("/orgs/{org_id}/mastio-pubkey",
                     dependencies=[Depends(_require_admin)])
 async def patch_org_mastio_pubkey(
@@ -561,17 +518,6 @@ async def patch_org_mastio_pubkey(
     org = await get_org_by_id(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
-
-    # Safety — don't strip the pubkey while the strict flag is on, it
-    # would lock every agent of this org out of /auth/token.
-    if body.mastio_pubkey is None and org.requires_proxy:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=(
-                "cannot clear mastio_pubkey while requires_proxy is true — "
-                "disable requires_proxy first"
-            ),
-        )
 
     _validate_mastio_pubkey(body.mastio_pubkey)
     await update_org_mastio_pubkey(db, org_id, body.mastio_pubkey)
