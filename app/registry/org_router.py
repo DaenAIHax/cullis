@@ -140,15 +140,23 @@ async def upload_org_ca_certificate(
     x_org_id: str = Header(...),
     x_org_secret: str = Header(...),
 ):
-    """Upload the organization's CA certificate. Requires x-org-id and x-org-secret."""
+    """Upload the organization's CA certificate. Requires x-org-id and x-org-secret.
+
+    Audit F-B-7: auth failures collapse to a single 403 whether the org
+    is missing, inactive, or the secret is wrong, and bcrypt runs on
+    every path via ``verify_org_credentials``. Previously the endpoint
+    returned 404 on miss and 401 on wrong secret, differentiating the
+    two cases by status code and by latency (no bcrypt on miss).
+    """
     if x_org_id != org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="org_id mismatch")
 
     org = await get_org_by_id(db, org_id)
-    if not org:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    if not org.verify_secret(x_org_secret):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid org credentials")
+    if not verify_org_credentials(org, x_org_secret, active_only=True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid organization credentials",
+        )
 
     # Validate the CA certificate before accepting it
     from cryptography import x509 as crypto_x509
