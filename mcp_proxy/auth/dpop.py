@@ -212,50 +212,12 @@ def _normalize_htu(url: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# In-memory JTI store (replay protection)
+# JTI store (replay protection) — delegated to dpop_jti_store module
 # ─────────────────────────────────────────────────────────────────────────────
-
-_DEFAULT_JTI_TTL = 300  # seconds
-_MAX_JTI_ENTRIES = 100_000
-
-
-class InMemoryDpopJtiStore:
-    """Async-safe in-memory JTI store with TTL and lazy eviction."""
-
-    def __init__(self) -> None:
-        self._store: dict[str, float] = {}  # jti -> expires_at (monotonic)
-        self._lock = asyncio.Lock()
-
-    async def consume_jti(self, jti: str, ttl_seconds: int = _DEFAULT_JTI_TTL) -> bool:
-        """Atomically check+register a JTI.
-
-        Returns True if newly consumed (first use).
-        Returns False if already seen (replay).
-        """
-        now = time.monotonic()
-        expires_at = now + ttl_seconds
-
-        async with self._lock:
-            # Lazy eviction when store grows large
-            if len(self._store) >= _MAX_JTI_ENTRIES:
-                expired = [k for k, v in self._store.items() if v < now]
-                for k in expired:
-                    del self._store[k]
-
-            # Also clean expired entries on normal path
-            if jti in self._store:
-                if self._store[jti] < now:
-                    # Expired entry — allow reuse
-                    del self._store[jti]
-                else:
-                    return False  # replay
-
-            self._store[jti] = expires_at
-            return True
-
-
-# Global singleton
-_jti_store = InMemoryDpopJtiStore()
+#
+# Previously this module defined its own InMemoryDpopJtiStore singleton. The
+# dual-backend factory lives in ``mcp_proxy.auth.dpop_jti_store`` so that
+# multi-worker deploys can share a Redis-backed store (audit F-B-12 / #182).
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,7 +377,8 @@ async def verify_dpop_proof(
             )
 
     # -- 13. Consume JTI atomically (only after all checks pass)
-    is_new = await _jti_store.consume_jti(jti)
+    from mcp_proxy.auth.dpop_jti_store import get_dpop_jti_store
+    is_new = await get_dpop_jti_store().consume_jti(jti)
     if not is_new:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "DPoP proof replay detected"

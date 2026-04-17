@@ -2,16 +2,17 @@
 Internal API key authentication for egress (internal agents -> proxy -> broker).
 
 API key format: sk_local_{agent_name}_{32 random hex chars}
-Hashed with bcrypt for storage. Rate-limited per agent_id.
+Hashed with bcrypt for storage. Rate-limited per agent_id via the dual-backend
+limiter in ``mcp_proxy.auth.rate_limit`` (in-memory by default, Redis when
+``MCP_PROXY_REDIS_URL`` is configured — audit F-B-12).
 """
 import logging
 import os
-import time
-from collections import defaultdict
 
 import bcrypt
 from fastapi import HTTPException, Request, status
 
+from mcp_proxy.auth.rate_limit import get_agent_rate_limiter
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import get_agent_by_key_hash
 from mcp_proxy.models import InternalAgent
@@ -43,36 +44,6 @@ def verify_api_key(key: str, stored_hash: str) -> bool:
         return bcrypt.checkpw(key.encode(), stored_hash.encode())
     except Exception:
         return False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Rate limiting — sliding window per agent_id
-# ─────────────────────────────────────────────────────────────────────────────
-
-# agent_id -> list of request timestamps (monotonic)
-_rate_limit_windows: dict[str, list[float]] = defaultdict(list)
-
-
-def _check_rate_limit(agent_id: str) -> bool:
-    """Check if the agent is within the rate limit.
-
-    Returns True if allowed, False if rate-limited.
-    Uses a sliding window of 60 seconds.
-    """
-    settings = get_settings()
-    now = time.monotonic()
-    window_start = now - 60.0  # 1-minute sliding window
-
-    timestamps = _rate_limit_windows[agent_id]
-
-    # Remove expired entries
-    _rate_limit_windows[agent_id] = [t for t in timestamps if t > window_start]
-
-    if len(_rate_limit_windows[agent_id]) >= settings.rate_limit_per_minute:
-        return False
-
-    _rate_limit_windows[agent_id].append(now)
-    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,8 +85,9 @@ async def get_agent_from_api_key(request: Request) -> InternalAgent:
 
     agent_id = agent_data["agent_id"]
 
-    # Rate limit check
-    if not _check_rate_limit(agent_id):
+    # Rate limit check (in-memory or Redis depending on availability).
+    settings = get_settings()
+    if not await get_agent_rate_limiter().check(agent_id, settings.rate_limit_per_minute):
         _log.warning("Rate limit exceeded for agent: %s", agent_id)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

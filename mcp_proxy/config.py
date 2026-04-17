@@ -85,6 +85,12 @@ class ProxySettings(BaseSettings):
     # Rate limiting
     rate_limit_per_minute: int = 60
 
+    # Redis — optional. Empty = in-memory JTI store + rate limiter (single-
+    # instance Mastio is fine without Redis). Multi-worker / HA deploys MUST
+    # set this so the DPoP JTI store is shared across workers (audit F-B-12).
+    # Accepts redis:// or rediss:// URLs.
+    redis_url: str = ""
+
     # ADR-001 Phase 2 — SPIFFE routing decision.
     # trust_domain is the SPIFFE trust domain this proxy serves (matched against
     # recipient SPIFFE IDs to decide intra vs cross-org). intra_org_routing is
@@ -246,6 +252,21 @@ def validate_config(settings: ProxySettings) -> None:
 
     if settings.allowed_origins.strip() == "*":
         _log.warning("ALLOWED_ORIGINS is '*' — CORS fully open.")
+
+    # Audit F-B-12 — Mastio keeps a DPoP JTI cache and per-agent rate
+    # limiter in process memory by default. Single-instance deployments
+    # (the current Mastio mainstream) work fine without Redis. Operators
+    # running Mastio multi-worker or multi-replica (HA) MUST set
+    # MCP_PROXY_REDIS_URL so the JTI store is shared — otherwise a
+    # captured DPoP proof can be replayed once per worker within the iat
+    # window, and the advertised per-agent rate budget multiplies by N.
+    if is_production and not settings.redis_url:
+        _log.warning(
+            "MCP_PROXY_REDIS_URL is empty in production. Safe for "
+            "single-instance Mastio; set MCP_PROXY_REDIS_URL before "
+            "scaling to multiple workers or replicas (audit F-B-12: "
+            "cross-worker DPoP replay + rate-limit budget multiplies)."
+        )
 
     if not settings.broker_jwks_url and not settings.jwks_override_path:
         _log.warning(

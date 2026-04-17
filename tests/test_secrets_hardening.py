@@ -197,3 +197,59 @@ def test_dpop_jti_init_uses_in_memory_in_development(monkeypatch):
     finally:
         get_settings.cache_clear()
         jti_mod.reset_dpop_jti_store()
+
+
+# ── F-B-12: Mastio Redis warning (not a hard refusal) ──────────────
+#
+# Unlike the broker, Mastio has a legitimate single-instance production
+# mode (single-tenant intra-org). validate_config warns rather than
+# refusing when REDIS_URL is empty in production — operators deploying
+# multi-worker/HA must set it to avoid the cross-worker DPoP replay +
+# rate-limit budget multiplication.
+#
+# pytest's caplog and even a manually-attached handler on the
+# ``mcp_proxy`` logger miss the records on some CI runners (the
+# structured JSON logger in ``mcp_proxy/logging_setup.py`` sets
+# ``propagate=False``; downstream hierarchy + handler timing is
+# environment-sensitive). Intercept ``_log.warning`` directly on the
+# module under test — this is the tightest possible coupling and has no
+# dependency on logging framework behaviour.
+
+
+def _patch_startup_warning(monkeypatch):
+    """Capture warnings emitted by ``mcp_proxy.config._log.warning``."""
+    import mcp_proxy.config as _config_mod
+    calls: list[str] = []
+
+    def _record(msg, *args, **kwargs):
+        calls.append(str(msg) % args if args else str(msg))
+
+    monkeypatch.setattr(_config_mod._log, "warning", _record)
+    return calls
+
+
+def test_proxy_validate_config_warns_on_prod_without_redis(monkeypatch):
+    settings = _prod_proxy_settings(redis_url="")
+    warnings = _patch_startup_warning(monkeypatch)
+    # Must NOT raise — single-instance Mastio prod is supported.
+    proxy_validate_config(settings)
+    messages = " ".join(warnings)
+    assert "MCP_PROXY_REDIS_URL" in messages
+    assert "single-instance" in messages or "multi-worker" in messages
+    assert "F-B-12" in messages
+
+
+def test_proxy_validate_config_prod_with_redis_no_warning(monkeypatch):
+    settings = _prod_proxy_settings(redis_url="redis://redis:6379/0")
+    warnings = _patch_startup_warning(monkeypatch)
+    proxy_validate_config(settings)
+    messages = " ".join(warnings)
+    assert "F-B-12" not in messages
+
+
+def test_proxy_validate_config_dev_without_redis_no_warning(monkeypatch):
+    settings = ProxySettings(environment="development", redis_url="")
+    warnings = _patch_startup_warning(monkeypatch)
+    proxy_validate_config(settings)
+    messages = " ".join(warnings)
+    assert "F-B-12" not in messages

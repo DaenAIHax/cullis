@@ -58,6 +58,15 @@ async def lifespan(app: FastAPI):
     # 2. Initialize database
     await init_db(settings.database_url)
 
+    # 2b. Initialize the shared Redis client (audit F-B-12).
+    # Empty REDIS_URL is a supported single-instance configuration —
+    # ``init_redis`` is a no-op, and callers (JTI store, rate limiter)
+    # fall back to in-memory. Operators running multi-worker/HA MUST
+    # configure ``MCP_PROXY_REDIS_URL``; ``validate_config`` warns when
+    # that condition is missed in production.
+    from mcp_proxy.redis.pool import init_redis
+    await init_redis(settings.redis_url)
+
     # 3. Initialize JWKS client (for external JWT validation)
     from mcp_proxy.auth.jwks_client import JWKSClient
     _jwks_client = JWKSClient(
@@ -335,6 +344,8 @@ async def lifespan(app: FastAPI):
         await rp_client.aclose()
     if _jwks_client:
         await _jwks_client.close()
+    from mcp_proxy.redis.pool import close_redis
+    await close_redis()
     await dispose_db()
     _log.info("MCP Proxy shutdown complete")
 
