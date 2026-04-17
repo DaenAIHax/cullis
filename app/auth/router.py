@@ -61,26 +61,44 @@ async def issue_token(
         span.set_attribute("agent.id", agent_id)
         span.set_attribute("org.id", org_id)
 
-        # ── ADR-009 Phase 1 — mastio counter-signature ───────────────────────
-        # If the org has pinned a mastio public key at onboarding, every
-        # login for that org must carry an ES256 signature over the raw
-        # client_assertion. NULL column = legacy mode (skipped).
+        # ── ADR-009 Phase 1/3 — mastio counter-signature ─────────────────────
+        # Phase 1 soft: org with pinned mastio_pubkey must carry a valid
+        # X-Cullis-Mastio-Signature; NULL pubkey was legacy-allowed.
+        # Phase 3 strict: when requires_proxy=true the org refuses the login
+        # even if mastio_pubkey is somehow NULL — prevents the legacy path
+        # from being a bypass after the org has declared "proxy-only".
         org_record = await get_org_by_id(db, org_id)
-        if org_record is not None and org_record.mastio_pubkey:
-            try:
-                verify_mastio_countersig(
-                    client_assertion=body.client_assertion,
-                    signature_b64=mastio_signature,
-                    mastio_pubkey_pem=org_record.mastio_pubkey,
-                )
-            except HTTPException:
-                AUTH_DENY_COUNTER.add(1, {"reason": "mastio_countersig"})
+        if org_record is not None:
+            if org_record.requires_proxy and not org_record.mastio_pubkey:
+                AUTH_DENY_COUNTER.add(1, {"reason": "requires_proxy_no_pubkey"})
                 await log_event(
                     db, "auth.token_request", "denied",
                     agent_id=agent_id, org_id=org_id,
-                    details={"reason": "mastio_countersig_missing_or_invalid"},
+                    details={"reason": "requires_proxy_true_but_no_mastio_pubkey"},
                 )
-                raise
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "organization requires proxy-mediated login but no "
+                        "mastio_pubkey is pinned — admin must pin the key "
+                        "before enabling requires_proxy"
+                    ),
+                )
+            if org_record.mastio_pubkey:
+                try:
+                    verify_mastio_countersig(
+                        client_assertion=body.client_assertion,
+                        signature_b64=mastio_signature,
+                        mastio_pubkey_pem=org_record.mastio_pubkey,
+                    )
+                except HTTPException:
+                    AUTH_DENY_COUNTER.add(1, {"reason": "mastio_countersig"})
+                    await log_event(
+                        db, "auth.token_request", "denied",
+                        agent_id=agent_id, org_id=org_id,
+                        details={"reason": "mastio_countersig_missing_or_invalid"},
+                    )
+                    raise
 
         # ── Agent checks ─────────────────────────────────────────────────────
         agent = await get_agent_by_id(db, agent_id)
