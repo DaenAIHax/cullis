@@ -182,18 +182,20 @@ async def admin_setup_page(request: Request):
 @router.post("/setup", response_class=HTMLResponse)
 async def admin_setup_submit(request: Request, db: AsyncSession = Depends(get_db)):
     from app.kms.admin_secret import (
+        consume_bootstrap_token_and_set_password,
         is_admin_password_user_set,
-        set_admin_secret_hash,
-        mark_admin_password_user_set,
     )
     # State guard: the setup form is one-shot.  Once a password has been
     # chosen, further POSTs bounce to /login — prevents replay/overwrite.
+    # Audit F-D-3: this is a soft UX hint; the atomic consume below is
+    # the actual race-safe gate.
     if await is_admin_password_user_set():
         return RedirectResponse(url="/dashboard/login", status_code=303)
 
     form = await request.form()
     password = str(form.get("password", ""))
     confirm = str(form.get("password_confirm", ""))
+    bootstrap_token = str(form.get("bootstrap_token", "")).strip()
 
     def _err(msg: str, status: int = 400):
         return templates.TemplateResponse("admin_setup.html", {
@@ -203,6 +205,17 @@ async def admin_setup_submit(request: Request, db: AsyncSession = Depends(get_db
 
     if not password or not confirm:
         return _err("Both fields are required.")
+    if not bootstrap_token:
+        # Audit F-B-4: /dashboard/setup is reachable pre-auth on a fresh
+        # deploy. Require the one-shot bootstrap token printed on broker
+        # startup so only the legitimate operator (with access to the
+        # broker logs or the ``certs/.admin_bootstrap_token`` file) can
+        # succeed.
+        return _err(
+            "Bootstrap token is required. Check the broker startup logs "
+            "or ``certs/.admin_bootstrap_token`` on the broker host, "
+            "then paste the value below."
+        )
     if len(password) < MIN_ADMIN_PASSWORD_LENGTH:
         return _err(
             f"Password must be at least {MIN_ADMIN_PASSWORD_LENGTH} characters."
@@ -212,15 +225,27 @@ async def admin_setup_submit(request: Request, db: AsyncSession = Depends(get_db
 
     import bcrypt
     new_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+    # Audit F-B-4 + F-D-3: atomic consume-or-fail. Only one concurrent
+    # POST wins — loser and wrong-token alike see 403 with the same
+    # error body (no timing/shape oracle on which case happened).
     try:
-        await set_admin_secret_hash(new_hash)
-        await mark_admin_password_user_set()
+        consumed = await consume_bootstrap_token_and_set_password(
+            bootstrap_token, new_hash,
+        )
     except Exception as exc:
         _log.error("Failed to persist admin password during setup: %s", exc)
         return _err(
             "Failed to save the new password. Check the broker logs "
             "for details (KMS backend may be unreachable).",
             status=500,
+        )
+
+    if not consumed:
+        return _err(
+            "Invalid or expired bootstrap token. Retrieve the current "
+            "value from the broker startup logs and retry.",
+            status=403,
         )
 
     await log_event(db, "admin.first_boot_password_set", "ok",

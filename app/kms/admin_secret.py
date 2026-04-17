@@ -1,14 +1,26 @@
 """
 Admin secret management — stores the admin password hash in the KMS backend.
 
-First-boot flow (shake-out P0-06):
-  A fresh deploy stores no hash and no "user-set" flag.  The plaintext
-  ADMIN_SECRET from .env is accepted exactly once on the login page as a
-  bootstrap credential, and the admin is then forced onto /dashboard/setup
-  to pick a real password.  Once the admin submits that form the chosen
-  password is bcrypt-hashed, persisted, and the "user-set" flag is marked
-  true — from that moment on .env ADMIN_SECRET is no longer accepted for
-  dashboard login.
+First-boot flow (shake-out P0-06 + audit F-B-4 + F-D-3):
+  A fresh deploy stores no hash and no "user-set" flag.  Startup
+  generates a one-shot bootstrap token (``secrets.token_urlsafe(32)``),
+  logs it prominently to stderr, and persists it in the KMS backend. The
+  ``/dashboard/setup`` POST requires that token as a form field — only
+  someone with access to the broker startup logs (or the
+  ``certs/.admin_bootstrap_token`` file, 0600 perms) can submit it.
+
+  Token consumption is atomic:
+    * Local backend uses ``os.rename`` (POSIX-atomic) of the token file.
+    * Vault backend uses a CAS write that flips
+      ``admin_bootstrap_token``, ``admin_secret_hash``, and
+      ``admin_password_user_set`` in one round-trip.
+  Both guarantee that only one POST wins on a concurrent double-submit
+  (closes F-D-3 TOCTOU).
+
+  Once the admin submits ``/dashboard/setup`` successfully the chosen
+  password is bcrypt-hashed, persisted, the "user-set" flag is marked
+  true, and the bootstrap token is invalidated — from that moment on
+  .env ADMIN_SECRET is no longer accepted for dashboard login.
 
   ADMIN_SECRET remains useful for other purposes (bootstrap automation,
   CI where the full dashboard setup is skipped, and initial access when a
@@ -18,9 +30,11 @@ First-boot flow (shake-out P0-06):
 The dashboard "change admin password" feature calls set_admin_secret_hash()
 which updates both the backend and the in-memory cache atomically.
 """
+import hmac
 import logging
 import os
 import pathlib
+import secrets as _pysecrets
 
 import bcrypt
 import httpx
@@ -32,6 +46,8 @@ _cached_user_set: bool | None = None
 _VAULT_TIMEOUT = 10
 _LOCAL_HASH_PATH = pathlib.Path("certs/.admin_secret_hash")
 _LOCAL_USER_SET_PATH = pathlib.Path("certs/.admin_password_user_set")
+_LOCAL_BOOTSTRAP_TOKEN_PATH = pathlib.Path("certs/.admin_bootstrap_token")
+_VAULT_BOOTSTRAP_TOKEN_FIELD = "admin_bootstrap_token"
 
 # Dummy hash for constant-time verification when no hash is available.
 _DUMMY_HASH: str = bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=12)).decode()
@@ -219,7 +235,7 @@ async def mark_admin_password_user_set() -> None:
 
 
 async def ensure_bootstrapped() -> None:
-    """First-boot hook.
+    """First-boot hook — generate a one-shot bootstrap token if needed.
 
     Historically this hashed the .env ADMIN_SECRET and stored it in the
     KMS backend, which meant a fresh operator never had to set a password
@@ -227,15 +243,224 @@ async def ensure_bootstrapped() -> None:
     that a P0 UX problem: a stranger who cloned the repo had no on-screen
     hint about credentials and had to grep the .env file.
 
-    The broker dashboard now forces the operator through /dashboard/setup
-    on the first login, so there is nothing to bootstrap here.  We keep
-    the function name for compatibility with app.main's lifespan and for
-    tooling that may import it.
+    Audit F-B-4: the /dashboard/setup endpoint was otherwise reachable by
+    the first attacker with network access to the broker during the
+    first-boot window. Now we mint a random bootstrap token at startup
+    and require it on the setup POST — attacker without the token (i.e.
+    without access to the broker's stderr or its ``certs/`` directory)
+    cannot impersonate the legitimate operator.
     """
-    _log.info(
-        "Admin secret bootstrap: skipping auto-hash from .env "
-        "(first-boot password is set via /dashboard/setup)"
+    if await is_admin_password_user_set():
+        _log.info(
+            "Admin secret bootstrap: skipping — password already user-set."
+        )
+        return
+
+    token = await generate_bootstrap_token_if_needed()
+    if token is None:
+        _log.info(
+            "Admin secret bootstrap: existing bootstrap token kept."
+        )
+        return
+
+    _log.warning(
+        "\n"
+        "================================================================\n"
+        "  ADMIN BOOTSTRAP TOKEN (one-shot — use at /dashboard/setup):\n"
+        "  %s\n"
+        "  Also stored at %s (0600).\n"
+        "  Audit F-B-4: required on the /dashboard/setup form.\n"
+        "================================================================",
+        token,
+        _LOCAL_BOOTSTRAP_TOKEN_PATH,
     )
+
+
+async def _read_bootstrap_token() -> str | None:
+    """Return the current bootstrap token from the active backend, or None."""
+    from app.config import get_settings
+    backend = get_settings().kms_backend.lower()
+
+    if backend == "vault":
+        secret = await _read_vault_secret()
+        if secret and "data" in secret:
+            raw = secret["data"].get(_VAULT_BOOTSTRAP_TOKEN_FIELD, "")
+            return raw or None
+        return None
+
+    if _LOCAL_BOOTSTRAP_TOKEN_PATH.exists():
+        content = _LOCAL_BOOTSTRAP_TOKEN_PATH.read_text().strip()
+        return content or None
+    return None
+
+
+async def _write_bootstrap_token(token: str) -> None:
+    """Persist a freshly-generated bootstrap token."""
+    from app.config import get_settings
+    backend = get_settings().kms_backend.lower()
+
+    if backend == "vault":
+        ok = await _write_vault_field(_VAULT_BOOTSTRAP_TOKEN_FIELD, token)
+        if not ok:
+            raise RuntimeError("Failed to write bootstrap token to Vault")
+        return
+
+    _LOCAL_BOOTSTRAP_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LOCAL_BOOTSTRAP_TOKEN_PATH.write_text(token + "\n")
+    os.chmod(_LOCAL_BOOTSTRAP_TOKEN_PATH, 0o600)
+
+
+async def generate_bootstrap_token_if_needed() -> str | None:
+    """Ensure a bootstrap token exists when the admin has not set a password.
+
+    Returns the newly-generated token (caller should log it) or ``None``
+    if a token was already present or the admin has already set a password.
+    Idempotent: a second call with an existing token returns ``None`` so
+    a restart does not regenerate and invalidate the previously-logged
+    value.
+    """
+    if await is_admin_password_user_set():
+        return None
+    if await _read_bootstrap_token() is not None:
+        return None
+    token = _pysecrets.token_urlsafe(32)
+    await _write_bootstrap_token(token)
+    return token
+
+
+async def _vault_atomic_consume_and_set(
+    provided_token: str, new_hash: str,
+) -> bool:
+    """Single CAS round-trip that re-checks the token, writes the hash,
+    flips ``admin_password_user_set=true``, and blanks the bootstrap
+    token. Returns True on success; False if the token mismatches or the
+    CAS round-trip loses the race.
+    """
+    from app.config import get_settings
+    s = get_settings()
+    url = f"{s.vault_addr.rstrip('/')}/v1/{s.vault_secret_path}"
+    headers = await _vault_headers()
+    try:
+        async with httpx.AsyncClient(timeout=_VAULT_TIMEOUT) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                _log.error(
+                    "Vault read during consume returned HTTP %d", resp.status_code,
+                )
+                return False
+            payload = resp.json()["data"]
+            current_data: dict = payload.get("data", {}) or {}
+            version = payload.get("metadata", {}).get("version", 0)
+
+            # Re-check the token under the version we're about to CAS on —
+            # timing-safe comparison.
+            stored_token = current_data.get(_VAULT_BOOTSTRAP_TOKEN_FIELD, "") or ""
+            if not stored_token or not hmac.compare_digest(
+                provided_token, stored_token,
+            ):
+                return False
+            # Belt-and-braces: never overwrite an already-user-set state.
+            if str(current_data.get("admin_password_user_set", "false")).lower() == "true":
+                return False
+
+            current_data[_VAULT_BOOTSTRAP_TOKEN_FIELD] = ""
+            current_data["admin_secret_hash"] = new_hash
+            current_data["admin_password_user_set"] = "true"
+
+            body = {"options": {"cas": version}, "data": current_data}
+            resp = await client.post(url, headers=headers, json=body)
+            if resp.status_code not in (200, 204):
+                _log.error(
+                    "Vault CAS write during consume returned HTTP %d: %s",
+                    resp.status_code, resp.text,
+                )
+                return False
+    except Exception as exc:
+        _log.error("Vault atomic consume failed: %s", exc)
+        return False
+
+    global _cached_hash, _cached_user_set
+    _cached_hash = new_hash
+    _cached_user_set = True
+    return True
+
+
+async def consume_bootstrap_token_and_set_password(
+    provided_token: str, new_hash: str,
+) -> bool:
+    """Atomically consume the one-shot bootstrap token and persist the
+    new admin password hash + user-set flag.
+
+    Returns True only if THIS call won the race and committed all three
+    mutations. Returns False for every other case:
+      * admin password already user-set
+      * bootstrap token missing or mismatched
+      * local rename lost to another process (F-D-3)
+      * Vault CAS lost to another process
+
+    Caller maps False to HTTP 403 ("Invalid or expired bootstrap token").
+    """
+    if await is_admin_password_user_set():
+        return False
+
+    expected = await _read_bootstrap_token()
+    if not expected or not provided_token:
+        return False
+    if not hmac.compare_digest(provided_token, expected):
+        return False
+
+    from app.config import get_settings
+    backend = get_settings().kms_backend.lower()
+
+    if backend == "vault":
+        return await _vault_atomic_consume_and_set(provided_token, new_hash)
+
+    # Local backend: POSIX os.rename is atomic on the same filesystem.
+    consumed_path = _LOCAL_BOOTSTRAP_TOKEN_PATH.with_suffix(
+        _LOCAL_BOOTSTRAP_TOKEN_PATH.suffix + ".consumed"
+    )
+    try:
+        os.rename(_LOCAL_BOOTSTRAP_TOKEN_PATH, consumed_path)
+    except FileNotFoundError:
+        # Another process consumed it first.
+        return False
+    except OSError as exc:
+        _log.error("Bootstrap token rename failed: %s", exc)
+        return False
+
+    # Winner — commit the hash and flag. If anything below raises we've
+    # burned the token without completing setup; surface that as False
+    # and let the caller show a 5xx. A subsequent operator restart will
+    # mint a new token since is_admin_password_user_set() is still False.
+    try:
+        await set_admin_secret_hash(new_hash)
+        await mark_admin_password_user_set()
+    except Exception as exc:
+        _log.error(
+            "Bootstrap token consumed but password commit failed: %s", exc,
+        )
+        return False
+
+    # Best-effort cleanup of the consumed-token marker. Not critical —
+    # leave it for forensics.
+    return True
+
+
+def reset_bootstrap_token_for_tests() -> None:
+    """Test-only helper: clear the local bootstrap token state.
+
+    Does not touch Vault (Vault tests stub ``_write_vault_field`` etc.).
+    """
+    for path in (
+        _LOCAL_BOOTSTRAP_TOKEN_PATH,
+        _LOCAL_BOOTSTRAP_TOKEN_PATH.with_suffix(
+            _LOCAL_BOOTSTRAP_TOKEN_PATH.suffix + ".consumed"
+        ),
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def verify_admin_password(password: str, stored_hash: str | None = None) -> bool:

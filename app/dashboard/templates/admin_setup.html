@@ -50,8 +50,18 @@
 
         <form method="post" action="/dashboard/setup" class="space-y-5" id="setup-form">
             <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Bootstrap Token</label>
+                <input type="text" name="bootstrap_token" id="bootstrap_token" required autofocus autocomplete="off"
+                       placeholder="Paste the token printed on broker startup"
+                       class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 transition-all font-mono">
+                <p class="text-[10px] text-gray-600 mt-1.5">
+                    One-shot. Printed once on broker startup and stored at
+                    <span class="text-gray-400 font-mono">certs/.admin_bootstrap_token</span> on the broker host.
+                </p>
+            </div>
+            <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Password</label>
-                <input type="password" name="password" id="password" required autofocus autocomplete="new-password"
+                <input type="password" name="password" id="password" required autocomplete="new-password"
                        minlength="{{ min_length }}"
                        placeholder="Enter a new password"
                        class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 transition-all font-mono">
