@@ -11,6 +11,7 @@ import {
   signMessage,
   verifyMessageSignature,
 } from "../../sdk-ts/dist/crypto.js";
+import { canonicalJson, computePayloadHash } from "../../sdk-ts/dist/utils.js";
 
 const args = Object.fromEntries(
   process.argv.slice(3).map((a) => {
@@ -67,6 +68,12 @@ if (mode === "encrypt") {
   } catch (err) {
     process.stdout.write(JSON.stringify({ valid: false, error: String(err) }));
   }
+} else if (mode === "canonical") {
+  // Emit canonical JSON string + SHA-256 hex for the given payload.
+  // Used by tests/test_ts_interop.py to assert cross-language byte parity.
+  const canonical = canonicalJson(data.payload);
+  const hash = computePayloadHash(data.payload);
+  process.stdout.write(JSON.stringify({ canonical, hash }));
 } else {
   process.stderr.write(`unknown mode: ${mode}\n`);
   process.exit(2);

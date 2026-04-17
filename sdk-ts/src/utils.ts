@@ -9,11 +9,30 @@ import { createHash } from "node:crypto";
 /**
  * Produce canonical JSON: sorted keys, no spaces, ASCII-safe.
  *
- * This mirrors Python's json.dumps(obj, sort_keys=True, separators=(",", ":")).
+ * This mirrors Python's json.dumps(obj, sort_keys=True,
+ * separators=(",", ":"), ensure_ascii=True).
+ *
+ * Why ASCII-safe: `JSON.stringify` emits raw UTF-8 for code points
+ * >= U+007F, but Python's `ensure_ascii=True` escapes them as `\uXXXX`.
+ * The two serializations signed the same canonical-string template but
+ * produced divergent bytes, so signatures over any non-ASCII payload
+ * never verified cross-language. We post-process `JSON.stringify` output
+ * and escape:
+ *   - U+007F (DEL): Python escapes this; JS.stringify emits it raw.
+ *   - U+0080..U+FFFF: all non-ASCII BMP code points escaped.
+ *   - Astral code points (> U+FFFF): since `JSON.stringify` emits the
+ *     underlying UTF-16 surrogate pair as two raw characters, iterating
+ *     by UTF-16 code unit (charCodeAt) naturally escapes each surrogate
+ *     as its own `\uXXXX`, which is exactly what Python does for
+ *     astral characters under `ensure_ascii=True`.
+ *
  * Objects are recursively sorted by key; arrays preserve order.
  */
 export function canonicalJson(obj: unknown): string {
-  return JSON.stringify(sortKeys(obj));
+  const raw = JSON.stringify(sortKeys(obj));
+  return raw.replace(/[\u007f-\uffff]/g, (c) =>
+    "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+  );
 }
 
 /**
