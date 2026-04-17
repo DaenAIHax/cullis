@@ -29,10 +29,17 @@ router = APIRouter(tags=["auth"])
 
 
 class SignAssertionResponse(BaseModel):
-    """Response payload — just the signed JWT."""
+    """Response payload — the signed JWT plus the optional mastio
+    counter-signature that the SDK must forward as
+    ``X-Cullis-Mastio-Signature`` on ``/v1/auth/token`` (ADR-009 Phase 2).
+    When the proxy hasn't loaded its mastio identity yet (legacy deploys
+    pre-ADR-009), ``mastio_signature`` is ``None`` and the SDK skips the
+    header — matching the ``mastio_pubkey IS NULL`` legacy path server-side.
+    """
 
     client_assertion: str
     agent_id: str
+    mastio_signature: str | None = None
 
 
 @router.post(
@@ -76,6 +83,19 @@ async def sign_assertion(
         ) from exc
 
     assertion, _alg = build_client_assertion(agent.agent_id, cert_pem, key_pem)
+
+    # ADR-009 Phase 2 — counter-sign the assertion with the mastio leaf
+    # when the identity is available; otherwise leave None and the SDK will
+    # omit the header (legacy path).
+    mastio_signature: str | None = None
+    if getattr(mgr, "mastio_loaded", False):
+        try:
+            mastio_signature = mgr.countersign(assertion.encode())
+        except Exception as exc:
+            _log.warning("mastio countersign failed for %s: %s", agent.agent_id, exc)
+
     return SignAssertionResponse(
-        client_assertion=assertion, agent_id=agent.agent_id,
+        client_assertion=assertion,
+        agent_id=agent.agent_id,
+        mastio_signature=mastio_signature,
     )

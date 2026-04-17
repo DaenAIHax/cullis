@@ -367,7 +367,16 @@ class CullisClient:
             )
             sign_resp.raise_for_status()
             self._update_nonce(sign_resp)
-            assertion = sign_resp.json()["client_assertion"]
+            sign_body = sign_resp.json()
+            assertion = sign_body["client_assertion"]
+
+            # ADR-009 Phase 2 — forward the proxy's counter-signature when
+            # the proxy returned one. The Court enforces it against
+            # organizations.mastio_pubkey; absence is fine for legacy orgs.
+            mastio_headers: dict[str, str] = {}
+            mastio_signature = sign_body.get("mastio_signature")
+            if mastio_signature:
+                mastio_headers["X-Cullis-Mastio-Signature"] = mastio_signature
 
             self._dpop_privkey, self._dpop_pubkey_jwk = generate_dpop_keypair()
             token_url = f"{self.base}/v1/auth/token"
@@ -376,7 +385,7 @@ class CullisClient:
             resp = self._http.post(
                 token_url,
                 json={"client_assertion": assertion},
-                headers={"DPoP": dpop_proof},
+                headers={"DPoP": dpop_proof, **mastio_headers},
             )
             if resp.status_code == 401 and "use_dpop_nonce" in resp.text:
                 self._update_nonce(resp)
@@ -384,7 +393,7 @@ class CullisClient:
                 resp = self._http.post(
                     token_url,
                     json={"client_assertion": assertion},
-                    headers={"DPoP": dpop_proof},
+                    headers={"DPoP": dpop_proof, **mastio_headers},
                 )
             resp.raise_for_status()
             self._update_nonce(resp)
