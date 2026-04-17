@@ -13,8 +13,6 @@ modes at runtime, via /v1/admin/link-broker and /v1/admin/unlink-broker.
 """
 from __future__ import annotations
 
-import json
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
