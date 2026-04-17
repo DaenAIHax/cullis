@@ -371,6 +371,11 @@ if settings.a2a_adapter:
 
 app.include_router(v1)
 
+# ADR-010 Phase 1 — Mastio-sovereign registry. Federation router has its
+# own full /v1/federation prefix so register it at the app level.
+from app.federation.publish import router as federation_router
+app.include_router(federation_router)
+
 # ── Static files ─────────────────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
