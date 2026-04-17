@@ -573,8 +573,15 @@ app.include_router(admin_agents_router)
 # ordering uniform for clarity.
 from mcp_proxy.agents.router import router as agents_router
 app.include_router(agents_router)
-from mcp_proxy.registry.public_key import router as registry_public_key_router
+from mcp_proxy.registry.public_key import (
+    federation_router as federation_public_key_router,
+    router as registry_public_key_router,
+)
 app.include_router(registry_public_key_router)
+# ADR-010 Phase 6a-2 — same handler exposed under /v1/federation/ so
+# SDKs migrating to the new prefix hit the proxy-native (local-first)
+# lookup rather than falling through to the reverse-proxy catch-all.
+app.include_router(federation_public_key_router)
 
 # ADR-004 PR A — reverse-proxy router for /v1/broker/*, /v1/auth/*,
 # /v1/registry/*. Registered before local handlers so the proxy owns these

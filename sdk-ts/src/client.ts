@@ -217,9 +217,12 @@ export class BrokerClient {
       "capability",
       c,
     ]);
-    const resp = await this.authedRequest("GET", "/v1/registry/agents/search", {
-      params,
-    });
+    // ADR-010 Phase 6a — cross-org discovery now lives under /v1/federation/.
+    const resp = await this.authedRequest(
+      "GET",
+      "/v1/federation/agents/search",
+      { params },
+    );
     const data = JSON.parse(resp.text) as AgentListResponse;
     return data.agents ?? [];
   }
@@ -402,7 +405,8 @@ export class BrokerClient {
         return cached.pem;
       }
     }
-    const path = `/v1/registry/agents/${agentId}/public-key`;
+    // ADR-010 Phase 6a — public-key lookup served under /v1/federation/.
+    const path = `/v1/federation/agents/${agentId}/public-key`;
     const resp = await this.authedRequest("GET", path);
     const data = JSON.parse(resp.text) as { public_key_pem: string };
     this.pubkeyCache.set(agentId, {

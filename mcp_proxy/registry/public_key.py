@@ -35,11 +35,12 @@ from mcp_proxy.db import cert_thumbprint_from_pem, get_db
 _log = logging.getLogger("mcp_proxy.registry.public_key")
 
 router = APIRouter(prefix="/v1/registry/agents", tags=["registry"])
+federation_router = APIRouter(prefix="/v1/federation/agents", tags=["federation"])
 
 
 class PublicKeyResponse(BaseModel):
     agent_id: str
-    # Broker's equivalent endpoint (app/registry/router.py:185) returns
+    # Broker's equivalent endpoint (app/federation/read.py) returns
     # this exact field name; SDKs already consume `public_key_pem`.
     public_key_pem: str
     cert_thumbprint: str | None = None
@@ -47,6 +48,7 @@ class PublicKeyResponse(BaseModel):
 
 
 @router.get("/{agent_id}/public-key", response_model=PublicKeyResponse)
+@federation_router.get("/{agent_id}/public-key", response_model=PublicKeyResponse)
 async def get_public_key(agent_id: str, request: Request) -> PublicKeyResponse:
     """Return the agent's cert PEM.
 
@@ -91,7 +93,10 @@ async def get_public_key(agent_id: str, request: Request) -> PublicKeyResponse:
             detail="broker uplink not configured — cannot resolve federated agent",
         )
 
-    target = f"{broker_url.rstrip('/')}/v1/registry/agents/{agent_id}/public-key"
+    # ADR-010 Phase 6a: Court serves this endpoint under /v1/federation/.
+    # The legacy /v1/registry/ path still resolves until Phase 6a-4 deletes
+    # it, so older proxies keep working through that window.
+    target = f"{broker_url.rstrip('/')}/v1/federation/agents/{agent_id}/public-key"
     # Broker enforces org isolation + binding auth on this endpoint, so we
     # must propagate the caller's Authorization / DPoP headers. Hop-by-hop
     # headers are dropped for the same reason the reverse-proxy forwarder
