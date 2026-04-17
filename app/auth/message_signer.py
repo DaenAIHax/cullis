@@ -18,6 +18,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec as ec_alg, padding, rsa as rsa_alg
 from fastapi import HTTPException, status
 
+from app.utils.validation import strict_b64url_decode
+
 _PSS_PADDING = padding.PSS(
     mgf=padding.MGF1(hashes.SHA256()),
     salt_length=padding.PSS.MAX_LENGTH,
@@ -25,13 +27,12 @@ _PSS_PADDING = padding.PSS(
 
 
 def _b64url_decode(s: str) -> bytes:
-    """Decode base64url with or without padding (RFC 4648 §5 / JWT convention)."""
-    if isinstance(s, bytes):
-        s = s.decode("ascii")
-    rem = len(s) % 4
-    if rem:
-        s += "=" * (4 - rem)
-    return base64.urlsafe_b64decode(s)
+    """Strict base64url decode — tolerates padding, rejects garbage bits.
+
+    Audit F-C-3: delegate to the shared canonical decoder so message
+    signatures cannot be submitted under two distinct base64 encodings.
+    """
+    return strict_b64url_decode(s)
 
 
 def _canonical(session_id: str, sender_agent_id: str, nonce: str, timestamp: int,

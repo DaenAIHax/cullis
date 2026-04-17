@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 import jwt as jose_jwt
 
 from app.auth.dpop_jti_store import get_dpop_jti_store
+from app.utils.validation import canonicalize_b64url, strict_b64url_decode
 
 _log = logging.getLogger("agent_trust")
 
@@ -83,10 +84,12 @@ def set_dpop_nonce_header(response: Response) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _b64url_decode(s: str) -> bytes:
-    padding = 4 - len(s) % 4
-    if padding != 4:
-        s += "=" * padding
-    return base64.urlsafe_b64decode(s)
+    """Strict base64url decode — tolerates padding, rejects garbage bits.
+
+    Audit F-C-3: all DPoP / JWK decoders go through the single strict
+    helper so two wire encodings of the same bytes cannot collide.
+    """
+    return strict_b64url_decode(s)
 
 
 def _b64url_encode(b: bytes) -> str:
@@ -105,12 +108,32 @@ def compute_jkt(jwk: dict) -> str:
     Required members by key type:
       EC  → crv, kty, x, y   (alphabetical order)
       RSA → e, kty, n         (alphabetical order)
+
+    Audit F-C-3: ``x``/``y``/``n``/``e`` are run through the strict
+    base64url canonicalizer before being embedded in the canonical JSON.
+    Without this, two different padding/tail-bit encodings of the same
+    key produce two different jkt values and break the "one jkt per key"
+    pinning invariant that ``cnf.jkt`` relies on.
     """
     kty = jwk.get("kty")
     if kty == "EC":
-        required = {k: jwk[k] for k in ("crv", "kty", "x", "y")}
+        raw = {k: jwk[k] for k in ("crv", "kty", "x", "y")}
+        # Normalize the base64url coordinates. ``crv`` and ``kty`` are
+        # literal strings ("P-256" / "EC") — leave them alone.
+        try:
+            raw["x"] = canonicalize_b64url(raw["x"])
+            raw["y"] = canonicalize_b64url(raw["y"])
+        except ValueError as exc:
+            raise ValueError(f"malformed EC JWK coordinate: {exc}") from exc
+        required = raw
     elif kty == "RSA":
-        required = {k: jwk[k] for k in ("e", "kty", "n")}
+        raw = {k: jwk[k] for k in ("e", "kty", "n")}
+        try:
+            raw["n"] = canonicalize_b64url(raw["n"])
+            raw["e"] = canonicalize_b64url(raw["e"])
+        except ValueError as exc:
+            raise ValueError(f"malformed RSA JWK coordinate: {exc}") from exc
+        required = raw
     else:
         raise ValueError(f"Unsupported kty: {kty!r}")
 

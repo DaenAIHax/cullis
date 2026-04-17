@@ -16,15 +16,16 @@ import os
 
 from cryptography.hazmat.primitives import hashes, serialization
 
+from app.utils.validation import strict_b64url_decode
+
 
 def _b64url_decode(s: str) -> bytes:
-    """Decode base64url with or without padding (RFC 4648 §5 / JWT convention)."""
-    if isinstance(s, bytes):
-        s = s.decode("ascii")
-    rem = len(s) % 4
-    if rem:
-        s += "=" * (4 - rem)
-    return base64.urlsafe_b64decode(s)
+    """Strict base64url decode — tolerates padding, rejects garbage bits.
+
+    Delegated to ``app.utils.validation.strict_b64url_decode`` so every
+    callsite in app/ agrees on the same canonical rules (audit F-C-3).
+    """
+    return strict_b64url_decode(s)
 from cryptography.hazmat.primitives.asymmetric import ec, padding as asym_padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF

@@ -13,16 +13,36 @@ Supports both RSA and EC keys:
 import base64
 import json
 import os
+import re
+
+# url-safe base64 alphabet (RFC 4648 section 5).
+_B64URL_ALPHABET_RE = re.compile(r"^[A-Za-z0-9_-]*$")
 
 
 def _b64url_decode(s: str) -> bytes:
-    """Decode base64url with or without padding (RFC 4648 §5 / JWT convention)."""
+    """Strict base64url decode — tolerates padding, rejects garbage bits.
+
+    Mirrors ``app.utils.validation.strict_b64url_decode`` — the SDK
+    deliberately vendors the implementation so it has zero runtime deps
+    on ``app/``. Both must stay in sync (audit F-C-3).
+    """
     if isinstance(s, bytes):
         s = s.decode("ascii")
-    rem = len(s) % 4
-    if rem:
-        s += "=" * (4 - rem)
-    return base64.urlsafe_b64decode(s)
+    stripped = s.rstrip("=")
+    if not _B64URL_ALPHABET_RE.fullmatch(stripped):
+        raise ValueError("base64url contains non-url-safe characters")
+    rem = len(stripped) % 4
+    if rem == 1:
+        raise ValueError("base64url length is not valid (length % 4 == 1)")
+    padded = stripped + ("=" * ((4 - rem) % 4))
+    decoded = base64.urlsafe_b64decode(padded)
+    canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+    if canonical != stripped:
+        raise ValueError(
+            "base64url contains non-canonical trailing bits — "
+            "decoded bytes do not round-trip to the input"
+        )
+    return decoded
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
