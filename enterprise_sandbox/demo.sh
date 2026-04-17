@@ -101,6 +101,22 @@ case "${1:-help}" in
       python /app/scenarios/oneshot_cross_org.py
     ;;
 
+  mcp-catalog)
+    _header "Scenario — intra-org MCP call: orga::agent-a → get_catalog"
+    docker compose exec \
+      -e MCP_TOOL_NAME=get_catalog \
+      -e MCP_TOOL_ARGS='{"category":"electronics"}' \
+      agent-a python /app/scenarios/mcp_call_local.py
+    ;;
+
+  mcp-inventory)
+    _header "Scenario — intra-org MCP call: orgb::agent-b → check_inventory"
+    docker compose exec \
+      -e MCP_TOOL_NAME=check_inventory \
+      -e MCP_TOOL_ARGS='{"sku":"WIDGET-X"}' \
+      agent-b python /app/scenarios/mcp_call_local.py
+    ;;
+
   guide)
     if command -v less >/dev/null 2>&1; then
       less -R GUIDE.md
@@ -128,6 +144,8 @@ Inspection:
 Scenarios (require 'full' mode — orga workloads must be running):
   oneshot-a-to-b  Cross-org one-shot from orga::agent-a to orgb::agent-b.
   oneshot-b-to-a  Cross-org one-shot from orgb::agent-b to orga::agent-a.
+  mcp-catalog     Intra-org MCP call: orga::agent-a → mcp-catalog (get_catalog).
+  mcp-inventory   Intra-org MCP call: orgb::agent-b → mcp-inventory (check_inventory).
 
 Guided onboarding (for 'up' mode — walks you through completing orga):
   guide           Open the step-by-step Markdown walkthrough.

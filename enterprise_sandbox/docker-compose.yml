@@ -215,9 +215,14 @@ services:
       OIDC_CLIENT_ID:      "cullis-proxy-dashboard"
       OIDC_CLIENT_SECRET:  "orga-oidc-client-secret-change-me"
       SEED_MCP_RESOURCES:  "1"
-      SEED_MCP_0_NAME:     "catalog"
+      # The proxy aggregator maps 1 resource = 1 tool: the resource name
+      # is what the SDK calls ``tools/call`` with, and the proxy forwards
+      # verbatim to the MCP server. So the resource name must match the
+      # tool name the MCP server actually implements (``get_catalog``).
+      SEED_MCP_0_NAME:     "get_catalog"
       SEED_MCP_0_ENDPOINT: "http://mcp-catalog:9300/"
-      SEED_MCP_0_AGENTS:   "agent-a,byoca-bot"
+      # Binding.agent_id must match JWT agent_id exactly (``org::name``).
+      SEED_MCP_0_AGENTS:   "orga::agent-a,orga::byoca-bot"
     volumes:
       - bootstrap-state:/state:ro
       - proxy-a-data:/data
@@ -234,7 +239,12 @@ services:
     environment:
       MCP_PROXY_BROKER_URL:        "http://broker:8000"
       MCP_PROXY_BROKER_JWKS_URL:   "http://broker:8000/.well-known/jwks.json"
-      MCP_PROXY_PROXY_PUBLIC_URL:  "http://localhost:9100"
+      # Intentionally unset: the sandbox serves the same proxy at two
+      # hostnames (``proxy-a`` intra-docker, ``localhost:9100`` from the
+      # host). Leaving ``proxy_public_url`` empty falls back to
+      # ``request.url`` for DPoP htu reconstruction — matches the agent's
+      # signed htu in both cases instead of pinning one.
+      # MCP_PROXY_PROXY_PUBLIC_URL: unset
       MCP_PROXY_ADMIN_SECRET:      "sandbox-proxy-admin-a"
       MCP_PROXY_DATABASE_URL:      "sqlite+aiosqlite:////data/mcp_proxy.db"
       MCP_PROXY_ORG_ID:            "orga"
@@ -437,9 +447,9 @@ services:
       OIDC_CLIENT_ID:      "cullis-proxy-dashboard"
       OIDC_CLIENT_SECRET:  "orgb-oidc-client-secret-change-me"
       SEED_MCP_RESOURCES:  "1"
-      SEED_MCP_0_NAME:     "inventory"
+      SEED_MCP_0_NAME:     "check_inventory"
       SEED_MCP_0_ENDPOINT: "http://mcp-inventory:9400/"
-      SEED_MCP_0_AGENTS:   "agent-b"
+      SEED_MCP_0_AGENTS:   "orgb::agent-b"
     volumes:
       - bootstrap-state:/state:ro
       - proxy-b-data:/data
@@ -455,7 +465,8 @@ services:
     environment:
       MCP_PROXY_BROKER_URL:        "http://broker:8000"
       MCP_PROXY_BROKER_JWKS_URL:   "http://broker:8000/.well-known/jwks.json"
-      MCP_PROXY_PROXY_PUBLIC_URL:  "http://localhost:9200"
+      # See proxy-a comment above — unset so DPoP htu falls back to request.url.
+      # MCP_PROXY_PROXY_PUBLIC_URL: unset
       MCP_PROXY_ADMIN_SECRET:      "sandbox-proxy-admin-b"
       MCP_PROXY_DATABASE_URL:      "sqlite+aiosqlite:////data/mcp_proxy.db"
       MCP_PROXY_ORG_ID:            "orgb"
