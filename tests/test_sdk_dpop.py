@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import stat
-from pathlib import Path
 
 import httpx
 import jwt as pyjwt
@@ -47,7 +46,7 @@ def test_generate_creates_valid_ec_key(tmp_path):
 
 def test_save_uses_0600_and_atomic(tmp_path):
     path = tmp_path / "agent.jwk"
-    key = DpopKey.generate(path=path)
+    DpopKey.generate(path=path)
     # chmod 0600 (owner read/write only).
     mode = stat.S_IMODE(os.stat(path).st_mode)
     assert mode == 0o600, f"expected 0600, got {oct(mode)}"
