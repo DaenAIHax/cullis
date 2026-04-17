@@ -462,21 +462,27 @@ class CullisClient:
         instance._proxy_agent_id = agent_id
         instance._proxy_org_id = org_id
 
-        # F-B-11 Phase 3c — load the DPoP keypair alongside the rest
-        # of the Connector identity. First-run on a freshly-enrolled
-        # Connector generates it; subsequent runs reuse the same key
-        # so its thumbprint stays pinned server-side.
+        # F-B-11 Phase 3c + 3d — load the DPoP keypair alongside the
+        # rest of the Connector identity. Phase 3d (#181) has the
+        # Connector persist it at enrollment time as ``dpop.jwk``
+        # next to ``agent.crt`` / ``agent.key``. For legacy Connectors
+        # (pre-3d) that never persisted one, generate locally and
+        # reuse on subsequent runs — but note the resulting thumbprint
+        # is NOT bound server-side until the operator registers it
+        # via the admin endpoint (#206) or re-enrolls.
         if enable_dpop:
             from cullis_sdk.dpop import DpopKey
+            dpop_path = identity_dir / "dpop.jwk"
             try:
-                instance._egress_dpop_key = DpopKey.load_or_generate(
-                    agent_id, base_dir=identity_dir / "dpop",
-                )
-            except OSError as exc:
+                if dpop_path.exists():
+                    instance._egress_dpop_key = DpopKey.load(dpop_path)
+                else:
+                    instance._egress_dpop_key = DpopKey.generate(path=dpop_path)
+            except (OSError, ValueError) as exc:
                 import warnings
                 warnings.warn(
-                    f"Could not load or generate egress DPoP key under "
-                    f"{identity_dir}: {exc}. Falling back to legacy "
+                    f"Could not load or generate egress DPoP key at "
+                    f"{dpop_path}: {exc}. Falling back to legacy "
                     f"X-API-Key bearer; pass enable_dpop=False to silence.",
                     RuntimeWarning,
                     stacklevel=2,

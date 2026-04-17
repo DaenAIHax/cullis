@@ -105,11 +105,21 @@ def enroll(
     api_key_raw = _generate_api_key()
     api_key_hash = _bcrypt_hash(api_key_raw)
 
+    # F-B-11 Phase 3d (#181) — generate the DPoP keypair locally, submit
+    # the public JWK at start, persist the private half alongside the
+    # identity on approval. The server computes its RFC 7638 thumbprint
+    # and stores it on ``internal_agents.dpop_jkt`` (#207) so every
+    # proof the SDK later signs is pinned to this specific keypair.
+    from cullis_sdk.dpop import DpopKey
+    dpop_key = DpopKey.generate()
+    dpop_public_jwk = dpop_key.public_jwk
+
     start_resp = _start(
         site_url=site_url,
         pubkey_pem=pubkey_pem,
         requester=requester,
         api_key_hash=api_key_hash,
+        dpop_jwk=dpop_public_jwk,
         verify_tls=verify_tls,
         timeout_s=request_timeout_s,
     )
@@ -167,6 +177,7 @@ def enroll(
         ca_chain_pem=None,  # Phase 2c will fetch the CA chain from the Site.
         metadata=metadata,
         api_key=api_key_raw,
+        dpop_private_jwk=dpop_key.private_jwk(),
     )
 
     print(
@@ -189,6 +200,7 @@ def _start(
     api_key_hash: str | None,
     verify_tls: bool,
     timeout_s: float,
+    dpop_jwk: dict | None = None,
 ) -> dict[str, Any]:
     body = {
         "pubkey_pem": pubkey_pem,
@@ -201,6 +213,10 @@ def _start(
         body["device_info"] = requester.device_info
     if api_key_hash:
         body["api_key_hash"] = api_key_hash
+    # F-B-11 Phase 3d — include the public DPoP JWK so Mastio can
+    # compute + store its thumbprint on approve (wire added in #207).
+    if dpop_jwk is not None:
+        body["dpop_jwk"] = dpop_jwk
 
     try:
         response = httpx.post(

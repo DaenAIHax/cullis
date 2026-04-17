@@ -30,6 +30,9 @@ KEY_FILENAME = "agent.key"
 CA_CHAIN_FILENAME = "ca-chain.pem"
 METADATA_FILENAME = "metadata.json"
 API_KEY_FILENAME = "api_key"
+# F-B-11 Phase 3d (#181) — per-identity DPoP keypair. Persisted as a
+# private JWK; the SDK reads it back via ``cullis_sdk.DpopKey.load``.
+DPOP_KEY_FILENAME = "dpop.jwk"
 
 
 class IdentityNotFound(Exception):
@@ -91,12 +94,18 @@ def save_identity(
     ca_chain_pem: str | None,
     metadata: IdentityMetadata,
     api_key: str | None = None,
+    dpop_private_jwk: dict | None = None,
 ) -> None:
     """Persist the full identity bundle atomically per-file.
 
-    The private key and api_key file are written with ``chmod 600``; the
-    public cert and metadata stay world-readable (they contain no secret
-    material).
+    The private key, ``api_key`` file, and the DPoP private JWK
+    (audit F-B-11 Phase 3d, #181) are written with ``chmod 600``; the
+    public cert and metadata stay world-readable (they contain no
+    secret material).
+
+    ``dpop_private_jwk`` is optional — legacy Connectors that predate
+    F-B-11 omit it, and the SDK's ``from_connector`` path falls back
+    to generating a fresh keypair on first run in that case.
     """
     identity_dir = _identity_dir(config_dir)
     identity_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +144,23 @@ def save_identity(
         _write_atomic(
             identity_dir / API_KEY_FILENAME,
             (api_key + "\n").encode(),
+            mode=0o600,
+        )
+
+    # F-B-11 Phase 3d — DPoP private JWK. Stored as a JSON wrapper the
+    # SDK's ``DpopKey.load`` accepts: ``{"private_jwk": {...}}``.
+    if dpop_private_jwk is not None:
+        if "d" not in dpop_private_jwk:
+            raise ValueError(
+                "dpop_private_jwk is missing the 'd' field — refusing "
+                "to persist a public-only JWK at dpop.jwk"
+            )
+        _write_atomic(
+            identity_dir / DPOP_KEY_FILENAME,
+            json.dumps(
+                {"private_jwk": dpop_private_jwk},
+                separators=(",", ":"),
+            ).encode(),
             mode=0o600,
         )
 
