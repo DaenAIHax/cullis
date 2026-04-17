@@ -558,8 +558,12 @@ class CullisClient:
         pattern: str | None = None,
         q: str | None = None,
     ) -> list[AgentInfo]:
-        """Search for agents in the network."""
-        path = "/v1/registry/agents/search"
+        """Search for agents in the network.
+
+        ADR-010 Phase 6a: reads from the ``/v1/federation/`` namespace,
+        which is where the Court now serves cross-org discovery.
+        """
+        path = "/v1/federation/agents/search"
         params: list[tuple[str, str]] = []
         if capabilities:
             params.extend([("capability", c) for c in capabilities])
@@ -576,12 +580,15 @@ class CullisClient:
         return [AgentInfo.from_dict(a) for a in resp.json().get("agents", [])]
 
     def get_agent_public_key(self, agent_id: str, force_refresh: bool = False) -> str:
-        """Retrieve agent PEM public key from the broker (TTL-cached)."""
+        """Retrieve agent PEM public key from the broker (TTL-cached).
+
+        ADR-010 Phase 6a: reads from the ``/v1/federation/`` namespace.
+        """
         if not force_refresh and agent_id in self._pubkey_cache:
             pubkey_pem, fetched_at = self._pubkey_cache[agent_id]
             if time.time() - fetched_at < _PUBKEY_CACHE_TTL:
                 return pubkey_pem
-        path = f"/v1/registry/agents/{agent_id}/public-key"
+        path = f"/v1/federation/agents/{agent_id}/public-key"
         resp = self._authed_request("GET", path)
         resp.raise_for_status()
         pubkey_pem = resp.json()["public_key_pem"]
