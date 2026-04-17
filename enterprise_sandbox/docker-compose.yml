@@ -109,6 +109,8 @@ services:
       OTEL_ENABLED: "false"
       ENVIRONMENT: "development"
       FORWARDED_ALLOW_IPS: "172.16.0.0/12"
+    tmpfs:
+      - /app/certs:uid=999,gid=999
     volumes:
       - broker-ca:/broker-certs:ro
     entrypoint: ["sh", "-c"]
@@ -193,7 +195,9 @@ services:
   # ── Org A proxy ────────────────────────────────────────────────────────────
 
   proxy-a-init:
-    build: ./proxy-init
+    build:
+      context: ..
+      dockerfile: enterprise_sandbox/proxy-init/Dockerfile
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -206,9 +210,14 @@ services:
       OIDC_ISSUER_URL:     "http://keycloak-a:8180/realms/orga"
       OIDC_CLIENT_ID:      "cullis-proxy-dashboard"
       OIDC_CLIENT_SECRET:  "orga-oidc-client-secret-change-me"
+      SEED_MCP_RESOURCES:  "1"
+      SEED_MCP_0_NAME:     "catalog"
+      SEED_MCP_0_ENDPOINT: "http://mcp-catalog:9300/"
+      SEED_MCP_0_AGENTS:   "agent-a,byoca-bot"
     volumes:
       - bootstrap-state:/state:ro
       - proxy-a-data:/data
+    networks: [orga-internal, public-wan]
     restart: "no"
 
   proxy-a:
@@ -397,7 +406,9 @@ services:
   # ── Org B proxy ────────────────────────────────────────────────────────────
 
   proxy-b-init:
-    build: ./proxy-init
+    build:
+      context: ..
+      dockerfile: enterprise_sandbox/proxy-init/Dockerfile
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -410,6 +421,10 @@ services:
       OIDC_ISSUER_URL:     "http://keycloak-b:8280/realms/orgb"
       OIDC_CLIENT_ID:      "cullis-proxy-dashboard"
       OIDC_CLIENT_SECRET:  "orgb-oidc-client-secret-change-me"
+      SEED_MCP_RESOURCES:  "1"
+      SEED_MCP_0_NAME:     "inventory"
+      SEED_MCP_0_ENDPOINT: "http://mcp-inventory:9400/"
+      SEED_MCP_0_AGENTS:   "agent-b"
     volumes:
       - bootstrap-state:/state:ro
       - proxy-b-data:/data
@@ -550,3 +565,31 @@ services:
       timeout: 2s
       retries: 20
       start_period: 20s
+
+  # ── MCP servers (ADR-007) ──────────────────────────────────────────────────
+
+  mcp-catalog:
+    build:
+      context: ./mcp-catalog
+      dockerfile: ../mcp-server.Dockerfile
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9300"]
+    networks: [orga-internal]
+    expose: ["9300"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9300/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mcp-inventory:
+    build:
+      context: ./mcp-inventory
+      dockerfile: ../mcp-server.Dockerfile
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9400"]
+    networks: [orgb-internal]
+    expose: ["9400"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9400/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
