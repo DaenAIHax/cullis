@@ -14,7 +14,6 @@ Covers:
 from __future__ import annotations
 
 import datetime
-import json
 
 import pytest
 from cryptography import x509
@@ -199,7 +198,6 @@ async def test_byoca_enroll_extracts_spiffe_uri_san(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
-            mgr = app.state.agent_manager
             spiffe = "spiffe://bc-spiffe.test/agent/bob"
             cert_pem, key_pem = _issue_cert_from_ca(
                 *await _load_org_ca(),
@@ -227,7 +225,6 @@ async def test_byoca_enroll_pins_dpop_jkt_when_jwk_supplied(tmp_path, monkeypatc
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
-            mgr = app.state.agent_manager
             cert_pem, key_pem = _issue_cert_from_ca(
                 *await _load_org_ca(), subject_cn="carol",
             )
@@ -294,7 +291,6 @@ async def test_byoca_enroll_rejects_mismatched_private_key(tmp_path, monkeypatch
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
-            mgr = app.state.agent_manager
             cert_pem, _ = _issue_cert_from_ca(
                 *await _load_org_ca(), subject_cn="d1",
             )
@@ -322,7 +318,6 @@ async def test_byoca_enroll_rejects_private_jwk(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
-            mgr = app.state.agent_manager
             cert_pem, key_pem = _issue_cert_from_ca(
                 *await _load_org_ca(), subject_cn="priv",
             )
@@ -349,7 +344,6 @@ async def test_byoca_enroll_duplicate_agent_returns_409(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
-            mgr = app.state.agent_manager
             cert_pem, key_pem = _issue_cert_from_ca(
                 *await _load_org_ca(), subject_cn="twice",
             )
@@ -377,7 +371,6 @@ async def test_byoca_enroll_refuses_without_admin_secret(tmp_path, monkeypatch):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
         async with app.router.lifespan_context(app):
-            mgr = app.state.agent_manager
             cert_pem, key_pem = _issue_cert_from_ca(
                 *await _load_org_ca(), subject_cn="noauth",
             )
