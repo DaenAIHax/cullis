@@ -3,7 +3,12 @@ Egress API endpoints — internal agents authenticate with API keys and
 communicate through the Cullis broker without seeing x509 keys, DPoP,
 or any cryptography.
 
-All endpoints require X-API-Key authentication (via get_agent_from_api_key).
+All endpoints require X-API-Key authentication (via
+``get_agent_from_dpop_api_key``). That dep runs the legacy bearer
+lookup first and, when ``CULLIS_EGRESS_DPOP_MODE`` is ``optional`` or
+``required`` (F-B-11 Phase 5 default: ``optional``), additionally
+validates a DPoP proof carried in the ``DPoP`` header and pins it to
+the agent's registered ``dpop_jkt``.
 """
 import logging
 import time
@@ -16,7 +21,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from mcp_proxy.auth.api_key import get_agent_from_api_key
+from mcp_proxy.auth.dpop_api_key import get_agent_from_dpop_api_key
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import log_audit
 from mcp_proxy.egress.routing import decide_route
@@ -198,7 +203,7 @@ def _local_session_to_dict(session: LocalSession) -> dict:
 async def open_session(
     body: OpenSessionRequest,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Open a session on behalf of an internal agent.
 
@@ -292,7 +297,7 @@ async def open_session(
 async def list_sessions(
     request: Request,
     status: str | None = None,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """List sessions for the authenticated agent — local + broker merged."""
     local_store = _get_local_store(request)
@@ -319,7 +324,7 @@ async def list_sessions(
 async def accept_session(
     session_id: str,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Accept a pending session (local or broker)."""
     _validate_session_id(session_id)
@@ -374,7 +379,7 @@ async def accept_session(
 async def close_session(
     session_id: str,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Close a session (local or broker)."""
     _validate_session_id(session_id)
@@ -430,7 +435,7 @@ async def close_session(
 async def send_message(
     body: SendMessageRequest,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Send an E2E-encrypted message.
 
@@ -673,7 +678,7 @@ async def poll_messages(
     session_id: str,
     request: Request,
     after: int = -1,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Poll for messages in a session (local or broker).
 
@@ -746,7 +751,7 @@ async def ack_message(
     session_id: str,
     msg_id: str,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Acknowledge delivery of a queued local message (ADR-001 Phase 3c).
 
@@ -786,7 +791,7 @@ async def ack_message(
 async def resolve_recipient(
     body: ResolveRequest,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Resolve a recipient and tell the SDK how to send.
 
@@ -895,7 +900,7 @@ async def resolve_recipient(
 async def discover_agents(
     body: DiscoverRequest,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Discover remote agents on the network."""
     bridge = _get_bridge(request)
@@ -924,7 +929,7 @@ async def discover_agents(
 async def invoke_remote_tool(
     body: InvokeToolRequest,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ):
     """Invoke a tool on a remote org via an active broker session.
 

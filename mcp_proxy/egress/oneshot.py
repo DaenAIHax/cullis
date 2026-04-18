@@ -12,7 +12,9 @@ back to the request. Cross-org recipients return 501 in this PR;
 Phase 2 wires them to the broker.
 
 Auth mirrors the rest of ``/v1/egress/*`` — ``X-API-Key`` via
-``get_agent_from_api_key``. Storage reuses the existing
+``get_agent_from_dpop_api_key`` (F-B-11 Phase 5: legacy bearer lookup
+runs first, DPoP proof validated when the mode flag is ``optional`` or
+``required``). Storage reuses the existing
 ``local_messages`` queue with ``session_id=NULL`` and ``is_oneshot=1``
 (see migration 0008). Audit is written through ``append_local_audit``
 with ``event_type`` in
@@ -28,7 +30,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from mcp_proxy.auth.api_key import get_agent_from_api_key
+from mcp_proxy.auth.dpop_api_key import get_agent_from_dpop_api_key
 from mcp_proxy.config import get_settings
 from mcp_proxy.egress.routing import decide_route
 from mcp_proxy.local import message_queue as local_queue
@@ -162,7 +164,7 @@ def _serialize_envelope(body: SendOneShotRequest) -> str:
 async def send_oneshot(
     body: SendOneShotRequest,
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ) -> SendOneShotResponse:
     """Enqueue a sessionless message for delivery to ``recipient_id``.
 
@@ -354,7 +356,7 @@ async def send_oneshot(
 @router.get("/message/inbox", response_model=InboxResponse)
 async def receive_oneshot_inbox(
     request: Request,
-    agent: InternalAgent = Depends(get_agent_from_api_key),
+    agent: InternalAgent = Depends(get_agent_from_dpop_api_key),
 ) -> InboxResponse:
     """Poll pending one-shot messages addressed to this agent.
 
