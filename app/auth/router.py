@@ -181,22 +181,18 @@ async def issue_token(
         AUTH_SUCCESS_COUNTER.add(1, {"org_id": org_id})
         AUTH_DURATION_HISTOGRAM.record((time.monotonic() - t0) * 1000)
 
+        # ADR-011 Phase 3 Phase A — fold legacy-path metadata into the
+        # single ``auth.token_issued`` event so the Court emits exactly
+        # one audit row per hit (doubling the chain-lock cost was enough
+        # to flake EC CI under load). Dashboards filter on
+        # ``details.deprecated`` to surface the migration signal; the
+        # ``auth_mode`` + ``migration_endpoint`` bits point the operator
+        # at the correct re-enrollment path for this caller.
         await log_event(
             db, "auth.token_issued", "ok",
             agent_id=agent_id, org_id=org_id,
-        )
-
-        # ADR-011 Phase 3 Phase A — audit every hit on the legacy path so
-        # operators can track migration progress from the dashboard. The
-        # ``svid_mode`` bit tells them whether the caller is SPIFFE (SVID
-        # rotation implied) or classic BYOCA (static cert) — both are
-        # legacy under the unified model, but the migration story differs
-        # (SPIFFE agents re-enroll via ``/admin/agents/enroll/spiffe``,
-        # BYOCA agents via ``/admin/agents/enroll/byoca``).
-        await log_event(
-            db, "auth.legacy_token", "ok",
-            agent_id=agent_id, org_id=org_id,
             details={
+                "deprecated": True,
                 "auth_mode": "spiffe" if svid_mode else "byoca",
                 "sunset_days": _DEPRECATION_GRACE_DAYS,
                 "migration_endpoint": (

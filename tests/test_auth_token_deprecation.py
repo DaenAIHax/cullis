@@ -57,8 +57,11 @@ async def test_legacy_token_response_advertises_deprecation_headers(
 async def test_legacy_token_emits_audit_event_on_success(
     client: AsyncClient, dpop, db_session,
 ):
-    """Every 200 on /auth/token writes an ``auth.legacy_token`` row that
-    the dashboard can filter — the migration dashboard story needs this."""
+    """Every 200 on /auth/token writes an ``auth.token_issued`` row
+    with deprecation metadata in ``details`` — dashboards filter on
+    ``details.deprecated`` to surface migration progress. Folded into
+    the existing event rather than emitting a second audit row so the
+    chain-seq lock stays at one hit per token (hot path under load)."""
     import json as _json
 
     from sqlalchemy import desc, select
@@ -77,18 +80,18 @@ async def test_legacy_token_emits_audit_event_on_success(
     )
     assert resp.status_code == 200
 
-    # Fetch the freshest ``auth.legacy_token`` row for this agent.
     rows = (await db_session.execute(
         select(AuditLog)
-        .where(AuditLog.event_type == "auth.legacy_token")
+        .where(AuditLog.event_type == "auth.token_issued")
         .where(AuditLog.agent_id == "depr-audit::agent-1")
         .order_by(desc(AuditLog.id))
         .limit(1)
     )).scalars().all()
-    assert rows, "auth.legacy_token audit row not written"
+    assert rows, "auth.token_issued audit row not written"
     row = rows[0]
     assert row.result == "ok"
     details = _json.loads(row.details) if row.details else {}
+    assert details.get("deprecated") is True
     assert details.get("auth_mode") in ("spiffe", "byoca")
     assert details.get("sunset_days") == _DEPRECATION_GRACE_DAYS
     assert details.get("migration_endpoint", "").startswith(
