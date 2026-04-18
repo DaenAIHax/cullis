@@ -356,3 +356,211 @@ async def enroll_byoca(
         spiffe_id=spiffe_id,
         dpop_jkt=dpop_jkt,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ADR-011 Phase 1c — SPIFFE enrollment.
+#
+# ``/v1/admin/agents/enroll/spiffe`` verifies an SVID (X.509-SVID per
+# SPIFFE spec) against a SPIRE trust bundle and emits the standard
+# enrollment output: agent_id, one-shot API key, pinned SPIFFE URI.
+#
+# Trust bundle resolution (first hit wins):
+#   1. ``body.trust_bundle_pem`` — useful for sandbox/CI, one-off enroll.
+#   2. ``proxy_config.spire_trust_bundle`` — operator-configured baseline.
+# Missing both → 503. A future admin endpoint can PATCH the config row.
+# ─────────────────────────────────────────────────────────────────────────
+
+class SpiffeEnrollRequest(BaseModel):
+    agent_name: str = Field(..., pattern=r"^[a-zA-Z0-9._-]{1,64}$")
+    display_name: str = Field("", max_length=256)
+    capabilities: list[str] = Field(default_factory=list)
+    # The X.509-SVID leaf + its private key. The SVID MUST carry a
+    # ``spiffe://`` URI SAN; that URI becomes the persisted ``spiffe_id``.
+    svid_pem: str
+    svid_key_pem: str
+    # Optional per-request bundle — overrides the proxy_config baseline.
+    # Lets CI and sandbox test isolated trust domains without mutating
+    # the shared config row.
+    trust_bundle_pem: str | None = None
+    dpop_jwk: dict | None = None
+    federated: bool = False
+
+
+class SpiffeEnrollResponse(BaseModel):
+    agent_id: str
+    display_name: str
+    capabilities: list[str]
+    api_key: str
+    cert_thumbprint: str
+    spiffe_id: str       # MANDATORY for SPIFFE enrollment, unlike BYOCA
+    dpop_jkt: str | None
+
+
+async def _resolve_trust_bundle(body_override: str | None) -> x509.Certificate:
+    """Find the SPIRE trust bundle, parse it, return as an x509 Certificate.
+
+    Raises 503 when neither a body override nor a persisted config row
+    is available, and 400 when the PEM is syntactically invalid. Kept
+    as a thin helper so a future ``PATCH /v1/admin/spire/bundle`` can
+    wire in without touching the endpoint body.
+    """
+    from mcp_proxy.db import get_config
+    pem = body_override or await get_config("spire_trust_bundle")
+    if not pem:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "SPIRE trust bundle not configured — supply "
+                "`trust_bundle_pem` in the body or set the "
+                "`spire_trust_bundle` proxy_config key"
+            ),
+        )
+    try:
+        return x509.load_pem_x509_certificate(pem.encode())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"trust_bundle_pem is not a valid X.509 PEM: {exc}",
+        ) from exc
+
+
+def _require_spiffe_uri(cert: x509.Certificate) -> str:
+    """SPIFFE enrollment requires an SVID — no URI SAN means the cert
+    is not a valid SVID and the call must fail before we persist anything."""
+    uri = _spiffe_uri_from_cert(cert)
+    if uri is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="svid_pem carries no SPIFFE URI SAN — not a valid SVID",
+        )
+    return uri
+
+
+@router.post(
+    "/spiffe",
+    response_model=SpiffeEnrollResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_require_admin_secret)],
+)
+async def enroll_spiffe(
+    body: SpiffeEnrollRequest,
+    request: Request,
+) -> SpiffeEnrollResponse:
+    """Enroll an agent with a caller-supplied SVID + SPIRE trust bundle.
+
+    Verification:
+      1. Parse ``svid_pem`` + ``svid_key_pem`` as valid PEM.
+      2. Private key's public half matches the SVID.
+      3. SVID has a ``spiffe://`` URI SAN (else the cert is not an SVID).
+      4. SVID signed by the resolved SPIRE trust bundle.
+      5. Optional DPoP jkt pinning identical to BYOCA.
+
+    Persists ``enrollment_method='spiffe'``, ``spiffe_id=<URI>``, and
+    the current SVID bytes under ``cert_pem``. The SVID rotates on the
+    SPIRE schedule — future runtime login via API-key+DPoP doesn't
+    depend on the stored cert remaining live, so the row is forever
+    valid even after the SVID it was enrolled with expires.
+    """
+    mgr = await _require_agent_mgr(request)
+    agent_name = body.agent_name
+    agent_id = f"{mgr.org_id}::{agent_name}"
+
+    # Step 1 — parse SVID.
+    try:
+        svid = x509.load_pem_x509_certificate(body.svid_pem.encode())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"svid_pem is not a valid X.509 PEM: {exc}",
+        ) from exc
+
+    # Step 2 — key matches SVID.
+    if not _key_matches_cert(svid, body.svid_key_pem):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="svid_key_pem does not match svid_pem public key",
+        )
+
+    # Step 3 — SPIFFE URI SAN mandatory for SPIFFE enrollment.
+    spiffe_id = _require_spiffe_uri(svid)
+
+    # Step 4 — signed by SPIRE trust bundle.
+    bundle = await _resolve_trust_bundle(body.trust_bundle_pem)
+    if not _verify_signed_by_ca(svid, bundle):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="svid_pem is not signed by the configured SPIRE trust bundle",
+        )
+
+    # Step 5 — DPoP jkt pinning (optional).
+    dpop_jkt = _validate_dpop_jwk(body.dpop_jwk)
+
+    try:
+        await mgr._store_key_vault(agent_id, body.svid_key_pem)
+    except Exception as exc:  # noqa: BLE001
+        from mcp_proxy.db import set_config
+        _log.info("Vault unavailable for %s (%s) — stashing in proxy_config",
+                  agent_id, exc)
+        await set_config(f"agent_key:{agent_id}", body.svid_key_pem)
+
+    api_key = _api_key_for(agent_name)
+    api_key_hash = _bcrypt_hash(api_key)
+    ts = _now_iso()
+
+    try:
+        async with get_db() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO internal_agents (
+                        agent_id, display_name, capabilities, api_key_hash,
+                        cert_pem, created_at, is_active,
+                        federated, federated_at, federation_revision,
+                        enrollment_method, spiffe_id, enrolled_at, dpop_jkt
+                    ) VALUES (
+                        :aid, :name, :caps, :hash,
+                        :cert, :now, 1,
+                        :federated, NULL, 1,
+                        'spiffe', :spiffe, :now, :dpop_jkt
+                    )
+                    """
+                ),
+                {
+                    "aid": agent_id,
+                    "name": body.display_name or agent_name,
+                    "caps": json.dumps(body.capabilities),
+                    "hash": api_key_hash,
+                    "cert": body.svid_pem,
+                    "now": ts,
+                    "federated": bool(body.federated),
+                    "spiffe": spiffe_id,
+                    "dpop_jkt": dpop_jkt,
+                },
+            )
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"agent {agent_id} already enrolled",
+        ) from exc
+
+    await log_audit(
+        agent_id=agent_id,
+        action="admin.agent_enroll_spiffe",
+        status="ok",
+        detail=(
+            f"org={mgr.org_id} spiffe={spiffe_id} "
+            f"thumbprint={_cert_thumbprint(svid)[:16]} "
+            f"dpop_bound={bool(dpop_jkt)}"
+        ),
+    )
+
+    return SpiffeEnrollResponse(
+        agent_id=agent_id,
+        display_name=body.display_name or agent_name,
+        capabilities=body.capabilities,
+        api_key=api_key,
+        cert_thumbprint=_cert_thumbprint(svid),
+        spiffe_id=spiffe_id,
+        dpop_jkt=dpop_jkt,
+    )
