@@ -1,11 +1,16 @@
-"""ADR-010 Phase 5 — dashboard /proxy/agents/{id}/federate toggle.
+"""Dashboard ``POST /proxy/agents/{id}/reach`` endpoint.
 
-Covers:
-  - POST flips the flag 0 → 1 and bumps federation_revision
-  - Second POST flips back 1 → 0 and bumps the revision again
-  - Unknown agent → 404
-  - Login required (303 to /login without session)
-  - CSRF required (403 without token)
+Migrated from the pre-PR-#224 ``/federate`` toggle tests. Same
+invariants, three-state model instead of binary:
+
+  - POST sets ``reach`` to the requested value, bumps
+    ``federation_revision``, and keeps ``federated`` in sync
+    (= ``reach != 'intra'``) so the publisher loop still has a
+    single bit to look at for PUT/revoke decisions.
+  - Unknown agent → 404.
+  - Invalid ``reach`` value → 400.
+  - Login required.
+  - CSRF token required.
 """
 from __future__ import annotations
 
@@ -34,7 +39,10 @@ async def _spin(tmp_path, monkeypatch, org_id: str = "pd-org"):
 
 
 async def _seed_agent(
-    agent_id: str = "pd-org::alice", federated: bool = False,
+    agent_id: str = "pd-org::alice",
+    *,
+    federated: bool = False,
+    reach: str = "intra",
 ) -> None:
     """Minimal row insert — bypasses the admin API so we can exercise
     just the dashboard flip without the cert-mint machinery."""
@@ -47,11 +55,13 @@ async def _seed_agent(
                 INSERT INTO internal_agents (
                     agent_id, display_name, capabilities, api_key_hash,
                     cert_pem, created_at, is_active,
-                    federated, federation_revision, last_pushed_revision
+                    federated, federation_revision, last_pushed_revision,
+                    reach
                 ) VALUES (
                     :aid, :name, :caps, :hash,
                     NULL, :now, 1,
-                    :fed, 1, 0
+                    :fed, 1, 0,
+                    :reach
                 )
                 """
             ),
@@ -62,6 +72,7 @@ async def _seed_agent(
                 "hash": "$2b$12$placeholder",
                 "now": "2026-04-17T00:00:00+00:00",
                 "fed": 1 if federated else 0,
+                "reach": reach,
             },
         )
 
@@ -94,7 +105,7 @@ async def _fetch_flags(agent_id: str) -> dict:
         row = (await conn.execute(
             text(
                 """
-                SELECT federated, federation_revision
+                SELECT reach, federated, federation_revision
                   FROM internal_agents WHERE agent_id = :aid
                 """
             ),
@@ -105,41 +116,57 @@ async def _fetch_flags(agent_id: str) -> dict:
 
 # ── tests ──────────────────────────────────────────────────────────────
 
-async def test_toggle_flips_and_bumps_revision(tmp_path, monkeypatch):
+
+async def test_reach_set_bumps_revision_and_syncs_federated(tmp_path, monkeypatch):
     app = await _spin(tmp_path, monkeypatch)
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=transport, base_url="http://test") as cli:
-            await _seed_agent()
+            await _seed_agent(reach="intra", federated=False)
             await _login(cli)
             csrf = await _csrf(cli)
 
+            # intra → both: federated must flip to True.
             r = await cli.post(
-                "/proxy/agents/pd-org::alice/federate",
-                data={"csrf_token": csrf},
+                "/proxy/agents/pd-org::alice/reach",
+                data={"csrf_token": csrf, "reach": "both"},
                 follow_redirects=False,
             )
             assert r.status_code == 303, r.text
-
             state = await _fetch_flags("pd-org::alice")
+            assert state["reach"] == "both"
             assert bool(state["federated"]) is True
             assert int(state["federation_revision"]) == 2
 
+            # both → cross: federated stays True, revision bumps again.
             r = await cli.post(
-                "/proxy/agents/pd-org::alice/federate",
-                data={"csrf_token": csrf},
+                "/proxy/agents/pd-org::alice/reach",
+                data={"csrf_token": csrf, "reach": "cross"},
                 follow_redirects=False,
             )
             assert r.status_code == 303
             state = await _fetch_flags("pd-org::alice")
-            assert bool(state["federated"]) is False
+            assert state["reach"] == "cross"
+            assert bool(state["federated"]) is True
             assert int(state["federation_revision"]) == 3
+
+            # cross → intra: federated drops to False.
+            r = await cli.post(
+                "/proxy/agents/pd-org::alice/reach",
+                data={"csrf_token": csrf, "reach": "intra"},
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            state = await _fetch_flags("pd-org::alice")
+            assert state["reach"] == "intra"
+            assert bool(state["federated"]) is False
+            assert int(state["federation_revision"]) == 4
 
     from mcp_proxy.config import get_settings
     get_settings.cache_clear()
 
 
-async def test_toggle_unknown_agent_returns_404(tmp_path, monkeypatch):
+async def test_reach_unknown_agent_returns_404(tmp_path, monkeypatch):
     app = await _spin(tmp_path, monkeypatch)
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
@@ -147,8 +174,8 @@ async def test_toggle_unknown_agent_returns_404(tmp_path, monkeypatch):
             await _login(cli)
             csrf = await _csrf(cli)
             r = await cli.post(
-                "/proxy/agents/pd-org::ghost/federate",
-                data={"csrf_token": csrf},
+                "/proxy/agents/pd-org::ghost/reach",
+                data={"csrf_token": csrf, "reach": "both"},
                 follow_redirects=False,
             )
             assert r.status_code == 404
@@ -157,7 +184,26 @@ async def test_toggle_unknown_agent_returns_404(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
 
-async def test_toggle_requires_login(tmp_path, monkeypatch):
+async def test_reach_invalid_value_returns_400(tmp_path, monkeypatch):
+    app = await _spin(tmp_path, monkeypatch)
+    transport = ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as cli:
+            await _seed_agent()
+            await _login(cli)
+            csrf = await _csrf(cli)
+            r = await cli.post(
+                "/proxy/agents/pd-org::alice/reach",
+                data={"csrf_token": csrf, "reach": "bogus"},
+                follow_redirects=False,
+            )
+            assert r.status_code == 400, r.text
+
+    from mcp_proxy.config import get_settings
+    get_settings.cache_clear()
+
+
+async def test_reach_requires_login(tmp_path, monkeypatch):
     app = await _spin(tmp_path, monkeypatch)
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
@@ -165,7 +211,8 @@ async def test_toggle_requires_login(tmp_path, monkeypatch):
             await _seed_agent()
             # No login — should redirect to /proxy/login.
             r = await cli.post(
-                "/proxy/agents/pd-org::alice/federate",
+                "/proxy/agents/pd-org::alice/reach",
+                data={"reach": "both"},
                 follow_redirects=False,
             )
             assert r.status_code in (302, 303, 401, 403)
@@ -174,7 +221,7 @@ async def test_toggle_requires_login(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
 
-async def test_toggle_requires_csrf(tmp_path, monkeypatch):
+async def test_reach_requires_csrf(tmp_path, monkeypatch):
     app = await _spin(tmp_path, monkeypatch)
     transport = ASGITransport(app=app)
     async with app.router.lifespan_context(app):
@@ -183,7 +230,8 @@ async def test_toggle_requires_csrf(tmp_path, monkeypatch):
             await _login(cli)
             # No csrf_token in body.
             r = await cli.post(
-                "/proxy/agents/pd-org::alice/federate",
+                "/proxy/agents/pd-org::alice/reach",
+                data={"reach": "both"},
                 follow_redirects=False,
             )
             assert r.status_code == 403

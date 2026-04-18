@@ -938,48 +938,6 @@ async def agents_page(request: Request):
     ))
 
 
-def _parse_open_orgs(raw: str | None) -> set[str]:
-    if not raw:
-        return set()
-    return {p.strip() for p in raw.split(",") if p.strip()}
-
-
-async def _load_federated_orgs(exclude_org: str = "") -> list[dict]:
-    """Aggregate cached federated agents by org_id.
-
-    Returns a list of dicts: {org_id, display_name, agent_count, last_updated_at}.
-    Display name falls back to the org_id when the cache has no display
-    name cached (Phase 4b only stores agent-level names).
-    """
-    from sqlalchemy import text as _text
-
-    from mcp_proxy.db import get_db as _get_db
-
-    try:
-        async with _get_db() as conn:
-            result = await conn.execute(
-                _text(
-                    "SELECT org_id, COUNT(*) AS agent_count, "
-                    "MAX(updated_at) AS last_updated_at "
-                    "FROM cached_federated_agents "
-                    "WHERE revoked = 0 AND org_id != :own "
-                    "GROUP BY org_id ORDER BY org_id"
-                ),
-                {"own": exclude_org},
-            )
-            rows = result.mappings().all()
-    except Exception:
-        return []
-
-    return [
-        {
-            "org_id": r["org_id"],
-            "display_name": r["org_id"],
-            "agent_count": int(r["agent_count"] or 0),
-            "last_updated_at": r["last_updated_at"],
-        }
-        for r in rows
-    ]
 
 
 @router.post("/agents/create")
@@ -1235,49 +1193,6 @@ CULLIS_BROKER_URL={broker_url}
             "Content-Disposition": f'attachment; filename="{agent_name}.env"'
         },
     )
-
-
-@router.post("/agents/{agent_id:path}/federate")
-async def agent_toggle_federate(request: Request, agent_id: str):
-    """ADR-010 Phase 5 — flip ``internal_agents.federated`` from the
-    dashboard. Bumps ``federation_revision`` so the publisher
-    (Phase 3) picks up the change on its next tick and either pushes
-    (0→1) or revokes (1→0) on the Court."""
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
-    if not await verify_csrf(request, session):
-        raise HTTPException(status_code=403, detail="Invalid CSRF token")
-
-    from mcp_proxy.db import get_agent, get_db, log_audit
-    from sqlalchemy import text as _text
-
-    agent = await get_agent(agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-
-    new_flag = not bool(agent.get("federated"))
-    async with get_db() as conn:
-        await conn.execute(
-            _text(
-                """
-                UPDATE internal_agents
-                   SET federated = :fed,
-                       federation_revision = federation_revision + 1
-                 WHERE agent_id = :aid
-                """
-            ),
-            {"fed": bool(new_flag), "aid": agent_id},
-        )
-
-    await log_audit(
-        agent_id=agent_id,
-        action="agent.federated_patched",
-        status="success",
-        detail=f"source=dashboard federated={new_flag}",
-    )
-
-    return RedirectResponse(url="/proxy/agents", status_code=303)
 
 
 _VALID_REACH = {"intra", "cross", "both"}
@@ -2825,52 +2740,9 @@ async def _load_display_name() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Federated-agents partial (accordion expansion)
+# Federated-agents partial (accordion expansion) — REMOVED.
+# The ``/proxy/agents`` accordion that consumed this partial was
+# deleted in the reach-UX refactor (PR #224). Peer-org discovery
+# now lives on ``/proxy/network``. The helper ``_federated_agents_rows``
+# template was removed alongside.
 # ─────────────────────────────────────────────────────────────────────────────
-
-@router.get("/federated/{org_id}", response_class=HTMLResponse)
-async def federated_org_agents(request: Request, org_id: str):
-    """HTMX partial: list the cached federated agents for a given peer org.
-
-    Rendered inside the accordion row when the user expands it. Returns
-    an empty fragment (never an error page) on missing cache or unknown
-    org so the accordion degrades gracefully.
-    """
-    session = get_session(request)
-    if not session.logged_in:
-        return HTMLResponse("", status_code=401)
-
-    from sqlalchemy import text as _text
-    from mcp_proxy.db import get_db as _get_db
-
-    rows: list[dict] = []
-    try:
-        async with _get_db() as conn:
-            result = await conn.execute(
-                _text(
-                    "SELECT agent_id, display_name, capabilities, revoked, updated_at "
-                    "FROM cached_federated_agents WHERE org_id = :org "
-                    "ORDER BY agent_id"
-                ),
-                {"org": org_id},
-            )
-            for r in result.mappings().all():
-                try:
-                    caps = json.loads(r["capabilities"] or "[]")
-                except Exception:
-                    caps = []
-                rows.append({
-                    "agent_id": r["agent_id"],
-                    "display_name": r["display_name"] or r["agent_id"],
-                    "capabilities": caps,
-                    "revoked": bool(r["revoked"]),
-                    "updated_at": r["updated_at"],
-                })
-    except Exception:
-        rows = []
-
-    return templates.TemplateResponse("_federated_agents_rows.html", {
-        "request": request,
-        "agents": rows,
-        "org_id": org_id,
-    })
