@@ -1,7 +1,9 @@
 import time
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import TokenRequest, TokenResponse, TokenPayload
@@ -25,10 +27,33 @@ from app.telemetry_metrics import AUTH_SUCCESS_COUNTER, AUTH_DENY_COUNTER, AUTH_
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# ADR-011 Phase 3 (deprecation Phase A) — ``POST /auth/token`` is the
+# legacy SPIFFE/BYOCA direct-login path. Under the unified enrollment
+# model agents authenticate to their Mastio with API-key + DPoP, and
+# never hit this endpoint. We emit RFC 8594 ``Deprecation`` + ``Sunset``
+# headers on every 200 and log every hit to the audit stream so operators
+# can track migration progress. Hard-off (410) lands in Phase C after
+# grace.
+_DEPRECATION_GRACE_DAYS = 90
+
+
+def _sunset_header_value() -> str:
+    """RFC 8594 ``Sunset`` — HTTP-date 90 days from now.
+
+    Computed per-request rather than at import time so a long-running
+    server keeps showing a valid forward-looking date as clients poll.
+    The exact cutoff is coordinated with a CHANGELOG entry and a config
+    flag (``CULLIS_ALLOW_LEGACY_AUTH_LOGIN``) before Phase B.
+    """
+    sunset = datetime.now(timezone.utc) + timedelta(days=_DEPRECATION_GRACE_DAYS)
+    return format_datetime(sunset, usegmt=True)
+
+
 @router.post("/token", response_model=TokenResponse)
 async def issue_token(
     request: Request,
     body: TokenRequest,
+    response: Response,
     dpop: str = Header(alias="DPoP"),
     mastio_signature: str | None = Header(default=None, alias=COUNTERSIG_HEADER),
     db: AsyncSession = Depends(get_db),
@@ -42,6 +67,12 @@ async def issue_token(
 
     The first request without a nonce will receive a 401 with DPoP-Nonce header.
     The client must retry with the nonce included in the DPoP proof.
+
+    ADR-011 status: **legacy**. Every successful response carries
+    ``Deprecation: true`` + ``Sunset`` headers. Under the unified
+    enrollment model the agent talks to its Mastio with API-key+DPoP;
+    this endpoint is kept for migration of existing SPIFFE/BYOCA
+    direct-login deployments and will return 410 Gone at sunset.
     """
     t0 = time.monotonic()
     with tracer.start_as_current_span("auth.issue_token") as span:
@@ -150,9 +181,38 @@ async def issue_token(
         AUTH_SUCCESS_COUNTER.add(1, {"org_id": org_id})
         AUTH_DURATION_HISTOGRAM.record((time.monotonic() - t0) * 1000)
 
+        # ADR-011 Phase 3 Phase A — fold legacy-path metadata into the
+        # single ``auth.token_issued`` event so the Court emits exactly
+        # one audit row per hit (doubling the chain-lock cost was enough
+        # to flake EC CI under load). Dashboards filter on
+        # ``details.deprecated`` to surface the migration signal; the
+        # ``auth_mode`` + ``migration_endpoint`` bits point the operator
+        # at the correct re-enrollment path for this caller.
         await log_event(
             db, "auth.token_issued", "ok",
             agent_id=agent_id, org_id=org_id,
+            details={
+                "deprecated": True,
+                "auth_mode": "spiffe" if svid_mode else "byoca",
+                "sunset_days": _DEPRECATION_GRACE_DAYS,
+                "migration_endpoint": (
+                    "/v1/admin/agents/enroll/spiffe" if svid_mode
+                    else "/v1/admin/agents/enroll/byoca"
+                ),
+            },
+        )
+
+        # RFC 8594 — advertise deprecation so SDKs emit warnings and
+        # operators see the signal in telemetry. ``Deprecation: true``
+        # (no sunset date implied) + explicit ``Sunset`` HTTP-date.
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = _sunset_header_value()
+        # Link relation ``sunset`` pointing to the migration doc (ADR-011
+        # §4.2). Filled opportunistically — matches RFC 8288 shape so any
+        # client that consumes Link can follow it programmatically.
+        response.headers["Link"] = (
+            '<https://cullis.io/docs/migration/from-direct-login>; '
+            'rel="sunset"; type="text/html"'
         )
 
         return TokenResponse(access_token=token, expires_in=expires_in)
