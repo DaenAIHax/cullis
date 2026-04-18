@@ -24,16 +24,45 @@ _header() { echo -e "\n${BOLD}${CYAN}═══ $1 ═══${RESET}\n"; }
 _ok()     { echo -e "  ${GREEN}✓${RESET} $1"; }
 _note()   { echo -e "  ${YELLOW}•${RESET} $1"; }
 
+_court_bootstrap_token() {
+    # One-shot token generated at broker startup (F-B-4). Used only on
+    # the very first /dashboard/setup visit to pick the admin password.
+    # Empty once consumed — that means an admin has already set the password.
+    docker compose exec -T broker \
+        sh -c 'cat /app/certs/.admin_bootstrap_token 2>/dev/null' \
+        2>/dev/null | tr -d '[:space:]'
+}
+
 _print_dashboards() {
     _header "Dashboard URLs"
-    echo -e "  ${GREEN}Court (broker)${RESET}      http://localhost:8000/dashboard/login"
-    echo -e "                       admin / sandbox-admin-secret-change-me"
+    echo -e "  ${GREEN}Court (broker)${RESET}      http://localhost:8000/dashboard/setup"
+    local token
+    token=$(_court_bootstrap_token || true)
+    if [ -n "$token" ]; then
+        echo -e "                       first visit → paste this bootstrap token and pick your password:"
+        echo -e "                       ${BOLD}${token}${RESET}"
+    else
+        echo -e "                       (admin password already set — login at /dashboard/login)"
+    fi
     echo -e "  ${GREEN}Mastio A (proxy-a)${RESET}  http://localhost:9100/proxy"
     echo -e "                       admin secret: sandbox-proxy-admin-a"
     echo -e "  ${GREEN}Mastio B (proxy-b)${RESET}  http://localhost:9200/proxy"
     echo -e "                       admin secret: sandbox-proxy-admin-b"
     echo -e "  ${GREEN}Keycloak A${RESET}          http://localhost:8180 (alice / alice-sandbox)"
     echo -e "  ${GREEN}Keycloak B${RESET}          http://localhost:8280 (bob / bob-sandbox)"
+}
+
+_print_scenarios() {
+    _header "Try it — send messages between agents"
+    echo -e "  ${GREEN}./demo.sh oneshot-a-to-b${RESET}   cross-org: orga::agent-a → orgb::agent-b (via Court)"
+    echo -e "  ${GREEN}./demo.sh oneshot-b-to-a${RESET}   cross-org: orgb::agent-b → orga::agent-a (via Court)"
+    echo -e "  ${GREEN}./demo.sh mcp-catalog${RESET}      intra-org MCP: orga::agent-a → get_catalog"
+    echo -e "  ${GREEN}./demo.sh mcp-inventory${RESET}    intra-org MCP: orgb::agent-b → check_inventory"
+}
+
+_print_teardown() {
+    _header "Teardown"
+    echo -e "  ${GREEN}./demo.sh down${RESET}             stop everything + drop volumes"
 }
 
 case "${1:-help}" in
@@ -48,6 +77,7 @@ case "${1:-help}" in
     _header "Services Running"
     docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
     _print_dashboards
+    _print_teardown
     echo ""
     _ok "Sandbox ready. Run ${BOLD}demo.sh help${RESET} to see commands."
     ;;
@@ -61,6 +91,8 @@ case "${1:-help}" in
     _header "Services Running"
     docker compose --profile full ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
     _print_dashboards
+    _print_scenarios
+    _print_teardown
     echo ""
     _ok "Full sandbox ready."
     ;;
@@ -138,7 +170,7 @@ Lifecycle:
 Inspection:
   status          List services + health.
   logs [svc]      Tail compose logs (default: --tail=50).
-  dashboard       Print dashboard URLs + admin secrets.
+  dashboard       Print dashboard URLs + Court bootstrap token (first login).
   bootstrap-logs  Replay the verbose Phase 1-7 bootstrap output.
 
 Scenarios (require 'full' mode — orga workloads must be running):

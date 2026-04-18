@@ -9,24 +9,27 @@ agent is bound to (ADR-007 Phase 1). This driver drives one
 cross-org MCP has to go through A2A message wrapping, out of scope
 for this walkthrough.
 
+Auth is the ADR-011 Phase 4 unified path: the agent reuses the
+API-key + DPoP credentials that ``bootstrap-mastio`` enrolled under
+``/state/{org}/agents/{name}/``.
+
 Env:
     BROKER_URL          proxy reverse-proxy URL (= the proxy the agent lives on)
     ORG_ID              this agent's org
     AGENT_NAME          this agent's short name
-    AGENT_AUTH          'spire' (default) | 'byoca'
     MCP_TOOL_NAME       e.g. 'get_catalog' or 'check_inventory' — required
     MCP_TOOL_ARGS       JSON-encoded arguments object (default: '{}')
-    SPIFFE_ENDPOINT_SOCKET  (spire mode only)
-    CERT_PATH, KEY_PATH     (byoca mode only)
+    IDENTITY_ROOT       where bootstrap-mastio wrote credentials (default /state)
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
-from pathlib import Path
 
 from cullis_sdk import CullisClient
+
+from _identity import load_enrolled_client
 
 
 RESET = "\033[0m"
@@ -51,32 +54,6 @@ def _info(msg: str) -> None:
 
 def _fail(msg: str) -> None:
     print(f"  {YELLOW}✗{RESET} {msg}", flush=True)
-
-
-def _auth() -> CullisClient:
-    broker = os.environ["BROKER_URL"]
-    org_id = os.environ["ORG_ID"]
-    agent_name = os.environ["AGENT_NAME"]
-    mode = os.environ.get("AGENT_AUTH", "spire").lower()
-
-    if mode == "spire":
-        socket = os.environ.get(
-            "SPIFFE_ENDPOINT_SOCKET", "/run/spire/sockets/agent.sock",
-        )
-        _info(f"authenticating via SPIRE workload API at {socket}")
-        return CullisClient.from_spiffe_workload_api(
-            broker, org_id=org_id, socket_path=socket,
-        )
-
-    if mode == "byoca":
-        cert = Path(os.environ["CERT_PATH"]).read_text()
-        key = Path(os.environ["KEY_PATH"]).read_text()
-        _info(f"authenticating via BYOCA (cert={os.environ['CERT_PATH']})")
-        client = CullisClient(broker, verify_tls=False)
-        client.login_from_pem(f"{org_id}::{agent_name}", org_id, cert, key)
-        return client
-
-    raise SystemExit(f"unknown AGENT_AUTH: {mode}")
 
 
 def _rpc(client: CullisClient, method: str, params: dict | None = None) -> dict:
@@ -111,8 +88,10 @@ def main() -> int:
         _fail(f"MCP_TOOL_ARGS is not valid JSON: {exc}")
         return 2
 
+    broker = os.environ["BROKER_URL"].rstrip("/")
     org_id = os.environ["ORG_ID"]
     agent_name = os.environ["AGENT_NAME"]
+    identity_root = os.environ.get("IDENTITY_ROOT", "/state")
     sender = f"{org_id}::{agent_name}"
 
     print(
@@ -121,9 +100,16 @@ def main() -> int:
         flush=True,
     )
 
-    _step(1, "Authenticate through the local Mastio")
-    client = _auth()
-    _ok(f"logged in as {sender}")
+    _step(1, "Load enrolled identity and authenticate to the local Mastio")
+    _info(
+        f"reading api-key + dpop.jwk from {identity_root}/{org_id}/agents/{agent_name}/"
+    )
+    try:
+        client = load_enrolled_client(broker, org_id, agent_name, identity_root)
+    except Exception as exc:
+        _fail(f"auth failed: {exc!r}")
+        return 1
+    _ok(f"ready as {sender}")
 
     _step(2, "Discover available tools (MCP tools/list)")
     try:
