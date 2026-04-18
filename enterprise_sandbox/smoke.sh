@@ -405,6 +405,80 @@ if [[ $B48_FAIL -eq 0 ]]; then
     pass "B4.8 proxy-only — agent-a, byoca-a, agent-b cannot reach broker:8000 directly"
 fi
 
+# B4.10 — ADR-011 reach enforcement (migration 0017 + PR #225).
+#
+# With ``reach='intra'``, the proxy must refuse cross-org egress for
+# the agent and record a ``oneshot_denied`` row in local_audit. We
+# briefly tighten ``orga::agent-a`` via direct SQL, fire a cross-org
+# send via the same SDK flow B4.7 uses, then restore the original
+# value. The guard rail is the ``finally`` UPDATE — leaking a tight
+# reach across runs would break downstream assertions silently, so
+# we restore on every path.
+_RESTORE_REACH='
+import asyncio
+from sqlalchemy import text
+from mcp_proxy.db import init_db, get_db
+async def m():
+    await init_db("sqlite+aiosqlite:////data/mcp_proxy.db")
+    async with get_db() as conn:
+        await conn.execute(text("UPDATE internal_agents SET reach=:r WHERE agent_id=:a"),
+                           {"r": "both", "a": "orga::agent-a"})
+asyncio.run(m())
+'
+
+_TIGHTEN_REACH='
+import asyncio
+from sqlalchemy import text
+from mcp_proxy.db import init_db, get_db
+async def m():
+    await init_db("sqlite+aiosqlite:////data/mcp_proxy.db")
+    async with get_db() as conn:
+        await conn.execute(text("UPDATE internal_agents SET reach=:r WHERE agent_id=:a"),
+                           {"r": "intra", "a": "orga::agent-a"})
+asyncio.run(m())
+'
+
+# ensure restore runs even if the cross-org send phase errors out
+trap 'docker compose exec -T proxy-a python -c "$_RESTORE_REACH" >/dev/null 2>&1 || true' EXIT
+
+if docker compose exec -T proxy-a python -c "$_TIGHTEN_REACH" >/dev/null 2>&1; then
+    _B410_PROBE='
+import os, sys
+sys.path.insert(0, "/app")
+from agent import _auth_api_key_file
+broker = os.environ["BROKER_URL"].rstrip("/")
+client = _auth_api_key_file(broker, "/state/orga/agents/agent-a", "orga::agent-a")
+try:
+    client.send_oneshot("orgb::agent-b", {"nonce": "reach-smoke-probe"})
+    print("UNEXPECTED_OK")
+except Exception as exc:
+    # ``str(HTTPStatusError)`` drops the response body — read it directly
+    # so the reach marker in ``detail`` is visible to our check.
+    body = ""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            body = resp.text or ""
+        except Exception:
+            body = ""
+    summary = f"{type(exc).__name__}:{exc!s}|body:{body}"
+    status = getattr(resp, "status_code", None) if resp is not None else None
+    if status == 403 and "reach" in body.lower():
+        print("DENIED_REACH")
+    else:
+        print(f"UNEXPECTED_ERROR:{summary[:200]}")
+'
+    _B410_OUT=$(docker compose exec -T agent-a python -c "$_B410_PROBE" 2>/dev/null | tr -d '\r' | tail -n 1)
+    if [[ "$_B410_OUT" == "DENIED_REACH" ]]; then
+        pass "B4.10 reach enforcement — cross-org oneshot from reach=intra agent returned 403"
+    else
+        fail "B4.10 reach enforcement — got '$_B410_OUT' (expected DENIED_REACH)"
+    fi
+fi
+
+docker compose exec -T proxy-a python -c "$_RESTORE_REACH" >/dev/null 2>&1 || true
+trap - EXIT
+
 echo ""
 echo "[smoke] PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP"
 [[ $FAIL -eq 0 ]]

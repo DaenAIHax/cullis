@@ -331,54 +331,10 @@ async def test_login_page_hides_sso_button_when_unconfigured(proxy_app):
     assert "Sign in with SSO" not in resp.text
 
 
-# ─────────────────────────────────────────────────────────────────────
-# Federated agents accordion + partial
-# ─────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_federated_partial_requires_login(proxy_app):
-    _, client = proxy_app
-    resp = await client.get("/proxy/federated/peer-org")
-    assert resp.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_federated_partial_lists_cached_agents(proxy_app):
-    _, client = proxy_app
-    # Seed the federation cache directly (as the subscriber would)
-    from sqlalchemy import text
-
-    from mcp_proxy.db import get_db
-    async with get_db() as conn:
-        for i, cap in enumerate(["cap.a", "cap.b"]):
-            await conn.execute(
-                text(
-                    "INSERT INTO cached_federated_agents "
-                    "(agent_id, org_id, display_name, capabilities, revoked, updated_at) "
-                    "VALUES (:aid, 'peer', :name, :caps, 0, '2026-04-14T00:00:00Z')"
-                ),
-                {
-                    "aid": f"peer::agent-{i}",
-                    "name": f"Peer Agent {i}",
-                    "caps": _json.dumps([cap]),
-                },
-            )
-
-    name, value = _admin_cookie()
-    client.cookies.set(name, value)
-    resp = await client.get("/proxy/federated/peer")
-    assert resp.status_code == 200
-    body = resp.text
-    assert "peer::agent-0" in body
-    assert "peer::agent-1" in body
-
-
-# NOTE: the former ``test_agents_page_shows_federated_section`` has been
-# retired. That test exercised the Peer Agents accordion that used to
-# live on ``/proxy/agents``; the accordion has since been removed —
-# peer-org discovery moved to ``/proxy/network``, and ``/proxy/agents``
-# is now scoped to "my agents" only (split into Federated / Local by
-# ``reach``). The ``/proxy/federated/{org}`` partial endpoint itself
-# is kept (see ``test_federated_partial_*`` above), but it is no
-# longer rendered from the Agents page.
+# NOTE: the former ``test_federated_partial_*`` and
+# ``test_agents_page_shows_federated_section`` tests have been retired.
+# Both exercised the Peer Agents accordion on ``/proxy/agents`` plus its
+# HTMX partial at ``/proxy/federated/{org}``. Both the accordion and
+# the partial endpoint were removed in this PR — peer-org discovery
+# now lives exclusively on ``/proxy/network``. See
+# ``project_reach_enforcement`` + the PR description for the migration.
