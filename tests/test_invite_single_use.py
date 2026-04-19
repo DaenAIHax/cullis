@@ -26,7 +26,6 @@ from app.onboarding.invite_store import (
     INVITE_TYPE_ATTACH_CA,
     INVITE_TYPE_ORG_JOIN,
     InviteToken,
-    _hash_token,
     create_invite,
     validate_and_consume,
 )
