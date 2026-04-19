@@ -35,6 +35,21 @@ _log = logging.getLogger(__name__)
 _ACCENT = (0, 229, 199, 255)
 
 
+def _build_tray_title(profile_name: str) -> str:
+    """Compose the tooltip / WM_NAME for the tray icon.
+
+    The title MUST round-trip through latin-1: pystray on X11 writes
+    it into WM_NAME via python-xlib, which uses the ICCCM STRING
+    encoding (latin-1 only). Non-latin-1 characters (em-dash, curly
+    quotes, emoji, ...) crash with UnicodeEncodeError at icon setup.
+    ASCII-only keeps Linux Xorg working out of the box; macOS and
+    Windows tolerate unicode but we don't gain anything by branching.
+    """
+    if profile_name:
+        return f"Cullis Connector - {profile_name}"
+    return "Cullis Connector"
+
+
 def _build_tray_image(size: int = 64) -> "PILImage":
     """Draw the portcullis glyph at the requested pixel size.
 
@@ -297,10 +312,7 @@ def run_desktop_app(
     icon = pystray.Icon(
         "cullis",
         icon=_build_tray_image(64),
-        title=(
-            f"Cullis Connector — {cfg.profile_name}"
-            if cfg.profile_name else "Cullis Connector"
-        ),
+        title=_build_tray_title(cfg.profile_name or ""),
     )
 
     def _quit_all() -> None:

@@ -26,6 +26,28 @@ def test_build_tray_image_produces_rgba_at_requested_size():
     assert img.mode == "RGBA"
 
 
+def test_tray_title_round_trips_through_latin1():
+    """Regression for the UnicodeEncodeError crash we hit on fresh
+    Linux VMs: pystray on X11 writes WM_NAME via python-xlib's
+    latin-1 codec, so the title must not contain em-dashes, curly
+    quotes, emoji, or any other char outside latin-1 (Unicode <= U+00FF)."""
+    from cullis_connector.desktop_app import _build_tray_title
+
+    for name in ("", "default", "north", "org-1"):
+        title = _build_tray_title(name)
+        # This raises on the bad path.
+        title.encode("latin-1")
+        # And specifically not the em-dash (U+2014) we used to ship.
+        assert "\u2014" not in title
+
+
+def test_tray_title_includes_profile_name_when_present():
+    from cullis_connector.desktop_app import _build_tray_title
+
+    assert _build_tray_title("north") == "Cullis Connector - north"
+    assert _build_tray_title("") == "Cullis Connector"
+
+
 def test_build_tray_image_scales_cleanly():
     from cullis_connector.desktop_app import _build_tray_image
 

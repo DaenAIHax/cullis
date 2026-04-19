@@ -232,13 +232,19 @@ _KNOWN_SUBCOMMANDS = frozenset({
     "install-mcp",
     "install-autostart",
     "dashboard",
+    "desktop",
 })
 
 # Shared flags are parsed by the subparser that owns the chosen command.
 # When the caller wrote them *before* the subcommand (the pre-fix layout
 # some users already have persisted in MCP configs), we relocate them so
 # argparse finds them on the right subparser.
-_SHARED_VALUE_FLAGS = frozenset({"--site-url", "--config-dir", "--log-level"})
+_SHARED_VALUE_FLAGS = frozenset({
+    "--site-url",
+    "--config-dir",
+    "--log-level",
+    "--profile",
+})
 _SHARED_STORE_FLAGS = frozenset({"--no-verify-tls"})
 
 
