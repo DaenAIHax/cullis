@@ -95,20 +95,59 @@ def _spawn_uvicorn(
     return thread
 
 
+def _build_profiles_submenu(
+    profiles: list[str],
+    active: str,
+    open_profiles_page: Callable[[], None],
+):
+    """Submenu listing every profile on the machine with a check next
+    to the one currently loaded. Clicking a non-active profile opens
+    the dashboard `/profiles` page so the user sees the exact
+    relaunch command — runtime switching is intentionally out of
+    scope for M3.3 (a restart is required to pick up a different
+    identity on this process)."""
+    import pystray
+
+    if not profiles:
+        return None
+
+    items: list = []
+    for name in profiles:
+        checked_name = name
+        items.append(
+            pystray.MenuItem(
+                name,
+                lambda icon, item, n=checked_name: open_profiles_page(),
+                checked=lambda item, n=checked_name: n == active,
+                radio=True,
+            )
+        )
+    items.append(pystray.Menu.SEPARATOR)
+    items.append(
+        pystray.MenuItem(
+            "Manage profiles…",
+            lambda icon, item: open_profiles_page(),
+        )
+    )
+    return pystray.Menu(*items)
+
+
 def _build_menu(
     open_dashboard: Callable[[], None],
     open_inbox: Callable[[], None],
     on_quit: Callable[[], None],
+    *,
+    profiles_submenu=None,
 ):
-    """Minimal tray menu: Open Dashboard / Open Inbox / Quit.
+    """Tray menu: Open Dashboard / Open Inbox / [Profiles ▸] / Quit.
 
-    Pause-notifications and profile switcher are deliberate follow-ups
-    (M3.1b and M3.3 in the roadmap) — M3.1 keeps the surface small to
-    make the first packaged binary easy to validate.
+    Pause-notifications remains a deliberate follow-up (M3.1b) — the
+    top-level surface stays small so the first packaged binary is
+    easy to validate across OSes.
     """
     import pystray
 
-    return pystray.Menu(
+    items = [
         pystray.MenuItem(
             "Open Dashboard",
             lambda icon, item: open_dashboard(),
@@ -118,12 +157,19 @@ def _build_menu(
             "Open Inbox",
             lambda icon, item: open_inbox(),
         ),
-        pystray.Menu.SEPARATOR,
+    ]
+    if profiles_submenu is not None:
+        items.append(
+            pystray.MenuItem("Profiles", profiles_submenu)
+        )
+    items.append(pystray.Menu.SEPARATOR)
+    items.append(
         pystray.MenuItem(
             "Quit",
             lambda icon, item: on_quit(),
-        ),
+        )
     )
+    return pystray.Menu(*items)
 
 
 def run_desktop_app(
@@ -177,19 +223,41 @@ def run_desktop_app(
         window.load_url(f"{base_url}/inbox")
         window.show()
 
+    def _open_profiles() -> None:
+        window.load_url(f"{base_url}/profiles")
+        window.show()
+
     import pystray
+
+    # Enumerate profiles on disk so the tray can surface them. We do
+    # this at startup only — a future M3.3c can refresh on demand.
+    from cullis_connector.profile import config_root_from_dir, list_profiles
+
+    root = config_root_from_dir(cfg.config_dir, cfg.profile_name)
+    profiles = list_profiles(root)
+    profiles_submenu = _build_profiles_submenu(
+        profiles, cfg.profile_name or "", _open_profiles
+    )
 
     icon = pystray.Icon(
         "cullis",
         icon=_build_tray_image(64),
-        title="Cullis Connector",
+        title=(
+            f"Cullis Connector — {cfg.profile_name}"
+            if cfg.profile_name else "Cullis Connector"
+        ),
     )
 
     def _quit_all() -> None:
         icon.stop()
         window.destroy()
 
-    icon.menu = _build_menu(_open_dashboard, _open_inbox, _quit_all)
+    icon.menu = _build_menu(
+        _open_dashboard,
+        _open_inbox,
+        _quit_all,
+        profiles_submenu=profiles_submenu,
+    )
     icon.run_detached()
 
     _log.info(

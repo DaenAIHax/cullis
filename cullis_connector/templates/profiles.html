@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Profiles{% endblock %}
+{% block content %}
+
+<section class="panel">
+    <div class="panel-head">
+        <div class="panel-eyebrow">Identities on this machine</div>
+        <h1 class="panel-title"><em>Profiles</em></h1>
+        <p class="panel-sub">
+            Each profile is an isolated enrollment with its own certificate
+            and config. Use distinct profiles when you need more than one
+            identity on the same workstation — e.g. a personal bot and a
+            work bot, or a staging and production pair.
+        </p>
+    </div>
+
+    {% if profiles %}
+    <div class="profile-list">
+        {% for p in profiles %}
+        <div class="profile-card {% if p.name == active_profile %}active{% endif %}">
+            <div class="profile-card-head">
+                <span class="profile-name">{{ p.name }}</span>
+                {% if p.name == active_profile %}
+                <span class="profile-badge">Active</span>
+                {% endif %}
+            </div>
+            <div class="profile-meta">
+                <code class="profile-path">{{ p.path }}</code>
+                {% if p.enrolled %}
+                <span class="profile-enrolled-ok">enrolled</span>
+                {% else %}
+                <span class="profile-enrolled-pending">not yet enrolled</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="profile-empty">
+        No profiles found. Pick a name below to create your first one.
+    </p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <div class="panel-head">
+        <div class="panel-eyebrow">Add a new profile</div>
+        <h1 class="panel-title">Create <em>another identity</em></h1>
+        <p class="panel-sub">
+            Pick a name (letters, digits, dashes or underscores — up to
+            63 chars). The connector doesn't switch profiles at runtime,
+            so after creating one you'll relaunch with
+            <code>--profile &lt;name&gt;</code> to enrol it. The snippet
+            below already has everything filled in.
+        </p>
+    </div>
+
+    <form class="profile-create-form" hx-post="/profiles/create" hx-target="#profile-create-result" hx-swap="innerHTML">
+        <input type="text" name="name" placeholder="north" maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,62}" required>
+        <button type="submit" class="btn-primary">Generate instructions</button>
+    </form>
+
+    <div id="profile-create-result" class="profile-create-result"></div>
+</section>
+
+{% endblock %}

@@ -71,6 +71,23 @@ def has_legacy_layout(root: Path) -> bool:
     return True
 
 
+def config_root_from_dir(config_dir: Path, profile_name: str) -> Path:
+    """Walk back from an active config_dir to the ``~/.cullis/`` root.
+
+    When a profile is active ``config_dir`` ends in
+    ``<root>/profiles/<name>`` so the root is two levels up.
+    Otherwise the caller is either on a legacy flat layout (in which
+    case the config_dir IS the root and ``list_profiles`` will report
+    the pseudo-``default`` entry) or on an explicit ``--config-dir``
+    override, where we can't reliably locate any profiles/ sibling —
+    returning the override itself is the least surprising behaviour
+    (``list_profiles`` will simply find nothing).
+    """
+    if profile_name:
+        return config_dir.parent.parent
+    return config_dir
+
+
 def list_profiles(root: Path) -> list[str]:
     """Return the profile names known under ``root``.
 

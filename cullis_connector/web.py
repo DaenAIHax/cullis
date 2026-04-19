@@ -19,6 +19,7 @@ until the server has approved.
 from __future__ import annotations
 
 import contextlib
+import html
 import logging
 import os
 import secrets
@@ -217,6 +218,12 @@ def build_app(config: ConnectorConfig) -> FastAPI:
     app.state.connector_config = config
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    # Expose the active profile name to every template (topbar shows
+    # "Profile · north" when non-empty). Legacy flat layout and
+    # explicit --config-dir override keep the empty-string default so
+    # the template falls back to the plain "Local Edge · Your Machine"
+    # sub-label.
+    templates.env.globals["active_profile"] = config.profile_name or ""
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     # ── Routes ────────────────────────────────────────────────────────────
@@ -763,6 +770,95 @@ def build_app(config: ConnectorConfig) -> FastAPI:
         except Exception as exc:
             _log.warning("mcp_bind_self failed: %s", exc)
         return RedirectResponse("/mcp", status_code=303)
+
+    @app.get("/profiles", response_class=HTMLResponse)
+    def profiles_get(request: Request) -> Response:
+        """List the profiles on this workstation.
+
+        The page is informational — runtime switching is out of scope
+        for M3.3b. The bottom of the page turns a chosen profile name
+        into a ready-to-paste shell snippet the user can run in a new
+        terminal to enrol it.
+        """
+        from cullis_connector.profile import (
+            config_root_from_dir,
+            list_profiles,
+            profile_dir,
+        )
+        from cullis_connector.identity.store import has_identity
+
+        root = config_root_from_dir(config.config_dir, config.profile_name)
+        rows: list[dict[str, Any]] = []
+        for name in list_profiles(root):
+            if name == "default" and not config.profile_name and (
+                config.config_dir == root
+            ):
+                # Legacy flat layout — the "default" profile actually
+                # lives at the root, not under profiles/default/.
+                pdir = root
+            else:
+                pdir = profile_dir(root, name)
+            rows.append({
+                "name": name,
+                "path": str(pdir),
+                "enrolled": has_identity(pdir),
+            })
+
+        return templates.TemplateResponse(
+            request,
+            "profiles.html",
+            {
+                "connector_status": "online"
+                    if has_identity(config.config_dir) else "waiting",
+                "connector_status_label": "Online"
+                    if has_identity(config.config_dir) else "Setting up",
+                "profiles": rows,
+            },
+        )
+
+    @app.post("/profiles/create", response_class=HTMLResponse)
+    def profiles_create(request: Request, name: str = Form(...)) -> Response:
+        """HTMX handler — validates a candidate profile name and
+        returns a snippet of shell commands that enrol it. No
+        filesystem side effects: the user runs the snippet when
+        they're ready, so nothing is partially created if they
+        change their mind."""
+        from cullis_connector.profile import validate_profile_name
+
+        try:
+            validate_profile_name(name.strip())
+        except ValueError as exc:
+            return HTMLResponse(
+                f'<div class="profile-create-error">'
+                f'{html.escape(str(exc))}</div>',
+                status_code=400,
+            )
+
+        site_url = ""
+        if has_identity(config.config_dir):
+            try:
+                site_url = load_identity(config.config_dir).metadata.site_url or ""
+            except Exception:
+                site_url = ""
+
+        clean_name = name.strip()
+        enroll_cmd = (
+            f"cullis-connector enroll --profile {clean_name} "
+            f"--site-url {site_url or 'https://cullis.example'} "
+            f"--requester-name \"You\" "
+            f"--requester-email \"you@example.com\""
+        )
+        serve_cmd = f"cullis-connector desktop --profile {clean_name}"
+
+        snippet = (
+            f'<div class="profile-create-ok">'
+            f'<p>Run these in a new terminal:</p>'
+            f'<pre class="profile-create-snippet">{html.escape(enroll_cmd)}</pre>'
+            f'<p>Once your admin approves, launch the new profile with:</p>'
+            f'<pre class="profile-create-snippet">{html.escape(serve_cmd)}</pre>'
+            f'</div>'
+        )
+        return HTMLResponse(snippet)
 
     return app
 

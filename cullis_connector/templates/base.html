@@ -18,7 +18,11 @@
                 <span class="brand-name">Cullis</span>
                 <div class="brand-role-row">
                     <span class="brand-role-chip">Connector</span>
+                    {% if active_profile %}
+                    <a href="/profiles" class="brand-role-sub brand-role-sub-link" title="Manage profiles">Profile · {{ active_profile }}</a>
+                    {% else %}
                     <span class="brand-role-sub">Local Edge · Your Machine</span>
+                    {% endif %}
                 </div>
             </div>
         </div>
