@@ -5,6 +5,7 @@ Tools are grouped by domain:
     discovery  — discover_agents
     session    — session lifecycle: open, send, accept, close, list, etc.
     oneshot    — sessionless send/receive (ADR-008 / ADR-011 Phase 4b)
+    intent     — natural-language wrappers (contact / chat / reply)
 
 The ``register_all`` helper wires every group to a FastMCP instance so the
 server module stays a thin assembly point. Identity is loaded by the CLI
@@ -16,7 +17,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cullis_connector.tools import diagnostic, discovery, high_level, oneshot, session
+from cullis_connector.tools import (
+    diagnostic,
+    discovery,
+    high_level,
+    intent,
+    oneshot,
+    session,
+)
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -27,6 +35,7 @@ def register_all(mcp: "FastMCP") -> None:
     discovery.register(mcp)
     session.register(mcp)
     oneshot.register(mcp)
+    intent.register(mcp)
     high_level.register(mcp)
 
 

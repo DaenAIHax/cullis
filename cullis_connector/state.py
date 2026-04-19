@@ -26,6 +26,14 @@ class ConnectorState:
     active_session: str | None = None
     active_peer: str | None = None
     last_correlation_id: str | None = None
+    # Intent-tool context (Phase 1 of UX v2). last_peer_resolved is the
+    # canonical SPIFFE handle of the last successful contact() (or
+    # auto-set on receive_oneshot to the sender). last_reply_to is the
+    # msg_id of the last decrypted inbox row, used by reply() to thread
+    # the response. Both are intentionally volatile — they live only as
+    # long as the stdio server.
+    last_peer_resolved: str | None = None
+    last_reply_to: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
 
 
