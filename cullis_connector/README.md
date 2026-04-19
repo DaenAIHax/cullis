@@ -175,6 +175,57 @@ separate rollout step.)
 
 ---
 
+## Talking to other agents
+
+Once enrolled, the connector exposes a small set of natural-language
+MCP tools that your client (Claude Code, Cursor, …) calls on your
+behalf. You don't memorise SPIFFE handles — the LLM picks them up
+from the conversation.
+
+**Find someone and start a thread:**
+```
+> contact mario
+Active peer: Mario Rossi (chipfactory::mario).
+
+> chat ciao, hai un attimo?
+Sent to chipfactory::mario (correlation_id=…)
+```
+
+**Disambiguation when the name is shared:**
+```
+> contact mario
+Found 3 matches for 'mario':
+  #1  Mario Rossi   (chipfactory::mario)   [intra-org]
+  #2  Mario Bianchi (acme::mario)          [cross-org]
+  #3  Mariano Verdi (chipfactory::mariano) [intra-org]
+→ pick one with contact('#1'), contact('#2'), …
+
+> contact #2
+Active peer: Mario Bianchi (acme::mario).
+```
+
+**Read your inbox and reply in thread:**
+```
+> receive_oneshot
+1 one-shot message(s):
+- [acme::alice] corr=4f12 reply_to=—: progetto pronto?
+
+> reply sì, lo finisco oggi
+Reply sent to acme::alice (threaded as reply to msg-…).
+```
+
+The intent-level tools (`contact`, `chat`, `reply`) wrap the lower-
+level primitives (`send_oneshot`, `receive_oneshot`, `discover_agents`)
+which remain exposed for power users and scripts. State is kept in
+process memory only — no peer cache survives a server restart.
+
+> Push notifications when a message arrives outside your client are on
+> the next milestone (`imp/connector_ux_v2.md`, Phase 2). For now
+> you have to ask: *"any new messages?"* and the LLM will call
+> `receive_oneshot`.
+
+---
+
 ## Configuration precedence
 
 1. CLI flags (`--site-url`, `--config-dir`, `--log-level`, ...)
