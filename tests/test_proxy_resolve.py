@@ -97,6 +97,12 @@ async def test_resolve_cross_org(proxy_app):
 async def test_resolve_intra_default_stays_envelope(proxy_app):
     _, client = proxy_app
     api_key = await _provision_internal_agent("sender-bot")
+    # Provision the target too: after the reach-filter landing (PR #236)
+    # the resolve endpoint returns 404 for intra-org targets that don't
+    # exist in internal_agents. This test previously relied on the
+    # pre-reach behaviour where resolve happily echoed back an envelope
+    # shape for any intra-org handle.
+    await _provision_local_target("peer-bot", cert_pem=None)
 
     resp = await client.post(
         "/v1/egress/resolve",
