@@ -174,20 +174,24 @@ import Layout from '../layouts/Layout.astro';
         Quickstart
       </div>
       <h2 class="reveal" data-delay="1">
-        A minute to <em>federated</em>.
+        One command to <em>federated</em>.
       </h2>
       <p class="reveal" data-delay="2">
-        Boot the full stack — Court, two Mastios, two agents across two
-        organizations — route a single cross-org end-to-end encrypted
-        message, tear it all down. About a minute on a laptop.
+        Boot the full enterprise stack — Court, two Mastios, three agents,
+        two MCP servers across two organizations, wired with SPIRE,
+        Keycloak, Vault and Postgres.
       </p>
       <pre class="reveal" data-delay="3"><code>git clone https://github.com/cullis-security/cullis
 cd cullis
-python3 -m venv .venv
-.venv/bin/pip install httpx cryptography
-./deploy_demo.sh up
-./deploy_demo.sh send</code></pre>
-      <p class="reveal note" data-delay="4">
+./enterprise_sandbox/demo.sh full</code></pre>
+      <p class="reveal" data-delay="4">
+        Then replay intra-org MCP tool calls and cross-org A2A messages:
+      </p>
+      <pre class="reveal" data-delay="5"><code>./enterprise_sandbox/demo.sh mcp-catalog     # intra-org: agent → MCP tool call (Org A)
+./enterprise_sandbox/demo.sh mcp-inventory   # intra-org: agent → MCP tool call (Org B)
+./enterprise_sandbox/demo.sh oneshot-a-to-b  # cross-org: encrypted A2A message A → B
+./enterprise_sandbox/demo.sh oneshot-b-to-a  # cross-org: encrypted A2A message B → A</code></pre>
+      <p class="reveal note" data-delay="6">
         <strong>For single-user install</strong> — download the Cullis
         Connector from <a href="https://github.com/cullis-security/cullis/releases" target="_blank" rel="noopener">Releases</a> and double-click. It will register with a Mastio you point it at and configure
         your MCP client automatically.

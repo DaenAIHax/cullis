@@ -1,8 +1,8 @@
 """
-Test that deploy_{demo,broker,proxy}.sh each use distinct COMPOSE_PROJECT_NAME
+Test that deploy_{broker,proxy}.sh each use distinct COMPOSE_PROJECT_NAME
 values so docker volumes don't collide on a fresh host (shake-out P0-03).
 
-A fresh user who runs demo first and broker second on the same host must NOT
+A fresh user who runs proxy first and broker second on the same host must NOT
 share the postgres data volume; otherwise the broker's freshly generated
 POSTGRES_PASSWORD mismatches the persisted one and asyncpg crashes with an
 opaque InvalidPasswordError.
@@ -13,7 +13,6 @@ import re
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 DEPLOY_SCRIPTS = {
-    "deploy_demo.sh": "cullis-demo",
     "deploy_broker.sh": "cullis-broker",
     "deploy_proxy.sh": "cullis-proxy",
 }
@@ -46,21 +45,11 @@ def test_each_script_sets_compose_project_name():
 
 
 def test_project_names_are_distinct():
-    """All three scripts must use different project names — this is the actual
+    """All scripts must use different project names — this is the actual
     bug fix for shake-out P0-03."""
     names = set(DEPLOY_SCRIPTS.values())
     assert len(names) == len(DEPLOY_SCRIPTS), (
         f"deploy scripts share a COMPOSE_PROJECT_NAME: {sorted(DEPLOY_SCRIPTS.values())}"
-    )
-
-
-def test_demo_down_removes_volumes():
-    """Demo is ephemeral — `./deploy_demo.sh down` MUST remove volumes so a
-    subsequent broker deploy can't inherit a stale postgres password."""
-    source = _read("deploy_demo.sh")
-    # Match the cmd_down function body. It must invoke `compose down -v`.
-    assert re.search(r"compose\s+down\s+-v", source), (
-        "deploy_demo.sh cmd_down must run 'compose down -v' (demo is ephemeral)"
     )
 
 

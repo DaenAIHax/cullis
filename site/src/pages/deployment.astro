@@ -292,15 +292,16 @@ import Layout from '../layouts/Layout.astro';
           </div>
           <pre><code>git clone https://github.com/cullis-security/cullis
 cd cullis
-./deploy_demo.sh up</code></pre>
+./enterprise_sandbox/demo.sh full</code></pre>
           <p>
-            Boots the full stack — Court, two Mastios, two agents in two
-            organizations — on your laptop in about a minute. Great for
-            evaluation and integration development.
+            Boots the full enterprise stack — Court, two Mastios, three
+            agents, two MCP servers in two organizations, wired with SPIRE,
+            Keycloak, Vault and Postgres. Replay intra-org and cross-org
+            scenarios out of the box.
           </p>
           <ul class="install-specs">
-            <li><span class="k">Time</span><span>~1 minute</span></li>
-            <li><span class="k">Requires</span><span>Docker + Compose v2</span></li>
+            <li><span class="k">Time</span><span>~3 minutes first boot</span></li>
+            <li><span class="k">Requires</span><span>Docker + Compose v2 · ~6 GB disk · ~4 GB RAM</span></li>
             <li><span class="k">Best for</span><span>local evaluation</span></li>
           </ul>
         </article>

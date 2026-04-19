@@ -22,9 +22,10 @@ pytest tests/ -v
 # Full broker deployment (Docker + PKI + Vault) — development profile
 ./deploy_broker.sh --dev
 
-# Or boot the entire scripted demo (broker + 2 proxies + 2 agents):
-./deploy_demo.sh up
-python scripts/demo/sender.py
+# Or boot the full enterprise sandbox (SPIRE, Keycloak, Vault, Postgres,
+# 3 agents, 2 MCP servers in 2 orgs) and replay a scenario:
+./enterprise_sandbox/demo.sh full
+./enterprise_sandbox/demo.sh oneshot-a-to-b
 ```
 
 ## Frontend Assets (Dashboard)
@@ -41,8 +42,8 @@ build it once before running the broker outside Docker:
 ```
 
 The Docker images (`Dockerfile`, `mcp_proxy/Dockerfile`) run the build in a
-dedicated stage, so `./deploy_broker.sh`, `./deploy_demo.sh`, and
-`./deploy_proxy.sh` already produce the CSS automatically.
+dedicated stage, so `./deploy_broker.sh` and `./deploy_proxy.sh` already
+produce the CSS automatically.
 
 Templates should rely on Tailwind utility classes only — inline `tailwind.config = {...}`
 blocks are not supported anymore (they required the runtime CDN build).

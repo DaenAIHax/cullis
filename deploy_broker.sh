@@ -29,13 +29,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Distinct compose project name isolates the broker stack from the demo
-# (deploy_demo.sh → cullis-demo) and the proxy (deploy_proxy.sh → cullis-proxy).
-# Without this, fresh clones in directories that both happen to be named
-# `cullis` share the default compose project name and therefore the
-# `*_postgres_data` volume. A user who runs demo first and broker second then
-# hits an opaque asyncpg InvalidPasswordError because the broker's regenerated
-# POSTGRES_PASSWORD mismatches the demo's persisted password (shake-out P0-03).
+# Distinct compose project name isolates the broker stack from the
+# proxy (deploy_proxy.sh → cullis-proxy). Without this, fresh clones in
+# directories that both happen to be named `cullis` share the default
+# compose project name and therefore the `*_postgres_data` volume. A user
+# who runs proxy first and broker second then hits an opaque asyncpg
+# InvalidPasswordError because the broker's regenerated POSTGRES_PASSWORD
+# mismatches the proxy's persisted password (shake-out P0-03).
 export COMPOSE_PROJECT_NAME="cullis-broker"
 
 # ── Colors ───────────────────────────────────────────────────────────────────

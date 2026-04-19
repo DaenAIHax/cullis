@@ -18,14 +18,6 @@ __pycache__/
 # E2E test fixtures (broker CA copy, writable for container appuser)
 tests/e2e/.fixtures/
 
-# Demo runtime state — broker CA fixture, agent credentials, checker daemon
-# pid + log. The actual demo source (scripts/demo/*.py, README, compose) is
-# tracked; only the generated state is ignored.
-scripts/demo/.fixtures/
-scripts/demo/.state.json
-scripts/demo/.checker.pid
-scripts/demo/.checker.log
-
 # Accidental copy of the repo created by `git clone` inside the working
 # tree (e.g. when copy-pasting the README quickstart). Anchored to the
 # repo root with a leading `/` so it does NOT match `deploy/helm/cullis/`
@@ -33,7 +25,6 @@ scripts/demo/.checker.log
 /cullis/
 
 # Local-only: notes, drafts, root demo dir, CLI tools.
-# `/demo/` is anchored to the repo root so it does NOT match `scripts/demo/`.
 # File globs here are rooted with `/` so they only match the repo root —
 # `enterprise_sandbox/bootstrap/bootstrap.py` (etc.) stays tracked.
 imp/
@@ -47,8 +38,7 @@ drafts/
 /revoke.py
 /generate_demo_certs.py
 # generate_certs.py is INTENTIONALLY tracked — it is a runtime dependency
-# of both deploy_broker.sh and deploy_demo.sh (they invoke it on a fresh
-# clone to bootstrap the broker CA).
+# of deploy_broker.sh (invoked on a fresh clone to bootstrap the broker CA).
 run.sh
 reset.sh
 CLAUDE.md

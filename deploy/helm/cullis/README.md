@@ -10,8 +10,8 @@ In-cluster fallbacks exist for `kind` / `minikube` development.
 > topology, but has not been exercised end to end against a managed
 > Kubernetes cluster yet. Treat it as a starting point you can fork and
 > harden for your environment, not a turnkey install. The end-to-end path
-> currently covered by automated tests is the demo at
-> [`scripts/demo/`](../../../scripts/demo/), not this chart.
+> currently covered by automated tests is the
+> [`enterprise_sandbox/`](../../../enterprise_sandbox/) demo, not this chart.
 
 ## Quick start
 
