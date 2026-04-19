@@ -43,7 +43,9 @@ from cullis_connector.enrollment import (
     _generate_api_key,
     _start,
 )
+from cullis_connector.inbox_dispatcher import InboxDispatcher
 from cullis_connector.inbox_poller import DashboardInboxPoller
+from cullis_connector.notifier import build_notifier
 from cullis_connector.autostart import (
     autostart_status,
     install_autostart,
@@ -128,6 +130,7 @@ async def _dashboard_lifespan(app: FastAPI):
     """
     config = app.state.connector_config
     app.state.inbox_poller = None
+    app.state.inbox_dispatcher = None
     if os.environ.get("CULLIS_CONNECTOR_NOTIFICATIONS", "on").lower() in ("0", "off", "false", "no"):
         _log.info("inbox poller disabled via CULLIS_CONNECTOR_NOTIFICATIONS")
         yield
@@ -135,11 +138,17 @@ async def _dashboard_lifespan(app: FastAPI):
 
     poller = _start_inbox_poller(config)
     app.state.inbox_poller = poller
+    dispatcher: InboxDispatcher | None = None
     if poller is not None:
         poller.start()
+        dispatcher = InboxDispatcher(poller, build_notifier())
+        dispatcher.start()
+        app.state.inbox_dispatcher = dispatcher
     try:
         yield
     finally:
+        if dispatcher is not None:
+            await dispatcher.stop()
         if poller is not None:
             await poller.stop()
 
