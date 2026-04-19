@@ -2,17 +2,26 @@
 
 Surface for the dashboard inbox poller (M2.1 → M2.3): turn each
 ``InboxEvent`` into a libnotify / NSUserNotification / Windows Toast
-popup, with a graceful stderr fallback when no native backend is
-available (CI, headless servers, plyer not installed).
+popup, with graceful fallbacks when no native backend is available
+(CI, headless servers, NixOS without dbus-python, etc.).
 
-We don't try to reimplement per-OS notification APIs ourselves —
-``plyer`` is a maintained 1-dep wrapper that already speaks all
-three. Operators that want richer notifications (actions, sound,
-icons) can replace `PlyerNotifier` with a custom Notifier later.
+Backend chain (best to worst):
+  PlyerNotifier      — cross-platform via plyer (libnotify on Linux,
+                       NSUserNotification on macOS, Toast on Windows).
+                       Requires plyer + each OS's runtime dep
+                       (dbus-python on Linux).
+  NotifySendNotifier — Linux-only, shells out to ``notify-send``.
+                       Avoids the dbus-python install pain on
+                       distros that ship libnotify-bin (Debian-like,
+                       NixOS with libnotify in the env, …).
+  StderrNotifier     — final fallback, prints to stderr so the
+                       dashboard log still surfaces the message.
 """
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import sys
 from typing import Protocol
 
@@ -97,13 +106,69 @@ class PlyerNotifier:
             _log.warning("native notification failed: %s", exc)
 
 
+class NotifySendNotifier:
+    """Linux-only fallback that shells out to ``notify-send``.
+
+    Sidesteps the dbus-python dependency plyer needs on Linux —
+    ``notify-send`` is a binary that ships with ``libnotify`` on
+    pretty much every desktop distro and on NixOS via
+    ``pkgs.libnotify``.
+
+    Construction is gated behind a ``which`` check so the factory
+    knows when this option isn't available.
+    """
+
+    APP_NAME = "Cullis Connector"
+
+    @classmethod
+    def is_available(cls) -> bool:
+        return sys.platform.startswith("linux") and shutil.which("notify-send") is not None
+
+    def notify(
+        self,
+        title: str,
+        body: str,
+        *,
+        on_click_url: str | None = None,
+    ) -> None:
+        if on_click_url:
+            body = f"{body}\n{on_click_url}"
+        try:
+            subprocess.run(
+                [
+                    "notify-send",
+                    "--app-name", self.APP_NAME,
+                    "--expire-time", "10000",
+                    title,
+                    body,
+                ],
+                check=False,
+                timeout=5,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("notify-send failed: %s", exc)
+
+
 def build_notifier() -> Notifier:
     """Pick the best Notifier we can construct on this host.
 
-    Tries ``PlyerNotifier`` first; on ImportError or backend-resolution
-    failure falls back to ``StderrNotifier``. Idempotent — safe to
-    call multiple times if the dashboard wants to refresh.
+    On Linux we prefer ``notify-send`` over ``plyer`` even when both
+    are present — plyer's Linux backend silently no-ops with a
+    ``UserWarning`` when dbus-python is missing (NixOS, slim Docker
+    images, …) and that swallow turns into "no popup ever shows up
+    and no error tells you why". ``notify-send`` is a single binary,
+    avoids the dbus-python dance, and gives us identical UX for our
+    title+body use case.
+
+    On macOS / Windows plyer remains the right call (no notify-send
+    binary, NSUserNotification + Toast are best reached through it).
+
+    Final fallback is always ``StderrNotifier`` so headless boxes
+    still log the message in the dashboard output.
     """
+    if NotifySendNotifier.is_available():
+        _log.info("using notify-send for desktop notifications")
+        return NotifySendNotifier()
     try:
         return PlyerNotifier()
     except ImportError:
