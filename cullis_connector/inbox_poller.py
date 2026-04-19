@@ -26,7 +26,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from cullis_connector.tools._identity import canonical_recipient
+from cullis_connector.tools._identity import (
+    canonical_recipient,
+    prime_sender_pubkey_cache,
+)
 
 if TYPE_CHECKING:
     from cullis_sdk import CullisClient
@@ -194,6 +197,10 @@ class DashboardInboxPoller:
         msg_id = row.get("msg_id")
         if not msg_id:
             return None
+        # Pre-populate the SDK pubkey cache so decrypt_oneshot doesn't
+        # try to fetch the sender's cert from the broker (no JWT here).
+        # Same workaround the MCP receive_oneshot tool uses.
+        prime_sender_pubkey_cache(self._client, sender_raw)
         try:
             decoded = self._client.decrypt_oneshot(row)
         except Exception as exc:  # noqa: BLE001

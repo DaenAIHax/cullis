@@ -6,12 +6,22 @@ canonicalise bare recipient handles into the ``<org>::<agent>`` form
 the Mastio's ``/v1/egress/*`` endpoints require. Keeping the helpers
 here avoids the circular import that would happen if ``intent.py``
 tried to pull them from ``oneshot.py``.
+
+Also hosts ``prime_sender_pubkey_cache`` — the workaround used by both
+the MCP receive_oneshot tool and the dashboard inbox poller to make
+``CullisClient.decrypt_oneshot`` work without a broker JWT (which
+device-code-enrolled Connectors don't hold).
 """
 from __future__ import annotations
+
+import logging
+import time
 
 from cryptography import x509
 
 from cullis_connector.state import get_state
+
+_log = logging.getLogger("cullis_connector.tools._identity")
 
 
 def own_org_id() -> str | None:
@@ -41,3 +51,43 @@ def canonical_recipient(recipient_id: str) -> str:
     if not org:
         return recipient_id
     return f"{org}::{recipient_id}"
+
+
+def prime_sender_pubkey_cache(client, sender: str) -> None:
+    """Seed the SDK's pubkey cache with the sender's cert via the proxy's
+    resolve endpoint.
+
+    ``CullisClient.decrypt_oneshot`` looks up the sender's cert through
+    ``get_agent_public_key``, which by default hits the Court's
+    federation API behind a broker JWT — and device-code Connectors
+    don't hold that JWT. The local Mastio already knows the cert (it
+    served it to the sender's ``/v1/egress/resolve``), so we ask
+    ``/v1/egress/resolve`` for the same row and populate the SDK
+    cache directly so ``decrypt_oneshot`` finds it without needing
+    the broker.
+
+    No-op on cache hit. Failures are swallowed + logged so
+    ``decrypt_oneshot`` still runs and surfaces the clearer downstream
+    error if it really can't verify.
+    """
+    canonical = sender if "::" in sender else canonical_recipient(sender)
+    cache = getattr(client, "_pubkey_cache", None)
+    if cache is None or canonical in cache:
+        return
+    try:
+        resp = client._egress_http(
+            "post",
+            "/v1/egress/resolve",
+            json={"recipient_id": canonical},
+        )
+        resp.raise_for_status()
+        cert = resp.json().get("target_cert_pem")
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("pubkey cache prime for %s failed: %s", canonical, exc)
+        return
+    if cert:
+        cache[canonical] = (cert, time.time())
+        # Mirror under the bare handle too — `decrypt_oneshot` keys on
+        # whatever the inbox row carried, which can be either form.
+        if sender != canonical:
+            cache[sender] = (cert, time.time())

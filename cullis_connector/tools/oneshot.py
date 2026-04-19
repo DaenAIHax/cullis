@@ -9,12 +9,14 @@ enrollment, where the private key never leaves the user's machine.
 from __future__ import annotations
 
 import json
-import time
 from typing import TYPE_CHECKING
 
 from cullis_connector._logging import get_logger
 from cullis_connector.state import get_state
-from cullis_connector.tools._identity import canonical_recipient
+from cullis_connector.tools._identity import (
+    canonical_recipient,
+    prime_sender_pubkey_cache,
+)
 from cullis_connector.tools.session import _require_oneshot_client
 
 if TYPE_CHECKING:
@@ -112,7 +114,7 @@ def register(mcp: "FastMCP") -> None:
             reply_to = row.get("reply_to") or "—"
             msg_id = row.get("msg_id")
             try:
-                _prime_sender_pubkey_cache(client, sender)
+                prime_sender_pubkey_cache(client, sender)
                 decoded = client.decrypt_oneshot(row)
                 payload = decoded.get("payload", {})
                 if isinstance(payload, dict) and "text" in payload:
@@ -145,40 +147,5 @@ def register(mcp: "FastMCP") -> None:
         return f"{len(rows)} one-shot message(s):\n" + "\n".join(lines)
 
 
-def _prime_sender_pubkey_cache(client, sender: str) -> None:
-    """Seed the SDK's pubkey cache with the sender's cert via the proxy's
-    resolve endpoint.
-
-    ``CullisClient.decrypt_oneshot`` looks up the sender's cert through
-    ``get_agent_public_key``, which defaults to hitting the Court's
-    federation API — that path needs a broker JWT we don't have under
-    device-code enrollment. The local Mastio already knows the cert
-    (it just served it to ``send_oneshot``), so we ask ``/v1/egress/resolve``
-    for the same row and populate the cache directly. No-op on cache
-    hit, and failures are swallowed so ``decrypt_oneshot`` still runs
-    (and surfaces the clearer downstream error if it genuinely can't
-    verify).
-    """
-    canonical = sender if "::" in sender else _canonical_recipient(sender)
-    cache = getattr(client, "_pubkey_cache", None)
-    if cache is None or canonical in cache:
-        return
-    try:
-        resp = client._egress_http(
-            "post",
-            "/v1/egress/resolve",
-            json={"recipient_id": canonical},
-        )
-        resp.raise_for_status()
-        cert = resp.json().get("target_cert_pem")
-    except Exception as exc:  # noqa: BLE001
-        _log.debug("pubkey cache prime for %s failed: %s", canonical, exc)
-        return
-    if cert:
-        cache[canonical] = (cert, time.time())
-        # The SDK keys ``_pubkey_cache`` by the same id passed to
-        # ``get_agent_public_key``; decrypt_oneshot uses the raw
-        # ``sender`` from the inbox row, so mirror the entry under
-        # the bare handle too when the two differ.
-        if sender != canonical:
-            cache[sender] = (cert, time.time())
+# ``prime_sender_pubkey_cache`` lives in tools/_identity.py since
+# both this module and the dashboard inbox poller need it.
