@@ -147,6 +147,51 @@ def test_receive_only_updates_on_decode_success(receive_tool):
     assert get_state().last_reply_to is None
 
 
+def test_bad_signature_does_not_update_last_peer_resolved(receive_tool):
+    """Explicit contract test (security audit NEW #3): when
+    ``decrypt_oneshot`` raises for a signature-verification failure,
+    ``state.last_peer_resolved`` MUST NOT be touched.
+
+    The invariant protects the ``reply()`` tool: if we updated the
+    cursor on an unverified row, a reply would be addressed to an
+    attacker-controlled sender string. The existing test above covers
+    a generic RuntimeError; this one pins the specific failure mode
+    the SDK surfaces when signature verification (inner or outer)
+    doesn't match, so regressions that re-order the bookkeeping
+    around the except clause fail loudly.
+    """
+    # Seed a known-good prior state. If the bad-signature branch
+    # leaks into last_peer_resolved, this value will be overwritten
+    # and the assertion below will fire.
+    state = get_state()
+    state.last_peer_resolved = "acme::prior-known-good"
+    state.last_reply_to = "msg-prior"
+
+    def _sig_verify_fail(_row):
+        # Mirrors what cullis_sdk.client.decrypt_oneshot raises when
+        # the envelope signature chain fails to verify against the
+        # primed pubkey cache.
+        raise ValueError("envelope signature verification failed")
+
+    rows = [{
+        "sender_agent_id": "acme::mallory",
+        "msg_id": "msg-forged",
+        "correlation_id": "corr-forged",
+        "reply_to": None,
+        "payload_ciphertext": "{}",
+    }]
+    _install_client(rows, decoder=_sig_verify_fail)
+    out = receive_tool()
+
+    # User-visible failure trail is preserved.
+    assert "decrypt failed" in out
+    assert "signature verification failed" in out
+    # State is unchanged from before the call — NOT updated to the
+    # unverified sender.
+    assert state.last_peer_resolved == "acme::prior-known-good"
+    assert state.last_reply_to == "msg-prior"
+
+
 def test_receive_picks_last_decoded_row_when_multiple(receive_tool):
     """Multiple rows decoded → the LAST decoded one wins. That's the
     one the user just read, so it's the most plausible reply target."""
