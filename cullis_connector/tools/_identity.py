@@ -77,8 +77,20 @@ def prime_sender_pubkey_cache(client, sender: str) -> None:
             "pubkey cache prime: client has no _pubkey_cache attribute"
         )
         return
-    if canonical in cache:
-        return
+    # The SDK's get_agent_public_key honours its own TTL (300s); if the
+    # entry is still fresh we skip, otherwise we refetch even for known
+    # senders. Without this, a stale entry left over from a previous
+    # poll round causes get_agent_public_key to fall back to the broker
+    # JWT path → "Not authenticated — call login() first".
+    try:
+        from cullis_sdk.client import _PUBKEY_CACHE_TTL as _SDK_TTL
+    except Exception:  # noqa: BLE001
+        _SDK_TTL = 300
+    cached = cache.get(canonical)
+    if cached is not None:
+        _, fetched_at = cached
+        if time.time() - fetched_at < _SDK_TTL:
+            return
     try:
         resp = client._egress_http(
             "post",
