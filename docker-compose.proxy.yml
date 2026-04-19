@@ -30,6 +30,10 @@ services:
       - "${MCP_PROXY_PORT:-9100}:9100"
     environment:
       MCP_PROXY_ENVIRONMENT:       ${MCP_PROXY_ENVIRONMENT:-development}
+      # ADR-006 Trojan Horse — flip to true to run this Mastio as a
+      # self-contained mini-broker (no Court uplink, no JWKS fetch). Intra-org
+      # flows keep working; cross-org is disabled until federation is enabled.
+      MCP_PROXY_STANDALONE:        ${MCP_PROXY_STANDALONE:-false}
       MCP_PROXY_ADMIN_SECRET:      ${MCP_PROXY_ADMIN_SECRET:-change-me-in-production}
       # Persistent signing key — without this, admin sessions are invalid
       # after every proxy restart (per-process random fallback).
