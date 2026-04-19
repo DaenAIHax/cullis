@@ -30,6 +30,26 @@ class _FakeClient:
             lambda r: {"payload": {"text": r.get("text", "decoded")}}
         )
         self.calls = 0
+        # Pre-seeded pubkey cache so prime_sender_pubkey_cache hits the
+        # TTL-fresh short-circuit instead of trying to call _egress_http.
+        # Real poller installs this attribute in production.
+        self._pubkey_cache: dict = {}
+
+    def _egress_http(self, method, path, *, json=None, **kw):
+        """Stand-in resolve endpoint — any row whose sender wasn't
+        preseeded above would otherwise trigger PubkeyPrimeError when
+        prime_sender_pubkey_cache can't find a cached cert. Returning
+        a non-empty PEM here is enough to satisfy the prime step."""
+        class _R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"target_cert_pem": "PEM"}
+
+        return _R()
 
     def receive_oneshot(self) -> list[dict]:
         self.calls += 1
@@ -190,6 +210,51 @@ async def test_stop_releases_blocked_consumer_via_sentinel():
     await poller.stop(timeout_s=1.0)
     await asyncio.wait_for(consumer_woke.wait(), timeout=1.0)
     consume_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_pubkey_prime_failure_skips_message_does_not_crash_loop(caplog):
+    """Security audit NEW #4 — if ``prime_sender_pubkey_cache`` raises
+    (empty target_cert_pem, network error, incompatible client), the
+    poller MUST log at ERROR and skip the row. The loop continues so
+    subsequent rounds still drain the inbox."""
+    import logging
+
+    class _PrimeFailClient(_FakeClient):
+        def _egress_http(self, method, path, *, json=None, **kw):
+            class _R:
+                status_code = 200
+
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"target_cert_pem": ""}  # forces PubkeyPrimeError
+            return _R()
+
+    rows_round1 = [{"msg_id": "skip-me", "sender_agent_id": "acme::alice", "correlation_id": "c", "reply_to": None, "text": "x"}]
+    rows_round2 = [{"msg_id": "next-round", "sender_agent_id": "acme::alice", "correlation_id": "c2", "reply_to": None, "text": "ok"}]
+    client = _PrimeFailClient(rounds=[rows_round1, rows_round2])
+
+    poller = DashboardInboxPoller(client, poll_interval_s=0.05)
+    with caplog.at_level(logging.ERROR, logger="cullis_connector.inbox_poller"):
+        poller.start()
+        try:
+            # First round's row gets skipped; second round's row also
+            # prime-fails because the fake client still returns empty.
+            # Use a short timeout and just assert no events arrive —
+            # rather than waiting for success (it'll never come with
+            # this broken stub). The invariant is: loop did not crash.
+            await asyncio.sleep(0.3)
+        finally:
+            await poller.stop(timeout_s=1.0)
+
+    # ERROR log recorded — operator sees the security-relevant skip.
+    assert any(
+        "pubkey prime failed" in rec.message for rec in caplog.records
+    ), [r.message for r in caplog.records]
+    # Loop stayed alive through at least 2 rounds — not crashed.
+    assert client.calls >= 2
 
 
 @pytest.mark.asyncio

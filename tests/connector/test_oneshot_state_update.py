@@ -48,11 +48,15 @@ class _FakeClient:
         return self._decoder(row)
 
     def _egress_http(self, *args, **kwargs):
-        # Only invoked by _prime_sender_pubkey_cache; cache hit avoids it.
+        # Fallback for rows whose sender wasn't pre-seeded in the cache
+        # (e.g. bare names that canonicalise into a different key).
+        # Returns a valid-looking resolve response so prime succeeds
+        # rather than raising PubkeyPrimeError — unrelated to the state
+        # cursor logic these tests are exercising.
         class _R:
-            status_code = 404
+            status_code = 200
             def raise_for_status(self): pass
-            def json(self): return {}
+            def json(self): return {"target_cert_pem": "PEM"}
         return _R()
 
 
@@ -77,10 +81,16 @@ def receive_tool():
 
 
 def _install_client(rows, decoder=None) -> _FakeClient:
+    import time as _time
+
     client = _FakeClient(rows=rows, decoder=decoder)
-    # Pre-seed the cache so prime() short-circuits.
+    # Pre-seed the cache so prime() short-circuits on the TTL-fresh
+    # branch. The timestamp must be current — a 0.0 seed is always
+    # stale and would trigger the _egress_http refetch path (which
+    # returns 404 in this fixture → PubkeyPrimeError on purpose).
+    now = _time.time()
     for r in rows:
-        client._pubkey_cache[r["sender_agent_id"]] = ("PEM", 0.0)
+        client._pubkey_cache[r["sender_agent_id"]] = ("PEM", now)
     get_state().client = client
     return client
 
