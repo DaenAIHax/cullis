@@ -570,7 +570,13 @@ def build_app(config: ConnectorConfig) -> FastAPI:
         payload.
         """
         backup_dir = config.config_dir / "backups"
-        result = ide_install_mcp(ide_id, backup_dir=backup_dir)
+        # Propagate the active profile into the registered args so the
+        # IDE spawns the connector with --profile <name> when a profile
+        # is loaded. Falls back to the SDK default ["serve"] otherwise.
+        extra_args: list[str] | None = None
+        if config.profile_name:
+            extra_args = ["serve", "--profile", config.profile_name]
+        result = ide_install_mcp(ide_id, backup_dir=backup_dir, args=extra_args)
 
         if result.status == "installed":
             _log.info(

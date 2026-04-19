@@ -166,7 +166,15 @@ appear at login.
 
 Every example below assumes you have already enrolled successfully.
 
-### Claude Code
+### Claude Code CLI
+
+If the `claude` binary is on your `PATH`, the dashboard `/connected`
+page has a **Claude Code CLI** card — one click runs `claude mcp add
+cullis --scope user -- cullis-connector serve` for you (idempotent, so
+re-clicking is a no-op). `--scope user` makes the registration persist
+across projects on this machine.
+
+Manual fallback, same thing by hand:
 
 ```bash
 claude mcp add cullis cullis-connector \

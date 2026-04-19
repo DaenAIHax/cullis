@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -42,6 +44,20 @@ DEFAULT_COMMAND = "cullis-connector"
 DEFAULT_ARGS = ["serve"]
 
 
+class InstallerKind(str, Enum):
+    """How a given MCP client accepts server registrations.
+
+    ``FILE`` — the client keeps its servers in a JSON file at a
+    well-known path (Claude Desktop, Cursor, Cline).
+    ``COMMAND`` — the client exposes a CLI to register servers and
+    stores them somewhere of its own (Claude Code CLI, which uses
+    ``claude mcp add``). We never touch that storage directly;
+    we just shell out to the binary.
+    """
+    FILE = "file"
+    COMMAND = "command"
+
+
 class IDEStatus(str, Enum):
     CONFIGURED = "configured"  # file exists AND cullis entry present & correct
     DETECTED = "detected"      # IDE installed, but cullis not configured yet
@@ -53,11 +69,18 @@ class IDEStatus(str, Enum):
 class IDEDescriptor:
     id: str
     display_name: str
-    # Per-OS path to the MCP config file. Missing OS key means "not supported".
-    paths: dict[str, str]
-    # Top-level JSON key inside the config file where servers live.
-    # All three IDEs currently use "mcpServers".
+    # Per-OS path to the MCP config file (empty dict for COMMAND kind).
+    # Missing OS key means "not supported".
+    paths: dict[str, str] = field(default_factory=dict)
+    # Top-level JSON key inside the config file where servers live
+    # (ignored for COMMAND kind). All three file-based IDEs use
+    # "mcpServers".
     servers_key: str = MCP_SERVERS_KEY
+    # How install/detect work for this client.
+    kind: InstallerKind = InstallerKind.FILE
+    # For COMMAND kind: name of the binary we probe on PATH (e.g.
+    # "claude"). None for FILE kind.
+    detect_binary: str | None = None
 
 
 KNOWN_IDES: dict[str, IDEDescriptor] = {
@@ -91,7 +114,30 @@ KNOWN_IDES: dict[str, IDEDescriptor] = {
             "linux":  "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
         },
     ),
+    "claude-code-cli": IDEDescriptor(
+        id="claude-code-cli",
+        display_name="Claude Code CLI",
+        kind=InstallerKind.COMMAND,
+        detect_binary="claude",
+    ),
 }
+
+
+# Exposed for the tests / web layer so they can stub subprocess / which.
+def _run_claude(args: list[str], *, timeout: float = 15.0) -> subprocess.CompletedProcess:
+    """Invoke the `claude` CLI. Isolated so tests can monkey-patch it."""
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _which_claude() -> str | None:
+    """Locate the `claude` binary on PATH. Isolated for the same reason."""
+    return shutil.which("claude")
 
 
 @dataclass
@@ -141,6 +187,9 @@ def detect_ide_status(ide_id: str) -> DetectResult:
     ide = KNOWN_IDES.get(ide_id)
     if ide is None:
         return DetectResult(ide_id, ide_id, IDEStatus.MISSING, note="Unknown IDE.")
+
+    if ide.kind is InstallerKind.COMMAND:
+        return _detect_command_ide(ide)
 
     path = resolve_config_path(ide_id)
     if path is None:
@@ -210,6 +259,9 @@ def install_mcp(
     ide = KNOWN_IDES.get(ide_id)
     if ide is None:
         return InstallResult(ide_id, "error", error=f"Unknown IDE: {ide_id}")
+
+    if ide.kind is InstallerKind.COMMAND:
+        return _install_command_ide(ide, command=command, args=args)
 
     path = resolve_config_path(ide_id)
     if path is None:
@@ -294,6 +346,115 @@ def install_mcp(
     )
 
 
+# ── COMMAND-kind client helpers ─────────────────────────────────────────
+
+
+def _detect_command_ide(ide: IDEDescriptor) -> DetectResult:
+    """Detect a CLI-backed MCP client (currently Claude Code CLI).
+
+    Two probes:
+      1. ``shutil.which(detect_binary)`` — is the binary on PATH?
+      2. ``<bin> mcp list`` — parse stdout to check whether a
+         server named ``cullis`` is already registered.
+
+    The second probe is best-effort: if the CLI's output format
+    changes we downgrade from CONFIGURED to DETECTED rather than
+    surfacing an ERROR, because a wrong status here is fixable by
+    the user but a spurious ERROR would hide the install card.
+    """
+    binary = ide.detect_binary
+    if not binary:
+        return DetectResult(
+            ide.id, ide.display_name, IDEStatus.MISSING,
+            note="No detect_binary configured.",
+        )
+    if _which_claude() is None and binary == "claude":
+        return DetectResult(
+            ide.id, ide.display_name, IDEStatus.MISSING,
+            note=f"`{binary}` not on PATH.",
+        )
+
+    # Probe with `claude mcp list`. If that fails, still surface
+    # DETECTED — the user can click install and see the real error
+    # from the write path.
+    try:
+        res = _run_claude([binary, "mcp", "list"], timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return DetectResult(
+            ide.id, ide.display_name, IDEStatus.DETECTED,
+            note=f"`{binary}` installed; MCP list query failed.",
+        )
+
+    output = (res.stdout or "") + (res.stderr or "")
+    if res.returncode == 0 and MCP_ENTRY_NAME in output:
+        return DetectResult(
+            ide.id, ide.display_name, IDEStatus.CONFIGURED,
+            note="`cullis` is registered as an MCP server.",
+        )
+    return DetectResult(
+        ide.id, ide.display_name, IDEStatus.DETECTED,
+        note=f"`{binary}` installed; `cullis` not registered yet.",
+    )
+
+
+def _install_command_ide(
+    ide: IDEDescriptor,
+    *,
+    command: str = DEFAULT_COMMAND,
+    args: list[str] | None = None,
+) -> InstallResult:
+    """Register Cullis as an MCP server in a CLI-backed client.
+
+    For Claude Code CLI we use:
+        claude mcp add cullis --scope user -- <command> [args...]
+
+    ``--scope user`` makes the registration persist across projects
+    on this machine, which matches the UX the dashboard's other
+    cards give (configure once per machine, not once per repo).
+    """
+    binary = ide.detect_binary
+    if not binary:
+        return InstallResult(
+            ide.id, "error",
+            error="Descriptor missing detect_binary.",
+        )
+
+    if _which_claude() is None and binary == "claude":
+        return InstallResult(
+            ide.id, "missing",
+            error=f"`{binary}` CLI not installed or not on PATH.",
+        )
+
+    # Idempotency: if `claude mcp list` already mentions cullis we
+    # skip the add rather than letting it fail with "already exists".
+    existing = _detect_command_ide(ide)
+    if existing.status is IDEStatus.CONFIGURED:
+        return InstallResult(ide.id, "already_configured")
+
+    args_list = list(args) if args is not None else list(DEFAULT_ARGS)
+    cmd = [
+        binary, "mcp", "add", MCP_ENTRY_NAME,
+        "--scope", "user",
+        "--",
+        command,
+    ] + args_list
+
+    try:
+        res = _run_claude(cmd, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return InstallResult(
+            ide.id, "error",
+            error=f"Failed to invoke `{binary} mcp add`: {exc}",
+        )
+    if res.returncode != 0:
+        message = (res.stderr or res.stdout or "").strip()
+        return InstallResult(
+            ide.id, "error",
+            error=f"`{binary} mcp add` exited {res.returncode}: {message}",
+        )
+    return InstallResult(ide.id, "installed")
+
+
 def uninstall_mcp(
     ide_id: str,
     *,
@@ -303,6 +464,21 @@ def uninstall_mcp(
     ide = KNOWN_IDES.get(ide_id)
     if ide is None:
         return InstallResult(ide_id, "error", error=f"Unknown IDE: {ide_id}")
+
+    if ide.kind is InstallerKind.COMMAND:
+        # Command-backed clients get a hand-wave for now: we surface
+        # the CLI invocation the user should run rather than running
+        # it ourselves. Removing someone's Claude Code CLI MCP
+        # entries from a background dashboard click is exactly the
+        # flavour of surprise we want to avoid.
+        return InstallResult(
+            ide_id, "error",
+            error=(
+                "Removal via dashboard isn't supported for "
+                f"{ide.display_name}. Run `{ide.detect_binary} mcp "
+                f"remove {MCP_ENTRY_NAME}` yourself."
+            ),
+        )
 
     path = resolve_config_path(ide_id)
     if path is None or not path.exists():
