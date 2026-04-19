@@ -1836,7 +1836,15 @@ class CullisClient:
 
         Returns the message dict with the payload replaced by the decrypted plaintext.
         Raises ValueError if decryption fails (integrity violation).
+
+        Audit F-A-9 fix: the inner (plaintext) signature is now verified
+        unconditionally against the sender's public key. Skipping this step
+        would let a compromised broker forge arbitrary plaintext attributed
+        to any sender — outer ciphertext integrity alone is not sufficient
+        zero-trust assurance. Mirrors the pattern in :meth:`decrypt_oneshot`.
         """
+        from cullis_sdk.crypto.e2e import verify_inner_signature
+
         if not self._signing_key_pem:
             return msg
         p = msg.get("payload", {})
@@ -1848,8 +1856,21 @@ class CullisClient:
         try:
             sender_agent_id = msg.get("sender_agent_id", "")
             client_seq = msg.get("client_seq")
-            plaintext_dict, _inner_sig = decrypt_from_agent(
+            plaintext_dict, inner_sig = decrypt_from_agent(
                 self._signing_key_pem, p, sid, sender_agent_id, client_seq=client_seq,
+            )
+            # Audit F-A-9: verify the inner signature unconditionally. The
+            # sender's public key is fetched from the broker registry (same
+            # path used by decrypt_oneshot). ``verify_inner_signature``
+            # raises ``ValueError`` on mismatch — no silent fallback.
+            sender_pubkey_pem = self.get_agent_public_key(sender_agent_id)
+            nonce = msg.get("nonce", "")
+            timestamp = msg.get("timestamp", 0)
+            verify_inner_signature(
+                sender_pubkey_pem, inner_sig,
+                sid, sender_agent_id,
+                nonce, timestamp, plaintext_dict,
+                client_seq=client_seq,
             )
             msg = dict(msg)
             msg["payload"] = plaintext_dict
