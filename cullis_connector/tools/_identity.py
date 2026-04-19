@@ -72,7 +72,12 @@ def prime_sender_pubkey_cache(client, sender: str) -> None:
     """
     canonical = sender if "::" in sender else canonical_recipient(sender)
     cache = getattr(client, "_pubkey_cache", None)
-    if cache is None or canonical in cache:
+    if cache is None:
+        _log.warning(
+            "pubkey cache prime: client has no _pubkey_cache attribute"
+        )
+        return
+    if canonical in cache:
         return
     try:
         resp = client._egress_http(
@@ -83,11 +88,22 @@ def prime_sender_pubkey_cache(client, sender: str) -> None:
         resp.raise_for_status()
         cert = resp.json().get("target_cert_pem")
     except Exception as exc:  # noqa: BLE001
-        _log.debug("pubkey cache prime for %s failed: %s", canonical, exc)
+        _log.warning(
+            "pubkey cache prime for %s failed: %s (%s)",
+            canonical, exc, type(exc).__name__,
+        )
         return
-    if cert:
-        cache[canonical] = (cert, time.time())
-        # Mirror under the bare handle too — `decrypt_oneshot` keys on
-        # whatever the inbox row carried, which can be either form.
-        if sender != canonical:
-            cache[sender] = (cert, time.time())
+    if not cert:
+        _log.warning(
+            "pubkey cache prime for %s: resolve returned no target_cert_pem "
+            "(intra-org transport may be 'envelope' not 'mtls-only' — set "
+            "PROXY_TRANSPORT_INTRA_ORG=mtls-only on the Mastio)",
+            canonical,
+        )
+        return
+    cache[canonical] = (cert, time.time())
+    # Mirror under the bare handle too — `decrypt_oneshot` keys on
+    # whatever the inbox row carried, which can be either form.
+    if sender != canonical:
+        cache[sender] = (cert, time.time())
+    _log.info("pubkey cached for %s (mirror=%s)", canonical, sender != canonical)
