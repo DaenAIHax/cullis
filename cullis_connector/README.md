@@ -251,22 +251,29 @@ acme::mario: ciao!` in the dashboard log.
 #### Statusline badge in Claude Code
 
 The dashboard exposes `GET http://127.0.0.1:7777/status/inbox` which
-returns the unread count + last sender. Drop this snippet into your
-`~/.claude/settings.json` to see "📨 N from <sender>" in the Claude
-Code status bar:
+returns the unread count + last sender. Both this endpoint and
+`POST /status/inbox/seen` require a bearer token generated at first
+dashboard start and persisted at
+`~/.cullis/identity/statusline.token` (chmod 0600). The loopback bind
+alone doesn't stop other local processes under your user, so the token
+is what actually authenticates the statusline poller.
+
+Drop this snippet into your `~/.claude/settings.json` to see
+"📨 N from <sender>" in the Claude Code status bar:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "s=$(curl -s http://127.0.0.1:7777/status/inbox); u=$(echo $s | jq -r .unread); n=$(echo $s | jq -r .last_sender); [ \"$u\" != \"0\" ] && echo \"📨 $u from $n\" || true"
+    "command": "t=$(cat ~/.cullis/identity/statusline.token); s=$(curl -s -H \"Authorization: Bearer $t\" http://127.0.0.1:7777/status/inbox); u=$(echo $s | jq -r .unread); n=$(echo $s | jq -r .last_sender); [ \"$u\" != \"0\" ] && echo \"📨 $u from $n\" || true"
   }
 }
 ```
 
-When you've read the messages, `POST /status/inbox/seen` clears the
-counter (the dashboard's `/inbox` view does this automatically on
-load).
+When you've read the messages,
+`curl -X POST -H "Authorization: Bearer $(cat ~/.cullis/identity/statusline.token)" http://127.0.0.1:7777/status/inbox/seen`
+clears the counter (the dashboard's `/inbox` view does this
+automatically on load).
 
 ---
 

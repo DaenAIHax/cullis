@@ -1106,6 +1106,26 @@ async def list_peers(
 
     if limit and len(peers) > limit:
         peers = peers[:limit]
+
+    # Audit trail (security audit NEW #6): peer enumeration is a
+    # reconnaissance primitive — the Connector now hits this endpoint
+    # instead of /v1/federation/agents/search (which does audit), so
+    # without an entry here we'd lose the "who listed whom and with
+    # what filter" signal that compliance reviewers expect. Matches
+    # the detail shape of egress_discover below for consistency.
+    try:
+        await log_audit(
+            agent_id=agent.agent_id,
+            action="egress_peers_list",
+            status="success",
+            detail=f"q={q} limit={limit} results={len(peers)}",
+        )
+    except Exception as audit_exc:  # noqa: BLE001
+        # Never let an audit-write failure break the read path — log
+        # it and continue. Alembic / schema issues should surface in
+        # their own telemetry, not in the user's peer list.
+        logger.warning("egress_peers_list audit write failed: %s", audit_exc)
+
     return PeersResponse(peers=peers, count=len(peers))
 
 

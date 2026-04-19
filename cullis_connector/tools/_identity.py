@@ -24,6 +24,19 @@ from cullis_connector.state import get_state
 _log = logging.getLogger("cullis_connector.tools._identity")
 
 
+class PubkeyPrimeError(RuntimeError):
+    """Raised when the sender pubkey cache cannot be primed via
+    ``/v1/egress/resolve`` — either the Mastio call failed outright
+    or the response carried no ``target_cert_pem``.
+
+    The dashboard inbox poller catches this and skips the message
+    (logging at ERROR rather than swallowing silently) so an operator
+    can see the security-relevant gap in their audit log instead of
+    silently falling back to the broker JWT path that no Connector
+    holds a token for.
+    """
+
+
 def own_org_id() -> str | None:
     """Return the sender's org_id from the loaded identity's cert subject.
 
@@ -66,17 +79,28 @@ def prime_sender_pubkey_cache(client, sender: str) -> None:
     cache directly so ``decrypt_oneshot`` finds it without needing
     the broker.
 
-    No-op on cache hit. Failures are swallowed + logged so
-    ``decrypt_oneshot`` still runs and surfaces the clearer downstream
-    error if it really can't verify.
+    No-op on cache hit.
+
+    **Error contract (security audit NEW #4):** Failures MUST propagate
+    to the caller so the audit trail records the skip at ERROR level
+    instead of the function silently falling back to the broker JWT
+    path (which has no credential → surfaces as an opaque
+    ``login()`` error). Specifically, raises ``PubkeyPrimeError`` when:
+
+      - the HTTP call to ``/v1/egress/resolve`` fails (network, 4xx, 5xx),
+      - the response is missing / has an empty ``target_cert_pem``,
+      - the client object has no ``_pubkey_cache`` attribute (programming
+        error — an incompatible client type was passed in).
+
+    The caller (inbox poller, MCP receive_oneshot) catches and
+    skips-this-message rather than crashing the poll loop.
     """
     canonical = sender if "::" in sender else canonical_recipient(sender)
     cache = getattr(client, "_pubkey_cache", None)
     if cache is None:
-        _log.warning(
-            "pubkey cache prime: client has no _pubkey_cache attribute"
+        raise PubkeyPrimeError(
+            "client has no _pubkey_cache attribute — incompatible SDK client"
         )
-        return
     # The SDK's get_agent_public_key honours its own TTL (300s); if the
     # entry is still fresh we skip, otherwise we refetch even for known
     # senders. Without this, a stale entry left over from a previous
@@ -99,20 +123,19 @@ def prime_sender_pubkey_cache(client, sender: str) -> None:
         )
         resp.raise_for_status()
         cert = resp.json().get("target_cert_pem")
+    except PubkeyPrimeError:
+        raise
     except Exception as exc:  # noqa: BLE001
-        _log.warning(
-            "pubkey cache prime for %s failed: %s (%s)",
-            canonical, exc, type(exc).__name__,
-        )
-        return
+        raise PubkeyPrimeError(
+            f"/v1/egress/resolve call for {canonical} failed: "
+            f"{exc} ({type(exc).__name__})"
+        ) from exc
     if not cert:
-        _log.warning(
-            "pubkey cache prime for %s: resolve returned no target_cert_pem "
+        raise PubkeyPrimeError(
+            f"/v1/egress/resolve for {canonical} returned no target_cert_pem "
             "(intra-org transport may be 'envelope' not 'mtls-only' — set "
-            "PROXY_TRANSPORT_INTRA_ORG=mtls-only on the Mastio)",
-            canonical,
+            "PROXY_TRANSPORT_INTRA_ORG=mtls-only on the Mastio)"
         )
-        return
     cache[canonical] = (cert, time.time())
     # Mirror under the bare handle too — `decrypt_oneshot` keys on
     # whatever the inbox row carried, which can be either form.

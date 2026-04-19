@@ -254,3 +254,44 @@ async def test_peers_reach_both_returns_all(proxy_app):
     handles = {p["agent_id"] for p in body["peers"]}
     assert "acme::mario" in handles
     assert "remote-bot" in handles
+
+
+@pytest.mark.asyncio
+async def test_peers_writes_audit_entry(proxy_app):
+    """Security audit NEW #6 — peer enumeration must land in the
+    audit log. Before this fix, /v1/egress/peers had no audit write,
+    so a Connector's discover_agents (which now routes through here
+    instead of /v1/federation/agents/search) left no compliance
+    trail of who listed whom.
+    """
+    from mcp_proxy.db import get_db
+
+    _, client = proxy_app
+    api_key = await _provision_caller("caller-bot")
+    await _provision_local_peer("mario", "Mario Rossi")
+
+    resp = await client.get(
+        "/v1/egress/peers",
+        headers={"X-API-Key": api_key},
+        params={"q": "mar"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    async with get_db() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT agent_id, action, status, detail FROM audit_log "
+                    "WHERE action = 'egress_peers_list' "
+                    "ORDER BY id DESC LIMIT 1"
+                )
+            )
+        ).first()
+    assert row is not None, "expected an egress_peers_list audit row"
+    assert row[0] == "caller-bot"
+    assert row[1] == "egress_peers_list"
+    assert row[2] == "success"
+    # detail should capture the query + result count so the audit is
+    # useful without cross-referencing request logs.
+    assert "q=mar" in row[3]
+    assert "results=1" in row[3]

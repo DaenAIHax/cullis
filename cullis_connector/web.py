@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,12 +31,13 @@ from urllib.parse import urlparse
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cullis_connector.config import ConnectorConfig
+from cullis_connector.statusline_token import ensure_statusline_token
 from cullis_connector.enrollment import (
     EnrollmentFailed,
     RequesterInfo,
@@ -131,6 +133,11 @@ async def _dashboard_lifespan(app: FastAPI):
     config = app.state.connector_config
     app.state.inbox_poller = None
     app.state.inbox_dispatcher = None
+    # Generate / load the statusline bearer token once at startup so the
+    # endpoints below can compare against a stable value. The file is
+    # chmod 0600 — any local process that can read it already had the
+    # means to read ``identity/agent.key`` anyway.
+    app.state.statusline_token = ensure_statusline_token(config.config_dir)
     if os.environ.get("CULLIS_CONNECTOR_NOTIFICATIONS", "on").lower() in ("0", "off", "false", "no"):
         _log.info("inbox poller disabled via CULLIS_CONNECTOR_NOTIFICATIONS")
         yield
@@ -422,8 +429,34 @@ def build_app(config: ConnectorConfig) -> FastAPI:
         _clear_pending()
         return RedirectResponse("/setup", status_code=303)
 
+    def _require_statusline_token(authorization: str | None) -> None:
+        """Reject requests without the dashboard's statusline token.
+
+        The loopback bind (127.0.0.1:7777) stops remote callers but any
+        other local process under the same user could otherwise read
+        inbox metadata / reset the unread counter. The bearer token
+        lives under ``<config_dir>/identity/statusline.token`` (0600),
+        so any attacker with read access to it already owned the agent
+        key anyway.
+        """
+        expected = getattr(app.state, "statusline_token", None)
+        if not expected:
+            # Should never happen — lifespan seeds it — but fail closed
+            # rather than silently allow unauthenticated reads.
+            raise HTTPException(status_code=503, detail="statusline token not initialised")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="missing bearer token")
+        presented = authorization.removeprefix("Bearer ").strip()
+        # Constant-time compare — the token is short and the server is
+        # loopback-only, but it's still a credential.
+        if not secrets.compare_digest(presented, expected):
+            raise HTTPException(status_code=401, detail="bad bearer token")
+
     @app.get("/status/inbox")
-    def status_inbox(request: Request) -> JSONResponse:
+    def status_inbox(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> JSONResponse:
         """Statusline-friendly snapshot of the inbox state.
 
         Designed to be polled cheaply (every few seconds) by a Claude
@@ -432,7 +465,11 @@ def build_app(config: ConnectorConfig) -> FastAPI:
         a stable shape — when notifications are off or the dashboard
         hasn't seen any messages yet, ``unread`` is 0 and the rest
         is null.
+
+        Requires ``Authorization: Bearer <token>`` — see
+        ``<config_dir>/identity/statusline.token``.
         """
+        _require_statusline_token(authorization)
         dispatcher = getattr(request.app.state, "inbox_dispatcher", None)
         if dispatcher is None:
             return JSONResponse({
@@ -445,10 +482,18 @@ def build_app(config: ConnectorConfig) -> FastAPI:
         return JSONResponse(dispatcher.status_snapshot())
 
     @app.post("/status/inbox/seen")
-    def status_inbox_seen(request: Request) -> JSONResponse:
+    def status_inbox_seen(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> JSONResponse:
         """Reset the unread counter — call when the user has read the
         latest batch (the dashboard's `/inbox` view does it on load,
-        statusline scripts can call it on click)."""
+        statusline scripts can call it on click).
+
+        Requires ``Authorization: Bearer <token>`` — see
+        ``<config_dir>/identity/statusline.token``.
+        """
+        _require_statusline_token(authorization)
         dispatcher = getattr(request.app.state, "inbox_dispatcher", None)
         if dispatcher is not None:
             dispatcher.ack()

@@ -50,22 +50,30 @@ def _candidate(info: AgentInfo, score: float) -> PeerCandidate:
     )
 
 
-def resolve_peer(client, query: str, *, fuzzy_cutoff: float = 0.5) -> list[PeerCandidate]:
+def resolve_peer(client, query: str, *, fuzzy_cutoff: float = 0.75) -> list[PeerCandidate]:
     """Look up peers matching ``query`` via the local Mastio.
 
     Strategy (cheapest first):
       1. Server-side prefilter via ``client.list_peers(q=query)``
          (substring match on agent_id / display_name).
-      2. If the prefilter returned >1 candidate, rank locally with
-         ``difflib.SequenceMatcher`` against name + agent_id and keep
-         only candidates above ``fuzzy_cutoff``.
-      3. If the prefilter returned 0, fall back to listing the full
-         visible peer set and re-running the fuzzy ranker — covers
-         typos like "marioo" / "mraio" that don't substring-match.
+      2. Promote exact / substring-prefix matches to score 1.0 so they
+         sort above any fuzzy hits — stops a well-named typosquat
+         (e.g. ``southfake``) from piggy-backing on a difflib ratio
+         higher than the legitimate substring match ``south``.
+      3. Rank remaining candidates with ``difflib.SequenceMatcher``
+         against name + agent_id and keep only those above
+         ``fuzzy_cutoff`` (default 0.75 — low enough for single-char
+         typos like ``marioo`` but high enough to reject
+         ``south → southfake``).
+      4. If the server prefilter returned 0, fall back to listing the
+         full visible peer set and re-running the fuzzy ranker — covers
+         typos that don't substring-match.
 
     The returned list is sorted by score descending. Caller decides
     how to handle 0 / 1 / many matches (the ``contact`` MCP tool
-    presents disambiguation).
+    presents disambiguation). **Callers must never auto-select a
+    single fuzzy hit** — an exact-match short-circuit is the only safe
+    auto-pick path, the ``contact`` tool enforces this below.
     """
     qnorm = query.strip()
     if not qnorm:
@@ -90,18 +98,32 @@ def resolve_peer(client, query: str, *, fuzzy_cutoff: float = 0.5) -> list[PeerC
     if not candidates:
         candidates = client.list_peers(limit=200)
 
-    # 3. Rank with difflib against both name-only and full handle.
+    # 3. Rank each candidate. Exact matches win outright; substring-
+    #    prefix matches rank higher than arbitrary difflib ratios so a
+    #    typosquat (``southfake`` containing the query ``south``) can't
+    #    outrank the legitimate substring ``south``. Substring-anywhere
+    #    gets a solid score but still below prefix so the obvious match
+    #    surfaces first in multi-candidate disambiguation.
     scored: list[PeerCandidate] = []
     qlower = qnorm.lower()
     for info in candidates:
         name = (info.display_name or _name_only(info.agent_id)).lower()
-        handle = info.agent_id.lower()
+        handle_full = info.agent_id.lower()
+        handle_short = _name_only(handle_full)
 
-        if qlower == _name_only(handle) or qlower == handle:
+        if qlower == handle_short or qlower == handle_full or qlower == name:
             score = 1.0
+        elif handle_short.startswith(qlower) or name.startswith(qlower):
+            # Substring-prefix — definitely intentional, definitely
+            # above any fuzzy ratio.
+            score = 0.95
+        elif qlower in handle_short or qlower in name:
+            # Substring-anywhere — still a clean prefilter hit, below
+            # prefix so prefixes sort first.
+            score = 0.90
         else:
             name_ratio = difflib.SequenceMatcher(None, qlower, name).ratio()
-            handle_ratio = difflib.SequenceMatcher(None, qlower, _name_only(handle)).ratio()
+            handle_ratio = difflib.SequenceMatcher(None, qlower, handle_short).ratio()
             score = max(name_ratio, handle_ratio)
 
         if score >= fuzzy_cutoff:
@@ -198,7 +220,11 @@ def register(mcp: "FastMCP") -> None:
                 )
             return base + " The peer list is empty — nobody else has enrolled yet."
 
-        if len(candidates) == 1:
+        # Auto-select ONLY on an exact match (score == 1.0). Fuzzy hits
+        # — even when they're the only candidate — must bounce through
+        # disambiguation so a typo like ``south`` can't silently land on
+        # a typosquat ``southfake`` without the user confirming.
+        if len(candidates) == 1 and candidates[0].score >= 1.0:
             state.last_peer_resolved = candidates[0].agent_id
             state.extra.pop(_CANDIDATES_KEY, None)
             return (
@@ -208,8 +234,13 @@ def register(mcp: "FastMCP") -> None:
 
         state.extra[_CANDIDATES_KEY] = candidates
         lines = [_format_candidate(i, c) for i, c in enumerate(candidates)]
+        header = (
+            f"Found {len(candidates)} match for '{peer}'"
+            if len(candidates) == 1
+            else f"Found {len(candidates)} matches for '{peer}'"
+        )
         return (
-            f"Found {len(candidates)} matches for '{peer}':\n"
+            header + " — confirm which one you meant:\n"
             + "\n".join(lines)
             + "\n→ pick one with contact('#1'), contact('#2'), …"
         )

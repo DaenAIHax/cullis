@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from cullis_connector.tools._identity import (
+    PubkeyPrimeError,
     canonical_recipient,
     prime_sender_pubkey_cache,
 )
@@ -199,8 +200,19 @@ class DashboardInboxPoller:
             return None
         # Pre-populate the SDK pubkey cache so decrypt_oneshot doesn't
         # try to fetch the sender's cert from the broker (no JWT here).
-        # Same workaround the MCP receive_oneshot tool uses.
-        prime_sender_pubkey_cache(self._client, sender_raw)
+        # Same workaround the MCP receive_oneshot tool uses. On failure
+        # the message is security-relevant: we can't verify the sender,
+        # so the poller MUST skip it (not crash, not silently downgrade
+        # to the broker JWT path). Log at ERROR so the operator sees
+        # the skip in the dashboard log without having to turn on DEBUG.
+        try:
+            prime_sender_pubkey_cache(self._client, sender_raw)
+        except PubkeyPrimeError as exc:
+            _log.error(
+                "skipping msg %s from %s — pubkey prime failed: %s",
+                msg_id, sender, exc,
+            )
+            return None
         try:
             decoded = self._client.decrypt_oneshot(row)
         except Exception as exc:  # noqa: BLE001

@@ -131,5 +131,87 @@ def test_below_cutoff_excluded():
     client = _FakeClient([_peer("mario", "Mario")])
     out = resolve_peer(client, "zzzzz")
     # difflib ratio between 'zzzzz' and 'mario' / 'acme::mario' is ~0
-    # so nothing crosses 0.5.
+    # so nothing crosses 0.75.
     assert out == []
+
+
+# ── Typosquat hardening (security audit NEW #2) ─────────────────────────
+
+
+def test_typosquat_prefix_outranks_fuzzy_match():
+    """A legitimate substring-prefix match (``south`` → ``south``)
+    must outrank a fuzzy ratio on a typosquat (``south`` → ``southfake``)
+    so the user sees the right peer at position #1 and — most
+    importantly — the auto-select path in ``contact()`` lands on the
+    real peer rather than the squatter."""
+    client = _FakeClient([
+        _peer("south", "South Bot"),
+        _peer("southfake", "South Fake"),
+    ])
+
+    out = resolve_peer(client, "south")
+    assert out, "expected at least one match"
+    # Exact name wins outright.
+    assert out[0].agent_id == "acme::south"
+    assert out[0].score == 1.0
+    # The squatter is still allowed in the list (prefix match) but
+    # must score strictly below the legitimate peer — the UI relies
+    # on this ordering for disambiguation.
+    scores_by_handle = {c.agent_id: c.score for c in out}
+    if "acme::southfake" in scores_by_handle:
+        assert scores_by_handle["acme::southfake"] < scores_by_handle["acme::south"]
+
+
+def test_fuzzy_cutoff_rejects_distant_typosquats():
+    """``north`` against ``southfake`` — no common substring, far below
+    0.75, must not show up as a match. Previous 0.5 cutoff was
+    permissive enough to surface these as plausible candidates."""
+    client = _FakeClient([_peer("southfake", "South Fake")])
+    out = resolve_peer(client, "north")
+    assert out == []
+
+
+def test_contact_does_not_auto_select_on_single_fuzzy_match(monkeypatch):
+    """When the only candidate is a fuzzy (score < 1.0) match, the
+    ``contact`` MCP tool must NOT auto-select it — the user has to
+    confirm. Protects against ``contact('south')`` landing silently
+    on ``southfake`` if someone squats the legitimate name.
+    """
+    from cullis_connector.config import ConnectorConfig
+    from cullis_connector.state import get_state, reset_state
+    from cullis_connector.tools import intent
+
+    class _FakeFastMCP:
+        def __init__(self) -> None:
+            self.tools: dict = {}
+        def tool(self):
+            def dec(fn):
+                self.tools[fn.__name__] = fn
+                return fn
+            return dec
+
+    reset_state()
+    cfg_dir = __import__("pathlib").Path("/tmp/contact-fuzzy-test")
+    get_state().config = ConnectorConfig(
+        site_url="https://mastio.test",
+        config_dir=cfg_dir,
+        verify_tls=False,
+        request_timeout_s=2.0,
+    )
+
+    # Only peer is a typo away from the query — fuzzy, not exact.
+    class _C:
+        _signing_key_pem = "PEM"
+
+        def list_peers(self, q=None, limit=50):
+            return [_peer("maria", "Maria Bianchi")]
+    get_state().client = _C()
+
+    mcp = _FakeFastMCP()
+    intent.register(mcp)
+    out = mcp.tools["contact"]("maraia")
+
+    # No silent auto-select — user is asked to pick.
+    assert get_state().last_peer_resolved is None
+    assert "confirm" in out.lower() or "pick" in out.lower()
+    reset_state()

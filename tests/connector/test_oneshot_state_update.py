@@ -48,11 +48,15 @@ class _FakeClient:
         return self._decoder(row)
 
     def _egress_http(self, *args, **kwargs):
-        # Only invoked by _prime_sender_pubkey_cache; cache hit avoids it.
+        # Fallback for rows whose sender wasn't pre-seeded in the cache
+        # (e.g. bare names that canonicalise into a different key).
+        # Returns a valid-looking resolve response so prime succeeds
+        # rather than raising PubkeyPrimeError — unrelated to the state
+        # cursor logic these tests are exercising.
         class _R:
-            status_code = 404
+            status_code = 200
             def raise_for_status(self): pass
-            def json(self): return {}
+            def json(self): return {"target_cert_pem": "PEM"}
         return _R()
 
 
@@ -77,10 +81,16 @@ def receive_tool():
 
 
 def _install_client(rows, decoder=None) -> _FakeClient:
+    import time as _time
+
     client = _FakeClient(rows=rows, decoder=decoder)
-    # Pre-seed the cache so prime() short-circuits.
+    # Pre-seed the cache so prime() short-circuits on the TTL-fresh
+    # branch. The timestamp must be current — a 0.0 seed is always
+    # stale and would trigger the _egress_http refetch path (which
+    # returns 404 in this fixture → PubkeyPrimeError on purpose).
+    now = _time.time()
     for r in rows:
-        client._pubkey_cache[r["sender_agent_id"]] = ("PEM", 0.0)
+        client._pubkey_cache[r["sender_agent_id"]] = ("PEM", now)
     get_state().client = client
     return client
 
@@ -145,6 +155,51 @@ def test_receive_only_updates_on_decode_success(receive_tool):
     assert "decrypt failed" in out
     assert get_state().last_peer_resolved is None
     assert get_state().last_reply_to is None
+
+
+def test_bad_signature_does_not_update_last_peer_resolved(receive_tool):
+    """Explicit contract test (security audit NEW #3): when
+    ``decrypt_oneshot`` raises for a signature-verification failure,
+    ``state.last_peer_resolved`` MUST NOT be touched.
+
+    The invariant protects the ``reply()`` tool: if we updated the
+    cursor on an unverified row, a reply would be addressed to an
+    attacker-controlled sender string. The existing test above covers
+    a generic RuntimeError; this one pins the specific failure mode
+    the SDK surfaces when signature verification (inner or outer)
+    doesn't match, so regressions that re-order the bookkeeping
+    around the except clause fail loudly.
+    """
+    # Seed a known-good prior state. If the bad-signature branch
+    # leaks into last_peer_resolved, this value will be overwritten
+    # and the assertion below will fire.
+    state = get_state()
+    state.last_peer_resolved = "acme::prior-known-good"
+    state.last_reply_to = "msg-prior"
+
+    def _sig_verify_fail(_row):
+        # Mirrors what cullis_sdk.client.decrypt_oneshot raises when
+        # the envelope signature chain fails to verify against the
+        # primed pubkey cache.
+        raise ValueError("envelope signature verification failed")
+
+    rows = [{
+        "sender_agent_id": "acme::mallory",
+        "msg_id": "msg-forged",
+        "correlation_id": "corr-forged",
+        "reply_to": None,
+        "payload_ciphertext": "{}",
+    }]
+    _install_client(rows, decoder=_sig_verify_fail)
+    out = receive_tool()
+
+    # User-visible failure trail is preserved.
+    assert "decrypt failed" in out
+    assert "signature verification failed" in out
+    # State is unchanged from before the call — NOT updated to the
+    # unverified sender.
+    assert state.last_peer_resolved == "acme::prior-known-good"
+    assert state.last_reply_to == "msg-prior"
 
 
 def test_receive_picks_last_decoded_row_when_multiple(receive_tool):
