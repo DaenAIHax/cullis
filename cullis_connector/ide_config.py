@@ -120,6 +120,32 @@ KNOWN_IDES: dict[str, IDEDescriptor] = {
         kind=InstallerKind.COMMAND,
         detect_binary="claude",
     ),
+    "zed": IDEDescriptor(
+        id="zed",
+        display_name="Zed",
+        paths={
+            # Zed follows XDG on every OS it supports today; the
+            # settings file is the same place on macOS and Linux.
+            # Windows support is still preview and hasn't published a
+            # stable config path, so we leave that slot off and let
+            # detection fall through to MISSING.
+            "darwin": "~/.config/zed/settings.json",
+            "linux":  "~/.config/zed/settings.json",
+        },
+        # Zed uses its own key for MCP servers — `context_servers`
+        # in settings.json, not the `mcpServers` that Claude Desktop /
+        # Cursor / Cline / Windsurf standardised on.
+        servers_key="context_servers",
+    ),
+    "windsurf": IDEDescriptor(
+        id="windsurf",
+        display_name="Windsurf",
+        paths={
+            "darwin": "~/.codeium/windsurf/mcp_config.json",
+            "linux":  "~/.codeium/windsurf/mcp_config.json",
+            "win32":  "%USERPROFILE%\\.codeium\\windsurf\\mcp_config.json",
+        },
+    ),
 }
 
 

@@ -232,6 +232,42 @@ Edit `claude_desktop_config.json`:
 
 Restart Claude Desktop — the Cullis tools appear in the MCP menu.
 
+### Zed
+
+Add the Cullis server to Zed's `settings.json` (Zed uses
+`context_servers`, not `mcpServers`):
+
+```json
+{
+  "context_servers": {
+    "cullis": {
+      "command": "cullis-connector",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Or click the **Zed** card on the connector dashboard `/connected`
+page to have it written for you.
+
+### Windsurf
+
+Windsurf reads MCP servers from `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cullis": {
+      "command": "cullis-connector",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Same one-click behaviour via the dashboard `/connected` page.
+
 ### ToolHive
 
 ToolHive pulls MCP servers from its registry. The Cullis Connector is
