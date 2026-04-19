@@ -422,7 +422,12 @@ cullis-connector --config-dir ~/.cullis-orgB serve
 
 ## License
 
-`cullis-connector` is distributed under the
-[Functional Source License 1.1 with Apache 2.0 future grant](../LICENSE).
-SDKs (`cullis_sdk`, `sdk-ts`) are permissive Apache 2.0 — see the
-monorepo root `LICENSE` files for the full text.
+`cullis-connector` is distributed under the permissive
+[**Apache License 2.0**](./LICENSE). The Connector is the binary every
+end user installs on their workstation to join the Cullis network, so
+the terms match the other user-facing surfaces (`cullis_sdk`, `sdk-ts`,
+`enterprise-kit`) — zero-friction review by any corporate legal team.
+
+The Cullis server components (`app/`, `mcp_proxy/`) live in the same
+monorepo under the Functional Source License 1.1 with Apache 2.0
+future grant; see `../NOTICE` for the full per-path map.

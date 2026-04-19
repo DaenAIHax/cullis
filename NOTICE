@@ -9,6 +9,7 @@ This repository contains multiple components under different licenses:
 | `mcp_proxy/`         | FSL-1.1-Apache-2.0 (see LICENSE)              | MCP Proxy. Converts to Apache-2.0 two years after each release.   |
 | `cullis_sdk/`        | Apache-2.0 (see `cullis_sdk/LICENSE`)         | Python SDK for agents. Permissive, permanent.                     |
 | `sdk-ts/`            | MIT (see `sdk-ts/LICENSE`)                    | TypeScript SDK for agents. Permissive, permanent.                 |
+| `cullis_connector/`  | Apache-2.0 (see `cullis_connector/LICENSE`)   | End-user connector binary. Permissive, permanent.                 |
 | `enterprise-kit/`    | Apache-2.0 (see `enterprise-kit/LICENSE`)     | Integration templates and examples. Permissive, permanent.        |
 | `demo_network/`      | FSL-1.1-Apache-2.0 (covered by root LICENSE)  | Demo stack bundled with broker+proxy.                             |
 | `tests/`             | FSL-1.1-Apache-2.0 (covered by root LICENSE)  |                                                                   |
@@ -22,11 +23,14 @@ third party from re-selling Cullis itself as a substitute managed service.
 Every FSL-licensed release automatically converts to the Apache License 2.0
 two years after its publication date.
 
-## Why Apache-2.0 / MIT on the SDKs?
+## Why Apache-2.0 / MIT on the SDKs and the Connector?
 
-SDKs are the integration surface for agent developers. They must carry zero
-friction, now and forever. The Apache 2.0 (Python) and MIT (TypeScript) terms
-match the conventions of each ecosystem.
+SDKs are the integration surface for agent developers; the Connector is the
+binary every end user installs on their workstation to join the network.
+Both must carry zero friction now and forever — an enterprise legal team
+reviewing a `pip install cullis-connector` on an employee laptop should not
+have to weigh a source-available licence. The Apache 2.0 (Python) and MIT
+(TypeScript) terms match the conventions of each ecosystem.
 
 ## Trademarks
 
