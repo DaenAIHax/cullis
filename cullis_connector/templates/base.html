@@ -3,26 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Connector{% endblock %} — Cullis</title>
+    <title>{% block title %}Connector{% endblock %} — Cullis Connector</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="/static/htmx.min.js" defer></script>
 </head>
 <body>
 <div class="shell">
     <header class="topbar">
         <div class="brand">
-            <div class="brand-mark" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 4h16v4H4z"/>
-                    <path d="M7 8v13M12 8v13M17 8v13"/>
-                    <path d="M4 14h16"/>
-                </svg>
-            </div>
+            <img class="brand-mark" src="/static/cullis-mark.svg" alt="Cullis" aria-hidden="true">
             <div class="brand-text">
                 <span class="brand-name">Cullis</span>
-                <span class="brand-sub">Connector · Local</span>
+                <div class="brand-role-row">
+                    <span class="brand-role-chip">Connector</span>
+                    <span class="brand-role-sub">Local Edge · Your Machine</span>
+                </div>
             </div>
         </div>
         <div class="topbar-status">

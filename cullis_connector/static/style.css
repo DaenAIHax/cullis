@@ -4,17 +4,19 @@
    ===================================================================== */
 
 :root {
-  --bg-deepest:     #05080e;
-  --bg-surface:     #0a0f1a;
-  --bg-card:        #0f1520;
-  --bg-elevated:    #141b2a;
-  --border-subtle:  rgba(42, 48, 64, 0.5);
-  --border-default: rgba(58, 68, 88, 0.6);
+  /* Aligned with cullis.io site palette (#050508 void) + Mastio/Court dashboards */
+  --bg-deepest:     #050508;
+  --bg-surface:     #0a0b10;
+  --bg-card:        #10121a;
+  --bg-elevated:    #13151f;
+  --border-subtle:  rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-strong:  rgba(255, 255, 255, 0.18);
   --border-accent:  rgba(0, 229, 199, 0.3);
 
-  --text-primary:   #ffffff;
+  --text-primary:   #e8e9ed;
   --text-secondary: #a8b0c0;
-  --text-muted:     #6a7080;
+  --text-muted:     #6e7180;
   --text-dim:       #3a4050;
 
   --accent:         #00e5c7;
@@ -26,9 +28,12 @@
   --danger:         #ff4d6d;
   --danger-bg:      rgba(255, 77, 109, 0.1);
   --success:        #3ee089;
-  --warning:        #f5a623;
+  --warning:        #f0a500;
 
+  /* Typography — dashboard registry (Chakra Petch brand lockup + DM Sans body + JetBrains Mono)
+     plus Instrument Serif editorial accent to bridge the site tone. */
   --font-display:   'Chakra Petch', sans-serif;
+  --font-editorial: 'Instrument Serif', Georgia, serif;
   --font-body:      'DM Sans', system-ui, sans-serif;
   --font-mono:      'JetBrains Mono', 'Fira Code', monospace;
 
@@ -65,16 +70,18 @@ body {
   background-attachment: fixed;
 }
 
-/* Subtle grid overlay — 32px cells, barely visible */
+/* Subtle grid overlay with radial mask — echoes the cullis.io site treatment */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
-  background-size: 32px 32px;
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 75% 60% at 50% 25%, black 25%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 75% 60% at 50% 25%, black 25%, transparent 75%);
   z-index: 0;
 }
 
@@ -116,40 +123,53 @@ body::after {
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, rgba(0, 229, 199, 0.15), rgba(0, 229, 199, 0.05));
-  border: 1px solid var(--border-accent);
-  color: var(--accent);
+  height: 28px;
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 0 10px rgba(0, 229, 199, 0.28));
 }
-
-.brand-mark svg { width: 18px; height: 18px; }
 
 .brand-text {
   display: flex;
   flex-direction: column;
   line-height: 1;
+  gap: 6px;
 }
 
 .brand-name {
   font-family: var(--font-display);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 14px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--text-primary);
 }
 
-.brand-sub {
+.brand-role-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-role-chip {
   font-family: var(--font-display);
-  font-size: 10px;
-  letter-spacing: 0.18em;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 229, 199, 0.1);
+  border: 1px solid rgba(0, 229, 199, 0.2);
   color: var(--accent);
-  margin-top: 4px;
+}
+
+.brand-role-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .topbar-status {
@@ -340,12 +360,18 @@ body::after {
 }
 
 .panel-title {
-  font-family: var(--font-display);
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-family: var(--font-editorial);
+  font-size: 32px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
   color: var(--text-primary);
-  margin: 0 0 8px 0;
+  margin: 0 0 10px 0;
+}
+
+.panel-title em {
+  font-style: italic;
+  color: var(--accent);
 }
 
 .panel-sub {
@@ -353,6 +379,7 @@ body::after {
   color: var(--text-secondary);
   margin: 0;
   max-width: 56ch;
+  line-height: 1.6;
 }
 
 /* --- Form inputs ------------------------------------------------------- */
@@ -600,12 +627,17 @@ body::after {
 }
 
 .waiting-title {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-family: var(--font-editorial);
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
   margin: 0 0 8px;
+}
+
+.waiting-title em {
+  font-style: italic;
+  color: var(--accent);
 }
 
 .waiting-meta {
