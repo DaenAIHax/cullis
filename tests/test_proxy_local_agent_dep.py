@@ -13,7 +13,6 @@ Also pins the two invariants the dual dep must hold:
 from __future__ import annotations
 
 import importlib
-import time
 
 import pytest
 import pytest_asyncio
