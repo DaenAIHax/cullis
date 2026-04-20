@@ -16,6 +16,22 @@ _DPOP_WWW_AUTH = 'DPoP realm="mcp-proxy", algs="ES256 PS256"'
 
 
 async def get_authenticated_agent(request: Request) -> TokenPayload:
+    """Authenticate an external agent.
+
+    ADR-012 Phase 4: when ``local_auth_enabled`` is true and the request
+    carries ``Authorization: Bearer <jwt>``, validate the JWT against the
+    in-process ``LocalIssuer`` and surface a ``TokenPayload`` derived
+    from local claims + DB lookup (capabilities, is_active). Otherwise
+    fall through to the legacy DPoP-bound path below.
+    """
+    from mcp_proxy.auth.local_agent_dep import _maybe_local_token
+    local = await _maybe_local_token(request)
+    if local is not None:
+        return local
+    return await _get_authenticated_agent_dpop(request)
+
+
+async def _get_authenticated_agent_dpop(request: Request) -> TokenPayload:
     """Authenticate an external agent via DPoP-bound JWT (RFC 9449).
 
     Requires:
