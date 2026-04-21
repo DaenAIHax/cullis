@@ -1954,6 +1954,272 @@ async def pki_rotate_ca(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Mastio ES256 signing key — rotation dashboard (ADR-012 Phase 2.1 UX)
+# ─────────────────────────────────────────────────────────────────────────────
+
+MASTIO_ROTATION_GRACE_DAYS_DEFAULT = 7
+MASTIO_ROTATION_GRACE_DAYS_MIN = 1
+MASTIO_ROTATION_GRACE_DAYS_MAX = 90
+
+
+async def _load_rotation_grace_days() -> int:
+    """Read the configured rotation grace window (days) from proxy_config.
+
+    Falls back to the baseline default on first visit / malformed config.
+    """
+    from mcp_proxy.db import get_config
+    raw = await get_config("rotation_grace_days")
+    if raw is None:
+        return MASTIO_ROTATION_GRACE_DAYS_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return MASTIO_ROTATION_GRACE_DAYS_DEFAULT
+    if value < MASTIO_ROTATION_GRACE_DAYS_MIN:
+        return MASTIO_ROTATION_GRACE_DAYS_MIN
+    if value > MASTIO_ROTATION_GRACE_DAYS_MAX:
+        return MASTIO_ROTATION_GRACE_DAYS_MAX
+    return value
+
+
+def _mastio_key_to_view(key, *, now: datetime) -> dict:
+    """Render a ``MastioKey`` into a plain dict the template can iterate over."""
+    expires_at = key.expires_at
+    grace_total = None
+    grace_remaining = None
+    grace_pct = None
+    if key.deprecated_at is not None and expires_at is not None:
+        grace_total_s = (expires_at - key.deprecated_at).total_seconds()
+        grace_remaining_s = max(0, (expires_at - now).total_seconds())
+        grace_total = max(1, int(grace_total_s))
+        grace_remaining = int(grace_remaining_s)
+        # 0% = just rotated, 100% = grace fully elapsed
+        grace_pct = max(
+            0, min(100, 100 - int(grace_remaining_s * 100 / grace_total)),
+        )
+    return {
+        "kid": key.kid,
+        "pubkey_pem": key.pubkey_pem,
+        "cert_pem": key.cert_pem or "",
+        "created_at": key.created_at.isoformat(),
+        "activated_at": key.activated_at.isoformat() if key.activated_at else None,
+        "deprecated_at": key.deprecated_at.isoformat() if key.deprecated_at else None,
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "is_active": key.is_active,
+        "is_valid_for_verification": key.is_valid_for_verification,
+        "grace_total_seconds": grace_total,
+        "grace_remaining_seconds": grace_remaining,
+        "grace_pct": grace_pct,
+    }
+
+
+@router.get("/mastio-key", response_class=HTMLResponse)
+async def mastio_key_page(request: Request):
+    """Signing-key rotation dashboard.
+
+    Shows the active Mastio ES256 signer, any keys still inside the
+    verifier grace window, and exposes the ``rotation_grace_days``
+    configuration + a one-click rotate action.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+
+    from mcp_proxy.auth.local_keystore import LocalKeyStore
+    from mcp_proxy.db import get_config
+
+    org_id = await get_config("org_id") or ""
+    grace_days = await _load_rotation_grace_days()
+    standalone = getattr(request.app.state, "broker_bridge", None) is None
+
+    keystore = LocalKeyStore()
+    now = datetime.now(timezone.utc)
+
+    active_view = None
+    try:
+        active_key = await keystore.current_signer()
+    except RuntimeError as exc:
+        # Identity not yet provisioned — the page renders with an
+        # empty-state CTA pointing at /proxy/setup.
+        _log.info("mastio_key page: no active signer (%s)", exc)
+        active_key = None
+
+    if active_key is not None:
+        active_view = _mastio_key_to_view(active_key, now=now)
+
+    grace_keys = []
+    try:
+        valid = await keystore.all_valid_keys()
+        for k in valid:
+            if k.deprecated_at is None:
+                continue  # that is the active one, shown above
+            grace_keys.append(_mastio_key_to_view(k, now=now))
+        grace_keys.sort(key=lambda k: k["expires_at"] or "")
+    except Exception:
+        pass
+
+    return templates.TemplateResponse("mastio_key.html", _ctx(
+        request, session,
+        active="mastio_key",
+        org_id=org_id,
+        active_key=active_view,
+        grace_keys=grace_keys,
+        grace_days=grace_days,
+        grace_days_min=MASTIO_ROTATION_GRACE_DAYS_MIN,
+        grace_days_max=MASTIO_ROTATION_GRACE_DAYS_MAX,
+        standalone=standalone,
+    ))
+
+
+@router.post("/mastio-key/grace-days")
+async def mastio_key_save_grace(request: Request):
+    """Persist the ``rotation_grace_days`` preference (clamped to 1..90)."""
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    from mcp_proxy.db import log_audit, set_config
+
+    form = await request.form()
+    raw = form.get("grace_days", "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail=f"grace_days must be an integer between {MASTIO_ROTATION_GRACE_DAYS_MIN} and {MASTIO_ROTATION_GRACE_DAYS_MAX}",
+        )
+    if (
+        value < MASTIO_ROTATION_GRACE_DAYS_MIN
+        or value > MASTIO_ROTATION_GRACE_DAYS_MAX
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"grace_days must be between {MASTIO_ROTATION_GRACE_DAYS_MIN} and {MASTIO_ROTATION_GRACE_DAYS_MAX}",
+        )
+
+    await set_config("rotation_grace_days", str(value))
+    await log_audit(
+        agent_id="admin",
+        action="mastio_key.grace_days_set",
+        status="success",
+        detail=f"rotation_grace_days={value}",
+    )
+    return RedirectResponse(url="/proxy/mastio-key", status_code=303)
+
+
+@router.post("/mastio-key/rotate")
+async def mastio_key_rotate(request: Request):
+    """Trigger a Mastio ES256 leaf rotation.
+
+    Flow (ADR-012 Phase 2.1, issue #261):
+      1. ``AgentManager.rotate_mastio_key`` mints a new leaf under the
+         intermediate CA, signs a continuity proof with the current key.
+      2. The ``propagator`` (wired to ``BrokerBridge`` when available)
+         POSTs the proof to the Court's rotate endpoint. On Court
+         rejection we raise 502 with the Court's own error.
+      3. The local ``mastio_keys`` swap runs in a single DB transaction —
+         the previous key is marked ``deprecated_at=now`` / ``expires_at``
+         at ``now + grace_days`` and remains verifier-valid during the
+         grace window.
+
+    Standalone deploys (no broker uplink) allow rotation without
+    propagation — a warning surfaces in the UI. This is a deliberate
+    relaxation: a standalone Mastio has no Court pin to update.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    form = await request.form()
+    if form.get("confirm_text") != "ROTATE":
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation text mismatch — rotation aborted",
+        )
+
+    from mcp_proxy.db import log_audit
+
+    agent_mgr = getattr(request.app.state, "agent_manager", None)
+    if agent_mgr is None or not getattr(agent_mgr, "mastio_loaded", False):
+        raise HTTPException(
+            status_code=409,
+            detail="Mastio identity not loaded — complete setup first",
+        )
+
+    grace_days = await _load_rotation_grace_days()
+    broker_bridge = getattr(request.app.state, "broker_bridge", None)
+    propagator = (
+        broker_bridge.propagate_mastio_key_rotation
+        if broker_bridge is not None
+        else None
+    )
+
+    old_kid = agent_mgr._active_key.kid if agent_mgr._active_key else None
+
+    try:
+        new_active = await agent_mgr.rotate_mastio_key(
+            grace_days=grace_days,
+            propagator=propagator,
+        )
+    except HTTPException as exc:
+        await log_audit(
+            agent_id="admin",
+            action="mastio_key.rotate",
+            status="failure",
+            detail=f"old_kid={old_kid}, reason={exc.detail}",
+        )
+        raise
+    except Exception as exc:
+        await log_audit(
+            agent_id="admin",
+            action="mastio_key.rotate",
+            status="failure",
+            detail=f"old_kid={old_kid}, reason={exc}",
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"rotation failed: {exc}",
+        ) from exc
+
+    # Rebuild the LocalIssuer so subsequent token mints use the new signer.
+    try:
+        from mcp_proxy.auth.local_issuer import build_from_keystore
+        from mcp_proxy.auth.local_keystore import LocalKeyStore
+        ks = getattr(request.app.state, "local_keystore", None) or LocalKeyStore()
+        request.app.state.local_keystore = ks
+        org_id = getattr(request.app.state, "org_id", None)
+        if org_id:
+            request.app.state.local_issuer = await build_from_keystore(org_id, ks)
+    except Exception as exc:
+        _log.warning("LocalIssuer rebuild after rotation failed: %s", exc)
+
+    await log_audit(
+        agent_id="admin",
+        action="mastio_key.rotate",
+        status="success",
+        detail=(
+            f"old_kid={old_kid}, new_kid={new_active.kid}, "
+            f"grace_days={grace_days}"
+        ),
+    )
+    # Redirect with flash-state in query string so the page can render a
+    # success toast without a dedicated session flash channel.
+    return RedirectResponse(
+        url=(
+            f"/proxy/mastio-key?rotated=1"
+            f"&old_kid={old_kid or ''}"
+            f"&new_kid={new_active.kid}"
+        ),
+        status_code=303,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Vault Settings
 # ─────────────────────────────────────────────────────────────────────────────
 
