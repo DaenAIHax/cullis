@@ -538,6 +538,124 @@ async def patch_org_mastio_pubkey(
     }
 
 
+class MastioPubkeyRotateRequest(BaseModel):
+    """Body for ``POST /onboarding/orgs/{org_id}/mastio-pubkey/rotate``.
+
+    ADR-012 Phase 2.1. The caller (Mastio) ships the new pubkey plus a
+    key-continuity proof signed by the *old* priv key. The Court
+    verifies the proof against the currently-pinned ``mastio_pubkey``
+    and, on success, updates the pin. No admin auth header is
+    required — the proof *is* the auth.
+    """
+
+    new_pubkey_pem: str = Field(..., max_length=1024)
+    new_cert_pem: str | None = Field(None, max_length=4096)
+    proof: dict = Field(...)
+
+
+class MastioPubkeyRotateResponse(BaseModel):
+    org_id: str
+    new_kid: str
+    rotated_at: str
+
+
+@onboarding_router.post(
+    "/orgs/{org_id}/mastio-pubkey/rotate",
+    response_model=MastioPubkeyRotateResponse,
+)
+async def rotate_org_mastio_pubkey(
+    org_id: str,
+    body: MastioPubkeyRotateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MastioPubkeyRotateResponse:
+    """Rotate the pinned Mastio pubkey via a key-continuity proof.
+
+    Flow:
+      1. Resolve the org and its currently-pinned ``mastio_pubkey``.
+      2. Derive the expected ``old_kid`` from the pinned pubkey.
+      3. Parse + verify the submitted continuity proof.
+      4. On success, update the pin and emit an audit event.
+    """
+    from app.auth.mastio_rotation_verify import (
+        ContinuityProof,
+        ContinuityProofError,
+        compute_kid_from_pubkey_pem,
+        verify_proof,
+    )
+
+    org = await get_org_by_id(db, org_id)
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    if not org.mastio_pubkey:
+        # Rotation requires a prior pin. First-pin happens via the
+        # admin flow (``PATCH /admin/orgs/{id}/mastio-pubkey``) or the
+        # /onboarding/join + /onboarding/attach bootstraps.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="organization has no pinned mastio pubkey; use the admin flow for first-pin",
+        )
+
+    _validate_mastio_pubkey(body.new_pubkey_pem)
+
+    try:
+        proof = ContinuityProof.from_dict(body.proof)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"malformed proof: {exc}",
+        ) from exc
+
+    expected_old_kid = compute_kid_from_pubkey_pem(org.mastio_pubkey)
+    try:
+        verify_proof(
+            proof,
+            expected_old_pubkey_pem=org.mastio_pubkey,
+            expected_old_kid=expected_old_kid,
+        )
+    except ContinuityProofError as exc:
+        await log_event(
+            db, "admin.mastio_pubkey_rotate_rejected", "fail",
+            org_id=org_id,
+            details={"reason": str(exc), "old_kid": expected_old_kid},
+        )
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail=f"continuity proof rejected: {exc}",
+        ) from exc
+
+    # Proof-bound consistency: the pubkey in the body must be the one
+    # the proof signed over. Defends against a rebind where an
+    # attacker replays a valid proof but swaps ``new_pubkey_pem`` in
+    # the envelope for a pubkey they control.
+    if proof.new_pubkey_pem != body.new_pubkey_pem:
+        await log_event(
+            db, "admin.mastio_pubkey_rotate_rejected", "fail",
+            org_id=org_id,
+            details={"reason": "new_pubkey_pem mismatch between envelope and proof"},
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="new_pubkey_pem in envelope does not match the one signed in the proof",
+        )
+
+    await update_org_mastio_pubkey(db, org_id, body.new_pubkey_pem)
+    rotated_at = datetime.now(timezone.utc).isoformat()
+    await log_event(
+        db, "admin.mastio_pubkey_rotated", "ok",
+        org_id=org_id,
+        details={
+            "old_kid": expected_old_kid,
+            "new_kid": proof.new_kid,
+            "rotated_at": rotated_at,
+        },
+    )
+    return MastioPubkeyRotateResponse(
+        org_id=org_id,
+        new_kid=proof.new_kid,
+        rotated_at=rotated_at,
+    )
+
+
 @admin_router.post("/orgs/{org_id}/reject",
                    dependencies=[Depends(_require_admin)])
 async def reject_org(
