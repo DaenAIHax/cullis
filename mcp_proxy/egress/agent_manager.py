@@ -488,6 +488,9 @@ class AgentManager:
         now = datetime.now(timezone.utc)
 
         # Intermediate CA — EC P-256, pathLen=0 (cannot sign further CAs).
+        # 3y validity: online signer intended to be rotated ahead of expiry
+        # (NIST SP 800-57 Part 1 §5.3.6 guidance for signing keys in active
+        # use). Automatic rotation is tracked in issue #261.
         mastio_ca_key = ec.generate_private_key(ec.SECP256R1())
         mastio_ca_subject = x509.Name([
             x509.NameAttribute(NameOID.COMMON_NAME, f"{self._org_id} Mastio CA"),
@@ -500,7 +503,7 @@ class AgentManager:
             .public_key(mastio_ca_key.public_key())
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=5))
-            .not_valid_after(now + timedelta(days=3650))
+            .not_valid_after(now + timedelta(days=365 * 3))
             .add_extension(
                 x509.BasicConstraints(ca=True, path_length=0),
                 critical=True,

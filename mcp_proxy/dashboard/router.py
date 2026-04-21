@@ -99,7 +99,13 @@ def _ctx(request: Request, session: ProxyDashboardSession, **kwargs) -> dict:
 
 
 def generate_org_ca(org_id: str) -> tuple[str, str]:
-    """Generate self-signed Org CA. Returns (cert_pem, key_pem)."""
+    """Generate self-signed Org CA. Returns (cert_pem, key_pem).
+
+    10-year validity: this is an offline-held root (NIST SP 800-57
+    Part 1 §5.3.6 — root CAs held offline with long lifetimes).
+    All online signing is done by the Mastio intermediate CA minted
+    underneath this root; the intermediate rotates on a shorter cycle.
+    """
     key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, f"{org_id} CA"),
