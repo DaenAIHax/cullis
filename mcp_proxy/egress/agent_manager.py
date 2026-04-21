@@ -493,11 +493,62 @@ class AgentManager:
         except RuntimeError:
             self._active_key = None
 
+        # ADR-012 Phase 2.0 — one-shot data migration from the pre-2.0
+        # ``proxy_config.mastio_leaf_{key,cert}`` pair to the
+        # ``mastio_keys`` table. Kept out of the Alembic migration so
+        # schema bootstrap doesn't need to parse PEMs (the standalone
+        # proxy-init container ships an alembic-only environment).
+        if self._active_key is None:
+            await self._migrate_legacy_leaf_to_keystore()
+            try:
+                self._active_key = await self._keystore.current_signer()
+            except RuntimeError:
+                self._active_key = None
+
         if self.mastio_loaded:
             logger.info("Mastio identity loaded (ca + active key)")
             return
 
         await self._generate_mastio_identity()
+
+    async def _migrate_legacy_leaf_to_keystore(self) -> None:
+        """Seed ``mastio_keys`` from ``proxy_config.mastio_leaf_{key,cert}``.
+
+        No-op when the legacy rows are absent or already migrated.
+        Idempotent: leaves the legacy rows in place so a rollback only
+        needs to drop the new table.
+        """
+        leaf_key_pem = await get_config("mastio_leaf_key")
+        leaf_cert_pem = await get_config("mastio_leaf_cert")
+        if not leaf_key_pem or not leaf_cert_pem:
+            return
+        try:
+            cert = x509.load_pem_x509_certificate(leaf_cert_pem.encode())
+        except ValueError:
+            logger.warning(
+                "Legacy mastio_leaf_cert is malformed — skipping migration; "
+                "a fresh identity will be generated",
+            )
+            return
+        pubkey_pem = cert.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+        kid = compute_kid(pubkey_pem)
+        if await self._keystore.find_by_kid(kid) is not None:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await insert_mastio_key(
+            kid=kid,
+            pubkey_pem=pubkey_pem,
+            privkey_pem=leaf_key_pem,
+            cert_pem=leaf_cert_pem,
+            created_at=now_iso,
+            activated_at=now_iso,
+        )
+        logger.info(
+            "Migrated legacy mastio leaf into mastio_keys (kid=%s)", kid,
+        )
 
     async def _generate_mastio_identity(self) -> None:
         """Mint whichever Mastio pieces are missing — CA and/or leaf.
