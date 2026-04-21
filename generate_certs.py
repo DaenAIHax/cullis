@@ -163,7 +163,7 @@ def gen_org_ca(
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(NOW)
-        .not_valid_after(NOW + datetime.timedelta(days=365 * 5))
+        .not_valid_after(NOW + datetime.timedelta(days=365 * 3))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
             x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
