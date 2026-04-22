@@ -12,8 +12,9 @@ name: smoke
 on:
   push:
     branches: [main]
+  # No `branches:` filter on pull_request — stacked PRs (base != main)
+  # must trigger the smoke gate too. A missing filter matches any base.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
