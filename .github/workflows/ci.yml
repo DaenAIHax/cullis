@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # No `branches:` filter on pull_request — stacked PRs (base != main)
+  # must trigger CI too. A missing filter matches any base branch.
   pull_request:
-    branches: [main]
 
 # Require approval before running CI on PRs from forks.
 # This prevents untrusted code from executing pip install.

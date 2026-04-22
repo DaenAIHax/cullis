@@ -1,8 +1,9 @@
 name: DCO
 
 on:
+  # No `branches:` filter — stacked PRs (base != main) must run
+  # DCO check too. A missing filter matches any base branch.
   pull_request:
-    branches: [main]
     types: [opened, synchronize, reopened]
 
 jobs:
