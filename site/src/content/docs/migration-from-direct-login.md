@@ -166,6 +166,6 @@ During the grace window, yes — the legacy login still works. After `CULLIS_ALL
 
 ## See also
 
-- [Agent enrollment — the four methods](enrollment.md)
+- [Agent enrollment — the three methods](enrollment.md)
 - [Enrollment API reference](enrollment-api-reference.md)
 - [SPIFFE onboarding](spiffe-onboarding.md) for deploying SPIRE alongside Cullis
