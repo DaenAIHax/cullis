@@ -1,12 +1,12 @@
 ---
-title: "Migrating off /v1/auth/token direct login"
-description: "How to move existing SPIFFE/BYOCA deployments from direct-to-Court login onto the ADR-011 unified enrollment path, with zero downtime."
-category: "Identity"
-order: 40
-updated: "2026-04-18"
+title: "Migration from direct login"
+description: "Move existing SPIFFE/BYOCA deployments off the legacy direct-to-Court /v1/auth/token path onto the unified enrollment flow — with zero downtime."
+category: "Reference"
+order: 20
+updated: "2026-04-23"
 ---
 
-# Cullis — Migrating off the legacy direct-login path
+# Migration from direct login
 
 Before ADR-011, Cullis supported three runtime auth paths:
 
