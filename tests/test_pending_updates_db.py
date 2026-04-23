@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
 
 from mcp_proxy.db import (
     dispose_db,
