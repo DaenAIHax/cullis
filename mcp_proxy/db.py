@@ -472,6 +472,12 @@ async def get_mastio_keys_active() -> list[dict]:
     The invariant is exactly one; callers raise on 0 or >1. The query
     returns a list so the caller can surface a clear error rather than
     a silent ``.first()`` miss.
+
+    Ordering: ``kid`` lexicographic. With the single-row invariant the
+    order is observationally identical to any other — but keeping the
+    same ordering policy as ``get_mastio_keys_valid`` (below) means any
+    future schema change that relaxes the invariant won't silently
+    expose a timing oracle through this query's result list. See #282.
     """
     async with get_db() as conn:
         result = await conn.execute(
@@ -480,7 +486,7 @@ async def get_mastio_keys_active() -> list[dict]:
                 SELECT * FROM mastio_keys
                  WHERE activated_at IS NOT NULL
                    AND deprecated_at IS NULL
-                 ORDER BY activated_at ASC
+                 ORDER BY kid ASC
                 """
             )
         )
@@ -566,6 +572,13 @@ async def get_mastio_keys_valid() -> list[dict]:
     passed. Deprecated-but-not-yet-expired keys remain in the set —
     that is the grace-period mechanic used by the verifier during
     rotation (Phase 2.2). Never-activated rows are excluded.
+
+    Ordering: ``kid`` lexicographic (not ``activated_at``). The JWKS
+    endpoint surfaces this list verbatim, and sorting by activation
+    time leaked a rotation-timing oracle (``keys[-1]`` was always the
+    freshest signer). Lexicographic order is stable across rotations
+    so a client that snapshots the key list cannot infer "a rotation
+    just happened" from reordering alone. See #282.
     """
     async with get_db() as conn:
         result = await conn.execute(
@@ -574,7 +587,7 @@ async def get_mastio_keys_valid() -> list[dict]:
                 SELECT * FROM mastio_keys
                  WHERE activated_at IS NOT NULL
                    AND (expires_at IS NULL OR expires_at > :now)
-                 ORDER BY activated_at ASC
+                 ORDER BY kid ASC
                 """
             ),
             {"now": datetime.now(timezone.utc).isoformat()},

@@ -493,7 +493,13 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Cache-Control"] = "no-store"
+    # ``setdefault`` so individual handlers can opt into edge caching
+    # (``/.well-known/jwks-local.json`` flips to ``public, max-age=60``
+    # — the key list turns over on rotation grace-window scales, days,
+    # so 60s staleness is negligible and lets a CDN / reverse-proxy
+    # absorb the broadcast load, see #282). Handlers that don't set
+    # Cache-Control get the conservative ``no-store`` default.
+    response.headers.setdefault("Cache-Control", "no-store")
 
     # DPoP-Nonce on API responses only (not on dashboard/health routes, and
     # not on ADR-004 reverse-proxied paths — those carry the broker's own

@@ -37,6 +37,11 @@ async def proxy_logged_in(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_PROXY_ORG_ID", "acme")
     monkeypatch.setenv("PROXY_TRUST_DOMAIN", "test.local")
     monkeypatch.delenv("MCP_PROXY_BROKER_URL", raising=False)
+    # Issue #282 — the dashboard rotate endpoint rejects back-to-back
+    # rotations within 30s by default. Tests that exercise rotate
+    # immediately after fixture bootstrap need the guardrail off; the
+    # dedicated tests for the guardrail override this back.
+    monkeypatch.setenv("CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS", "0")
 
     from mcp_proxy.config import get_settings
     get_settings.cache_clear()
@@ -230,3 +235,107 @@ async def test_rotate_grace_row_appears_after_rotation(proxy_logged_in):
     assert "deprecated · still verifier-valid" in page.text
     # And a countdown data-attribute.
     assert "data-countdown-to=" in page.text
+
+
+# ── Minimum rotation interval (#282) ─────────────────────────────────
+
+
+@pytest_asyncio.fixture
+async def proxy_logged_in_with_min_interval(tmp_path, monkeypatch):
+    """Variant fixture with ``CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS``
+    set to a *realistic* value (30s) so the guardrail rejects
+    back-to-back rotations. Dedicated because the default fixture
+    above disables the guardrail to keep existing rotation tests
+    simple.
+    """
+    db_file = tmp_path / "proxy.sqlite"
+    monkeypatch.setenv("MCP_PROXY_DATABASE_URL", f"sqlite+aiosqlite:///{db_file}")
+    monkeypatch.delenv("PROXY_DB_URL", raising=False)
+    monkeypatch.setenv("PROXY_LOCAL_SWEEPER_DISABLED", "1")
+    monkeypatch.setenv("MCP_PROXY_STANDALONE", "true")
+    monkeypatch.setenv("MCP_PROXY_ORG_ID", "acme")
+    monkeypatch.setenv("PROXY_TRUST_DOMAIN", "test.local")
+    monkeypatch.delenv("MCP_PROXY_BROKER_URL", raising=False)
+    monkeypatch.setenv("CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS", "30")
+
+    from mcp_proxy.config import get_settings
+    get_settings.cache_clear()
+    from mcp_proxy.main import app
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            from mcp_proxy.dashboard.session import set_admin_password
+            await set_admin_password("test-password-1234")
+            await client.post(
+                "/proxy/login",
+                data={"password": "test-password-1234"},
+                follow_redirects=False,
+            )
+            yield app, client
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_back_to_back_rotation_is_rate_limited(
+    proxy_logged_in_with_min_interval,
+):
+    """Second rotation within the 30s floor must get 429 + an audit
+    entry tagged ``rate_limited``. The active signer does not change.
+    """
+    app, client = proxy_logged_in_with_min_interval
+    mgr = app.state.agent_manager
+    assert mgr.mastio_loaded
+    kid_after_bootstrap = mgr._active_key.kid
+
+    csrf = await _csrf(client)
+    resp = await client.post(
+        "/proxy/mastio-key/rotate",
+        data={"csrf_token": csrf, "confirm_text": "ROTATE"},
+        follow_redirects=False,
+    )
+    # The bootstrap itself happened < 30s ago, so even the FIRST
+    # rotation attempt should be blocked. That is the correct
+    # behaviour: the guardrail is about "last activation" not "last
+    # rotation", so a proxy that just booted counts.
+    assert resp.status_code == 429, resp.text
+    assert "min_interval" in resp.text.lower() or "minimum rotation" in resp.text.lower()
+    assert resp.headers.get("Retry-After") is not None
+
+    # Active signer did NOT change.
+    assert mgr._active_key.kid == kid_after_bootstrap
+
+    # Audit row was written with status=rate_limited. Query the
+    # audit_log table directly — there's no exported helper for
+    # filtered reads in mcp_proxy.db.
+    from mcp_proxy.db import get_db
+    from sqlalchemy import text as _text
+    async with get_db() as conn:
+        result = await conn.execute(
+            _text(
+                "SELECT action, status FROM audit_log "
+                "WHERE action = :action AND status = :status"
+            ),
+            {"action": "mastio_key.rotate", "status": "rate_limited"},
+        )
+        rows = list(result.mappings().all())
+    assert rows, "expected a rate_limited audit row, got none"
+
+
+@pytest.mark.asyncio
+async def test_rotation_succeeds_when_interval_disabled(proxy_logged_in):
+    """The default ``proxy_logged_in`` fixture sets the env var to 0
+    (guardrail off). A rotation immediately after bootstrap must
+    succeed — this is the regression-guard for the standard flow
+    and for sandbox integration tests that need rapid rotation.
+    """
+    app, client = proxy_logged_in
+    mgr = app.state.agent_manager
+    old_kid = mgr._active_key.kid
+    csrf = await _csrf(client)
+    resp = await client.post(
+        "/proxy/mastio-key/rotate",
+        data={"csrf_token": csrf, "confirm_text": "ROTATE"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    assert mgr._active_key.kid != old_kid

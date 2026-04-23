@@ -1966,6 +1966,31 @@ MASTIO_ROTATION_GRACE_DAYS_DEFAULT = 7
 MASTIO_ROTATION_GRACE_DAYS_MIN = 1
 MASTIO_ROTATION_GRACE_DAYS_MAX = 90
 
+# Minimum seconds between two ``/mastio-key/rotate`` calls. Configurable
+# via env so sandbox integration tests (#268) can lower / disable it
+# during ``./demo.sh full``, and so incident response can drop it to 0
+# without code edits. Not a trust-governance knob (never goes through
+# ``proxy_config``) — purely an operational guardrail against
+# burst-loop abuse from a stolen admin cookie. See #282.
+_MASTIO_ROTATION_MIN_INTERVAL_SECONDS_DEFAULT = 30
+
+
+def _mastio_rotation_min_interval_seconds() -> int:
+    """Read ``CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS`` from env.
+
+    Falls back to 30s on unset / malformed. Accepts 0 to disable the
+    guardrail (test environments, incident rollback).
+    """
+    import os
+    raw = os.environ.get("CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS")
+    if raw is None:
+        return _MASTIO_ROTATION_MIN_INTERVAL_SECONDS_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _MASTIO_ROTATION_MIN_INTERVAL_SECONDS_DEFAULT
+    return max(0, value)
+
 
 async def _load_rotation_grace_days() -> int:
     """Read the configured rotation grace window (days) from proxy_config.
@@ -2155,6 +2180,53 @@ async def mastio_key_rotate(request: Request):
             status_code=409,
             detail="Mastio identity not loaded — complete setup first",
         )
+
+    # Issue #282 — minimum rotation interval. A logged-in admin can
+    # POST ``confirm_text=ROTATE`` in a tight loop and with the default
+    # grace_days=7 that's thousands of keys / hour, all passing
+    # ``is_valid_for_verification``; with the 90-day max cadence an
+    # 8-hour session could mint ~2.5M verification-valid rows.
+    # Downstream verifiers OOM, Court gets hammered. A 30-second
+    # floor (configurable via env for sandbox integration tests and
+    # incident-response rollback) puts a human-scale rate ceiling on
+    # the operator surface without entering proxy_config as a
+    # trust-governance toggle — this is an operational guardrail.
+    min_interval_s = _mastio_rotation_min_interval_seconds()
+    if min_interval_s > 0:
+        from mcp_proxy.auth.local_keystore import LocalKeyStore
+        from datetime import datetime, timezone
+        ks = LocalKeyStore()
+        try:
+            latest_act = max(
+                (k.activated_at for k in await ks.all_valid_keys()
+                 if k.activated_at is not None),
+                default=None,
+            )
+        except Exception:
+            latest_act = None
+        if latest_act is not None:
+            delta_s = (datetime.now(timezone.utc) - latest_act).total_seconds()
+            if delta_s < min_interval_s:
+                await log_audit(
+                    agent_id="admin",
+                    action="mastio_key.rotate",
+                    status="rate_limited",
+                    detail=(
+                        f"min_interval={min_interval_s}s, "
+                        f"seconds_since_last={delta_s:.1f}s"
+                    ),
+                )
+                retry_after = max(1, int(min_interval_s - delta_s) + 1)
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"Minimum rotation interval {min_interval_s}s — "
+                        f"last rotation {delta_s:.1f}s ago. Retry in "
+                        f"{retry_after}s or lower "
+                        f"CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS."
+                    ),
+                    headers={"Retry-After": str(retry_after)},
+                )
 
     grace_days = await _load_rotation_grace_days()
     broker_bridge = getattr(request.app.state, "broker_bridge", None)

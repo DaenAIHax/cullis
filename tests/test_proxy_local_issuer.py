@@ -350,3 +350,226 @@ def test_jwks_endpoint_drops_expired_deprecated_key():
         kids = {k["kid"] for k in body["keys"]}
         assert kids == {new_active.kid}
         assert expired.kid not in kids
+
+
+# ── Cache + ETag + rate-limit (#282) ─────────────────────────────────
+
+
+def _reset_agent_rate_limiter() -> None:
+    """Clear the module-level ``get_agent_rate_limiter`` state so the
+    per-IP budget is full at the start of each test that exercises it.
+    """
+    from mcp_proxy.auth.rate_limit import get_agent_rate_limiter
+    limiter = get_agent_rate_limiter()
+    try:
+        limiter._windows.clear()
+    except AttributeError:
+        pass
+
+
+def test_jwks_endpoint_sets_cacheable_headers():
+    """The endpoint must emit ``Cache-Control: public, max-age=60,
+    stale-while-revalidate=60`` and a strong ``ETag`` so a CDN /
+    reverse-proxy in front can absorb the broadcast load during a
+    rotation grace window (#282).
+    """
+    from mcp_proxy.auth.jwks_local import router as jwks_router
+    _reset_agent_rate_limiter()
+
+    _, priv_pem, pub_pem = _fresh_key()
+    active = _active_key(priv_pem, pub_pem)
+
+    app = FastAPI()
+    app.include_router(jwks_router)
+    app.state.local_keystore = _FakeKeyStore(keys=[active])
+
+    with TestClient(app) as client:
+        resp = client.get("/.well-known/jwks-local.json")
+        assert resp.status_code == 200
+        cc = resp.headers.get("cache-control", "")
+        assert "public" in cc, cc
+        assert "max-age=60" in cc, cc
+        assert "stale-while-revalidate=60" in cc, cc
+        etag = resp.headers.get("etag")
+        assert etag is not None
+        assert etag.startswith('"') and etag.endswith('"')
+
+
+def test_jwks_endpoint_if_none_match_returns_304():
+    """A repeat GET with ``If-None-Match: <etag>`` must return 304 and
+    no body — the classic conditional-request fast path. Proves the
+    caller can skip parsing the body after the first warm fetch.
+    """
+    from mcp_proxy.auth.jwks_local import router as jwks_router
+    _reset_agent_rate_limiter()
+
+    _, priv_pem, pub_pem = _fresh_key()
+    active = _active_key(priv_pem, pub_pem)
+
+    app = FastAPI()
+    app.include_router(jwks_router)
+    app.state.local_keystore = _FakeKeyStore(keys=[active])
+
+    with TestClient(app) as client:
+        first = client.get("/.well-known/jwks-local.json")
+        assert first.status_code == 200
+        etag = first.headers["etag"]
+
+        second = client.get(
+            "/.well-known/jwks-local.json",
+            headers={"If-None-Match": etag},
+        )
+        assert second.status_code == 304
+        # 304 responses per RFC 7232 MUST include the same cache
+        # validators as the 200 would — especially ETag so a caller
+        # that retries can still short-circuit.
+        assert second.headers.get("etag") == etag
+        # No body content on 304.
+        assert not second.content
+
+
+def test_jwks_endpoint_etag_changes_after_rotation():
+    """After a rotation (different key set) the ETag must change so
+    any downstream cache invalidates. Conversely, identical key sets
+    yield identical ETags — a stable reads don't churn.
+    """
+    from mcp_proxy.auth.jwks_local import router as jwks_router
+    _reset_agent_rate_limiter()
+
+    _, priv_pem_a, pub_pem_a = _fresh_key()
+    _, priv_pem_b, pub_pem_b = _fresh_key()
+    active_a = _active_key(priv_pem_a, pub_pem_a)
+    active_b = _active_key(priv_pem_b, pub_pem_b)
+
+    # State 1: single key A.
+    app1 = FastAPI()
+    app1.include_router(jwks_router)
+    app1.state.local_keystore = _FakeKeyStore(keys=[active_a])
+    with TestClient(app1) as c1:
+        r1 = c1.get("/.well-known/jwks-local.json")
+        etag_1 = r1.headers["etag"]
+
+    # State 2: post-rotation — key A + key B (grace window).
+    grace_a = _grace_key(priv_pem_a, pub_pem_a)
+    app2 = FastAPI()
+    app2.include_router(jwks_router)
+    app2.state.local_keystore = _FakeKeyStore(keys=[grace_a, active_b])
+    with TestClient(app2) as c2:
+        r2 = c2.get("/.well-known/jwks-local.json")
+        etag_2 = r2.headers["etag"]
+
+    assert etag_1 != etag_2, (
+        "ETag must differ after rotation — otherwise stale caches stick"
+    )
+
+    # State 3: identical to state 1 — same single key A.
+    app3 = FastAPI()
+    app3.include_router(jwks_router)
+    app3.state.local_keystore = _FakeKeyStore(keys=[active_a])
+    with TestClient(app3) as c3:
+        r3 = c3.get("/.well-known/jwks-local.json")
+        etag_3 = r3.headers["etag"]
+    assert etag_1 == etag_3, "stable reads must yield stable ETag"
+
+
+def test_jwks_endpoint_rate_limits_per_ip():
+    """Budget is 30/min/IP (``_JWKS_RATE_LIMIT_PER_MINUTE``). The 31st
+    request from the same client gets 429 without touching the
+    keystore or the body serialiser.
+    """
+    from mcp_proxy.auth.jwks_local import router as jwks_router
+    _reset_agent_rate_limiter()
+
+    _, priv_pem, pub_pem = _fresh_key()
+    active = _active_key(priv_pem, pub_pem)
+
+    app = FastAPI()
+    app.include_router(jwks_router)
+    app.state.local_keystore = _FakeKeyStore(keys=[active])
+
+    with TestClient(app) as client:
+        # TestClient sends a stable synthetic IP for all requests; 30
+        # should pass, the 31st should 429.
+        for i in range(30):
+            r = client.get("/.well-known/jwks-local.json")
+            assert r.status_code == 200, f"request {i+1}: {r.text}"
+
+        r = client.get("/.well-known/jwks-local.json")
+        assert r.status_code == 429, r.text
+
+
+def test_jwks_endpoint_emits_keys_sorted_by_kid_not_activation_time():
+    """Sorting by ``kid`` lexicographic (not by ``activated_at``)
+    closes a rotation-timing oracle: a caller could previously infer
+    "the freshest signer is the last entry" from the array order.
+    With kid-sorted output, position is stable across rotations —
+    ``keys[-1]`` is just the kid that sorts last, not the one minted
+    most recently.
+    """
+    from mcp_proxy.auth.jwks_local import router as jwks_router
+    _reset_agent_rate_limiter()
+
+    # Generate two keys, identify which kid sorts first by
+    # compute_kid output, then set activation times in the OPPOSITE
+    # order. If the endpoint sorted by ``activated_at`` the first
+    # entry would be the one activated earliest; kid-sorted output
+    # instead puts the lexicographically-smaller kid first.
+    from datetime import timedelta
+    _, priv_a, pub_a = _fresh_key()
+    _, priv_b, pub_b = _fresh_key()
+    kid_a = compute_kid(pub_a)
+    kid_b = compute_kid(pub_b)
+    now = datetime.now(timezone.utc)
+
+    # Give the lexicographically-LATER kid the EARLIER activation time
+    # so "sort by activated_at ASC" would put it first — then assert
+    # the endpoint does NOT surface that order.
+    if kid_a < kid_b:
+        earlier_ts = now - timedelta(days=2)
+        later_ts = now - timedelta(days=1)
+        ka = MastioKey(
+            kid=kid_a, pubkey_pem=pub_a, privkey_pem=priv_a, cert_pem=None,
+            created_at=later_ts, activated_at=later_ts,
+            deprecated_at=None, expires_at=None,
+        )
+        kb = MastioKey(
+            kid=kid_b, pubkey_pem=pub_b, privkey_pem=priv_b, cert_pem=None,
+            created_at=earlier_ts, activated_at=earlier_ts,
+            deprecated_at=now - timedelta(seconds=10),
+            expires_at=now + timedelta(days=30),
+        )
+    else:
+        earlier_ts = now - timedelta(days=2)
+        later_ts = now - timedelta(days=1)
+        ka = MastioKey(
+            kid=kid_a, pubkey_pem=pub_a, privkey_pem=priv_a, cert_pem=None,
+            created_at=earlier_ts, activated_at=earlier_ts,
+            deprecated_at=now - timedelta(seconds=10),
+            expires_at=now + timedelta(days=30),
+        )
+        kb = MastioKey(
+            kid=kid_b, pubkey_pem=pub_b, privkey_pem=priv_b, cert_pem=None,
+            created_at=later_ts, activated_at=later_ts,
+            deprecated_at=None, expires_at=None,
+        )
+
+    # Pre-sort by activated_at ASC (what the legacy query would have
+    # yielded) so the endpoint-under-test has to re-sort or it will
+    # leak the activation order.
+    keys_in_activation_order = sorted(
+        [ka, kb], key=lambda k: k.activated_at,
+    )
+
+    app = FastAPI()
+    app.include_router(jwks_router)
+    app.state.local_keystore = _FakeKeyStore(keys=keys_in_activation_order)
+
+    with TestClient(app) as client:
+        r = client.get("/.well-known/jwks-local.json")
+        assert r.status_code == 200, r.text
+        emitted_kids = [k["kid"] for k in r.json()["keys"]]
+
+    assert emitted_kids == sorted(emitted_kids), (
+        "JWKS must emit keys in kid-sorted order (#282), "
+        f"got {emitted_kids}"
+    )

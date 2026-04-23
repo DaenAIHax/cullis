@@ -564,6 +564,7 @@ class MastioPubkeyRotateResponse(BaseModel):
     response_model=MastioPubkeyRotateResponse,
 )
 async def rotate_org_mastio_pubkey(
+    request: Request,
     org_id: str,
     body: MastioPubkeyRotateRequest,
     db: AsyncSession = Depends(get_db),
@@ -571,10 +572,20 @@ async def rotate_org_mastio_pubkey(
     """Rotate the pinned Mastio pubkey via a key-continuity proof.
 
     Flow:
-      1. Resolve the org and its currently-pinned ``mastio_pubkey``.
-      2. Derive the expected ``old_kid`` from the pinned pubkey.
-      3. Parse + verify the submitted continuity proof.
-      4. On success, update the pin and emit an audit event.
+      1. Rate-limit by client IP (bucket ``onboarding.rotate_mastio_pubkey``)
+         so an unauthenticated attacker who guesses an org_id cannot
+         burn CPU on ECDSA verify or flood the hash-chain audit log
+         (issue #282).
+      2. Dedupe on ``(org_id, proof.signature)`` — a legitimate operator
+         retry within the 600-second freshness window returns the
+         cached response verbatim, short-circuiting ECDSA verify and
+         audit append. Failed attempts are NOT cached, so a transient
+         failure still re-verifies on retry.
+      3. Resolve the org and its currently-pinned ``mastio_pubkey``.
+      4. Derive the expected ``old_kid`` from the pinned pubkey.
+      5. Parse + verify the submitted continuity proof.
+      6. On success, update the pin, emit an audit event, cache the
+         response for idempotent retries.
     """
     from app.auth.mastio_rotation_verify import (
         ContinuityProof,
@@ -582,6 +593,29 @@ async def rotate_org_mastio_pubkey(
         compute_kid_from_pubkey_pem,
         verify_proof,
     )
+    from app.onboarding.rotate_dedupe import rotate_dedupe
+
+    client_ip = get_client_ip(request)
+    await rate_limiter.check(client_ip, "onboarding.rotate_mastio_pubkey")
+
+    # Parse proof up-front so we have ``signature_b64u`` for the dedupe
+    # key. Malformed proofs still 400 — they cannot trigger an audit
+    # append, so they do not need the dedupe layer to protect against
+    # hash-chain flooding.
+    try:
+        proof = ContinuityProof.from_dict(body.proof)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"malformed proof: {exc}",
+        ) from exc
+
+    cached = await rotate_dedupe.get(org_id, proof.signature_b64u)
+    if cached is not None:
+        # Idempotent replay within the 600s freshness window. The cached
+        # body carries the original ``rotated_at`` so the client can see
+        # this is a retry of a call that already succeeded.
+        return MastioPubkeyRotateResponse(**cached)
 
     org = await get_org_by_id(db, org_id)
     if org is None:
@@ -596,14 +630,6 @@ async def rotate_org_mastio_pubkey(
         )
 
     _validate_mastio_pubkey(body.new_pubkey_pem)
-
-    try:
-        proof = ContinuityProof.from_dict(body.proof)
-    except ValueError as exc:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail=f"malformed proof: {exc}",
-        ) from exc
 
     expected_old_kid = compute_kid_from_pubkey_pem(org.mastio_pubkey)
     try:
@@ -649,11 +675,16 @@ async def rotate_org_mastio_pubkey(
             "rotated_at": rotated_at,
         },
     )
-    return MastioPubkeyRotateResponse(
-        org_id=org_id,
-        new_kid=proof.new_kid,
-        rotated_at=rotated_at,
-    )
+    response_body = {
+        "org_id": org_id,
+        "new_kid": proof.new_kid,
+        "rotated_at": rotated_at,
+    }
+    # Cache AFTER the commit + audit so retries short-circuit. Failed
+    # paths (404, 409, 401, 400) fall through without touching the
+    # cache, so a transient failure still re-verifies on retry.
+    await rotate_dedupe.store(org_id, proof.signature_b64u, response_body)
+    return MastioPubkeyRotateResponse(**response_body)
 
 
 @admin_router.post("/orgs/{org_id}/reject",

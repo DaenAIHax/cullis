@@ -223,5 +223,12 @@ rate_limiter.register("broker.session",   window_seconds=60,  max_requests=20)
 rate_limiter.register("broker.message",   window_seconds=60,  max_requests=60)
 rate_limiter.register("dashboard.login",  window_seconds=300, max_requests=5)
 rate_limiter.register("onboarding.join",  window_seconds=300, max_requests=5)
+# Mastio pubkey rotation — 5/min/IP matches the ``onboarding.join`` cadence:
+# rotations are infrequent operator actions (cadence days→weeks), so 5
+# attempts per minute is plenty for a legitimate retry loop and tight
+# enough to make unauthenticated CPU-burn / audit-flood attacks expensive.
+# See issue #282.
+rate_limiter.register("onboarding.rotate_mastio_pubkey",
+                                          window_seconds=60,  max_requests=5)
 rate_limiter.register("broker.rfq",         window_seconds=60,  max_requests=5)
 rate_limiter.register("broker.rfq_respond", window_seconds=60,  max_requests=20)
