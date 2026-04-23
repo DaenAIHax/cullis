@@ -741,6 +741,11 @@ app.include_router(mcp_resources_legacy_router)
 from mcp_proxy.dashboard.downloads import router as downloads_router
 app.include_router(downloads_router)
 
+# Federation update framework (PR 4 of imp/federation_hardening_plan.md
+# Parte 1) — admin list / apply / rollback under /proxy/updates.
+from mcp_proxy.dashboard.updates_router import router as updates_router
+app.include_router(updates_router)
+
 # Static assets for the dashboard (compiled Tailwind CSS + bundled htmx).
 # Shake-out P0-09 + P1-10: serve /static/css/tailwind.css and /static/vendor/htmx.min.js
 # locally instead of pulling from cdn.tailwindcss.com / unpkg.com.

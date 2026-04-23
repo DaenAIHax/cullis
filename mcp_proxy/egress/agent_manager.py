@@ -757,6 +757,31 @@ class AgentManager:
         self._sign_halt_reason = reason
         logger.error("sign-halt engaged: %s", reason)
 
+    def clear_sign_halt(self) -> None:
+        """Release the sign-halt degraded mode unconditionally.
+
+        Used by the PR 4 admin endpoint after a federation-update apply
+        or rollback succeeds. The caller is expected to immediately
+        re-run :func:`mcp_proxy.updates.boot.detect_pending_migrations`
+        — if another critical migration is still pending, the halt
+        re-engages with a fresh reason; otherwise the proxy returns to
+        normal.
+
+        Idempotent: calling on an already-clear state is a silent no-op.
+        Does NOT touch ``_staged_kid`` — the #281 staged-row recovery
+        path owns that field; clearing it here would mask a genuine
+        rotation recovery state.
+        """
+        if not self._sign_halted and self._sign_halt_reason is None:
+            return
+        prior_reason = self._sign_halt_reason
+        self._sign_halted = False
+        self._sign_halt_reason = None
+        logger.info(
+            "sign-halt cleared (prior reason: %s)",
+            prior_reason or "<legacy #281 path, no reason>",
+        )
+
     async def _migrate_legacy_leaf_to_keystore(self) -> None:
         """Seed ``mastio_keys`` from ``proxy_config.mastio_leaf_{key,cert}``.
 
