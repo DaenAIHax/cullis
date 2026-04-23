@@ -860,6 +860,91 @@ async def get_pending_updates(status: str | None = None) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# migration_state_backups — per-migration snapshot blob for rollback
+# (PR 3 federation update framework).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def insert_migration_backup(
+    *,
+    migration_id: str,
+    created_at: str,
+    snapshot_json: str,
+) -> None:
+    """Write (or overwrite) the backup row for a migration.
+
+    ``INSERT OR REPLACE`` (SQLite) / ``ON CONFLICT ... DO UPDATE``
+    (Postgres) — a second apply on the same ``migration_id`` overwrites
+    the prior snapshot. Rollback always uses the most recent backup; the
+    previous state is deliberately not recoverable because the admin
+    drove a fresh apply and implicitly acknowledged that reset.
+    """
+    async with get_db() as conn:
+        dialect = conn.dialect.name
+        if dialect == "postgresql":
+            stmt = text(
+                """
+                INSERT INTO migration_state_backups
+                    (migration_id, created_at, snapshot_json)
+                VALUES
+                    (:mid, :created, :snapshot)
+                ON CONFLICT (migration_id) DO UPDATE
+                    SET created_at = EXCLUDED.created_at,
+                        snapshot_json = EXCLUDED.snapshot_json
+                """
+            )
+        else:
+            stmt = text(
+                """
+                INSERT OR REPLACE INTO migration_state_backups
+                    (migration_id, created_at, snapshot_json)
+                VALUES
+                    (:mid, :created, :snapshot)
+                """
+            )
+        await conn.execute(
+            stmt,
+            {
+                "mid": migration_id,
+                "created": created_at,
+                "snapshot": snapshot_json,
+            },
+        )
+
+
+async def get_migration_backup(migration_id: str) -> dict | None:
+    """Return the backup row for a migration, or None."""
+    async with get_db() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT migration_id, created_at, snapshot_json "
+                "FROM migration_state_backups WHERE migration_id = :mid"
+            ),
+            {"mid": migration_id},
+        )
+        row = result.mappings().first()
+        return dict(row) if row else None
+
+
+async def delete_migration_backup(migration_id: str) -> int:
+    """Delete the backup row for a migration.
+
+    Returns the rowcount. Zero means there was no backup to begin with;
+    the caller decides whether that matters (``rollback`` treats "no
+    backup" as an error, ``up`` ignores).
+    """
+    async with get_db() as conn:
+        result = await conn.execute(
+            text(
+                "DELETE FROM migration_state_backups "
+                "WHERE migration_id = :mid"
+            ),
+            {"mid": migration_id},
+        )
+        return result.rowcount or 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
