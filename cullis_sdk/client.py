@@ -1109,12 +1109,13 @@ class CullisClient:
         """Fetch the target agent's PEM cert through the local proxy's
         ``GET /v1/egress/agents/{id}/public-key`` endpoint.
 
-        Companion to :meth:`get_agent_public_key`, intended for clients
-        that authenticate to the proxy with X-API-Key + DPoP and have no
-        broker JWT to spend on the Court's federation API. Replaces the
-        Connector's ``prime_sender_pubkey_cache`` workaround that used
-        to scrape ``/v1/egress/resolve`` for the same data and write
-        directly into the SDK's private cache.
+        Egress-only variant — no broker fallback. Intended for callers
+        that deliberately want to fail-fast when the proxy doesn't have
+        the cert (e.g. device-code-enrolled Connectors that hold no
+        broker JWT; falling back to the broker path would just
+        surface a less-informative auth error). SDK consumers that
+        want the broker fallback should leave ``decrypt_oneshot``'s
+        ``pubkey_fetcher`` unset — the default chain covers both paths.
 
         Returns the PEM cert (not a bare key — the proxy hands back the
         full x509, the verify helpers in :mod:`cullis_sdk.crypto` accept
@@ -1122,11 +1123,9 @@ class CullisClient:
         the broker path so successive calls don't burn the per-agent
         egress rate-limit budget.
 
-        Raises :class:`PubkeyFetchError` when the proxy responds without
-        a usable cert (404, missing field, transport error). Plain HTTP
-        errors are wrapped — callers should catch ``PubkeyFetchError``
-        rather than ``httpx.HTTPError`` so future transports stay
-        transparent.
+        Raises :class:`PubkeyFetchError` on any failure: 404/501 (route
+        missing), 401/403 (auth broken), transport errors, or a 200
+        response whose ``cert_pem`` is null/missing.
         """
         if not force_refresh and agent_id in self._pubkey_cache:
             pem, fetched_at = self._pubkey_cache[agent_id]
@@ -1151,6 +1150,83 @@ class CullisClient:
             )
         self._pubkey_cache[agent_id] = (pem, time.time())
         return pem
+
+    def _fetch_pubkey_proxy_then_broker(self, agent_id: str) -> str:
+        """Default pubkey lookup used by :meth:`decrypt_oneshot`.
+
+        Order of operations:
+          1. Ask the local Mastio's ``/v1/egress/agents/<id>/public-key``
+             (auth'd via X-API-Key + DPoP — every SDK consumer has this).
+          2. If the proxy returns 404 / 501 / cert_pem=null — conditions
+             that mean "the proxy doesn't know this agent" rather than
+             "the call itself failed" — fall back to the Court's
+             ``/v1/federation/agents/<id>/public-key`` (requires a broker
+             JWT).
+          3. Genuine failures — 401 / 403 (auth broken), transport
+             errors — propagate as :class:`PubkeyFetchError` WITHOUT a
+             fallback: falling back would just mask a broken setup
+             with a second, less-informative auth error.
+
+        TTL-cached on :attr:`_pubkey_cache` so successive calls don't
+        re-hit either path within the 300s window.
+        """
+        if agent_id in self._pubkey_cache:
+            pem, fetched_at = self._pubkey_cache[agent_id]
+            if time.time() - fetched_at < _PUBKEY_CACHE_TTL:
+                return pem
+
+        proxy_path = f"/v1/egress/agents/{agent_id}/public-key"
+        should_fallback = False
+        proxy_diag = ""
+        try:
+            resp = self._egress_http("get", proxy_path)
+            if resp.status_code in (404, 501):
+                should_fallback = True
+                proxy_diag = f"proxy endpoint returned {resp.status_code}"
+            else:
+                resp.raise_for_status()
+                pem = resp.json().get("cert_pem")
+                if pem:
+                    self._pubkey_cache[agent_id] = (pem, time.time())
+                    return pem
+                should_fallback = True
+                proxy_diag = (
+                    "proxy returned 200 but cert_pem was null "
+                    "(cross-org target with no broker bridge configured "
+                    "on the proxy — falling back to broker)"
+                )
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else 0
+            if code in (404, 501):
+                should_fallback = True
+                proxy_diag = f"proxy endpoint returned {code}"
+            else:
+                raise PubkeyFetchError(
+                    f"proxy {proxy_path} failed with HTTP {code} — "
+                    "auth broken or proxy misconfigured, not retrying "
+                    "via broker"
+                ) from exc
+        except Exception as exc:
+            raise PubkeyFetchError(
+                f"proxy {proxy_path} transport failure: "
+                f"{exc} ({type(exc).__name__}) — not retrying via broker"
+            ) from exc
+
+        if not should_fallback:
+            # Defensive: every branch above either returned, set the
+            # flag, or raised. Reaching here is a programmer error.
+            raise PubkeyFetchError(
+                f"proxy lookup for {agent_id} ended in an unexpected state"
+            )
+
+        try:
+            return self.get_agent_public_key(agent_id)
+        except Exception as broker_exc:
+            raise PubkeyFetchError(
+                f"both pubkey lookups failed: {proxy_diag}; "
+                f"broker fallback: {broker_exc} "
+                f"({type(broker_exc).__name__})"
+            ) from broker_exc
 
     # ── Sessions ────────────────────────────────────────────────────
 
@@ -1648,11 +1724,12 @@ class CullisClient:
 
         :param pubkey_fetcher: optional callable ``(sender_agent_id) -> pem``
             used to look up the sender's cert. When ``None`` (default),
-            falls back to :meth:`get_agent_public_key` which hits the
-            broker's ``/v1/federation`` namespace and requires a broker
-            JWT. Connectors enrolled via device-code don't hold that
-            JWT and should pass
-            :meth:`get_agent_public_key_via_egress` instead.
+            uses :meth:`_fetch_pubkey_proxy_then_broker` — proxy first,
+            broker as fallback only on 404 / 501 / cert_pem=null (see
+            that method's docstring). Callers that want to pin a single
+            path (Connector device-code: proxy only; debug: broker only)
+            pass the explicit helper (:meth:`get_agent_public_key_via_egress`
+            or :meth:`get_agent_public_key`) here.
 
         Returns ``{"payload": <plaintext_dict>, "sender_verified": True,
         "mode": "mtls-only" | "envelope"}``.
@@ -1698,7 +1775,10 @@ class CullisClient:
             )
 
         # Verify the v2 outer envelope signature against the sender's cert.
-        fetch = pubkey_fetcher if pubkey_fetcher is not None else self.get_agent_public_key
+        fetch = (
+            pubkey_fetcher if pubkey_fetcher is not None
+            else self._fetch_pubkey_proxy_then_broker
+        )
         sender_cert_pem = fetch(sender)
         ok = verify_oneshot_envelope_signature(
             sender_cert_pem,
