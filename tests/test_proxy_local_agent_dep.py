@@ -200,3 +200,152 @@ async def test_flag_off_falls_through_to_dpop(app_with_flag_off):
     assert resp.status_code == 401
     # WWW-Authenticate should be DPoP (realm), not Bearer — proves fall-through.
     assert "dpop" in resp.headers.get("WWW-Authenticate", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_grace_window_deprecated_kid_is_accepted(app_with_flag_on):
+    """Regression test for #279 (Phase 2.2 grace-window).
+
+    A token minted under kid K_old must keep verifying after a rotation
+    that deprecated K_old (within its grace window) and activated K_new.
+    Before the fix, the dep pre-filter compared against ``issuer.kid``
+    only (K_new) and dropped the K_old token into the DPoP fall-through,
+    producing a 401 even though JWKS/keystore/validator all accepted it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    import mcp_proxy.db as db_mod
+    from mcp_proxy.auth.local_issuer import LocalIssuer
+    from mcp_proxy.auth.local_keystore import MastioKey, compute_kid
+
+    app = app_with_flag_on["app"]
+    old_issuer = app_with_flag_on["issuer"]
+
+    # Mint a token under the original (soon-to-be-deprecated) kid.
+    old_token = old_issuer.issue("orga::alice", ttl_seconds=60).token
+    old_kid = old_issuer.kid
+
+    # Simulate a Phase 2.1 rotation: generate a new keypair, insert as
+    # the new active row, and deprecate the old row with a grace window.
+    new_key = ec.generate_private_key(ec.SECP256R1())
+    new_priv = new_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    new_pub = new_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    new_kid = compute_kid(new_pub)
+    now = datetime.now(timezone.utc)
+    grace_expires = now + timedelta(days=7)
+
+    await db_mod.swap_active_mastio_key(
+        new_kid=new_kid,
+        new_pubkey_pem=new_pub,
+        new_privkey_pem=new_priv,
+        new_cert_pem=None,
+        new_activated_at=now.isoformat(),
+        new_created_at=now.isoformat(),
+        old_kid=old_kid,
+        old_deprecated_at=now.isoformat(),
+        old_expires_at=grace_expires.isoformat(),
+    )
+
+    # Point the app's LocalIssuer at the new active key, mirroring what
+    # the dashboard rotation handler does post-swap.
+    new_active = MastioKey(
+        kid=new_kid,
+        pubkey_pem=new_pub,
+        privkey_pem=new_priv,
+        cert_pem=None,
+        created_at=now,
+        activated_at=now,
+        deprecated_at=None,
+        expires_at=None,
+    )
+    app.state.local_issuer = LocalIssuer(org_id="orga", active_key=new_active)
+
+    # The old-kid token should still authenticate — that's the whole
+    # point of the Phase 2.2 grace window.
+    with TestClient(app) as client:
+        resp = client.get(
+            "/probe", headers={"Authorization": f"Bearer {old_token}"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["agent_id"] == "orga::alice"
+    assert body["org"] == "orga"
+
+
+@pytest.mark.asyncio
+async def test_expired_grace_kid_is_rejected(app_with_flag_on):
+    """Negative regression: once the grace window elapses, the deprecated
+    kid must no longer authenticate. Proves the fix doesn't over-accept.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    import mcp_proxy.db as db_mod
+    from mcp_proxy.auth.local_issuer import LocalIssuer
+    from mcp_proxy.auth.local_keystore import MastioKey, compute_kid
+
+    app = app_with_flag_on["app"]
+    old_issuer = app_with_flag_on["issuer"]
+
+    old_token = old_issuer.issue("orga::alice", ttl_seconds=3600).token
+    old_kid = old_issuer.kid
+
+    new_key = ec.generate_private_key(ec.SECP256R1())
+    new_priv = new_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    new_pub = new_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    new_kid = compute_kid(new_pub)
+    now = datetime.now(timezone.utc)
+    # grace window already elapsed
+    expired = now - timedelta(minutes=1)
+
+    await db_mod.swap_active_mastio_key(
+        new_kid=new_kid,
+        new_pubkey_pem=new_pub,
+        new_privkey_pem=new_priv,
+        new_cert_pem=None,
+        new_activated_at=now.isoformat(),
+        new_created_at=now.isoformat(),
+        old_kid=old_kid,
+        old_deprecated_at=(now - timedelta(days=8)).isoformat(),
+        old_expires_at=expired.isoformat(),
+    )
+
+    new_active = MastioKey(
+        kid=new_kid,
+        pubkey_pem=new_pub,
+        privkey_pem=new_priv,
+        cert_pem=None,
+        created_at=now,
+        activated_at=now,
+        deprecated_at=None,
+        expires_at=None,
+    )
+    app.state.local_issuer = LocalIssuer(org_id="orga", active_key=new_active)
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/probe", headers={"Authorization": f"Bearer {old_token}"},
+        )
+    # Expired-grace kid is unknown-to-the-dep, so it falls through to
+    # DPoP (no DPoP header present) → 401 DPoP realm.
+    assert resp.status_code == 401
+    assert "dpop" in resp.headers.get("WWW-Authenticate", "").lower()

@@ -47,19 +47,30 @@ def _extract_bearer_or_dpop_token(request: Request) -> str | None:
     return None
 
 
-def _is_local_kid(token: str, issuer) -> bool:
-    """Cheap pre-check: unverified header kid == LocalIssuer's kid.
+async def _is_known_local_kid(token: str, keystore) -> bool:
+    """Pre-check: the token's ``kid`` matches a keystore row that is
+    still valid for verification (active OR within the grace window).
 
     Used to decide whether a ``Authorization: DPoP <jwt>`` should funnel
     into the local validator (and pre-empt the DPoP path) or be left
     alone. Broker-issued JWTs carry a different kid, so that path
     continues to reach ``_get_authenticated_agent_dpop`` unchanged.
+
+    Previously this compared against ``issuer.kid`` only — the current
+    active kid. That silently dropped tokens minted under the *old* kid
+    during a Phase 2.1 rotation grace window: the JWKS endpoint, the
+    keystore filter, and the validator all accepted them, but the dep
+    short-circuited before any of that ran. See issue #279.
     """
     try:
         header = jose_jwt.get_unverified_header(token)
     except jose_jwt.PyJWTError:
         return False
-    return header.get("kid") == issuer.kid
+    kid = header.get("kid")
+    if not isinstance(kid, str) or not kid:
+        return False
+    key = await keystore.find_by_kid(kid)
+    return key is not None and key.is_valid_for_verification
 
 
 async def _maybe_local_token(request: Request) -> TokenPayload | None:
@@ -74,19 +85,20 @@ async def _maybe_local_token(request: Request) -> TokenPayload | None:
     if issuer is None:
         return None
 
+    keystore = getattr(request.app.state, "local_keystore", None)
+    if keystore is None:
+        return None
+
     token = _extract_bearer_or_dpop_token(request)
     if token is None:
         return None
 
     # When the scheme is DPoP, the token might be a broker-issued JWT
     # (different kid) the caller legitimately wants handled by the DPoP
-    # path. Pre-filter by kid so we only intercept tokens this Mastio
-    # actually signed.
-    if not _is_local_kid(token, issuer):
-        return None
-
-    keystore = getattr(request.app.state, "local_keystore", None)
-    if keystore is None:
+    # path. Pre-filter against the keystore so we intercept any kid
+    # this Mastio minted (active OR within rotation grace), and leave
+    # broker-issued kids alone.
+    if not await _is_known_local_kid(token, keystore):
         return None
 
     try:
@@ -152,14 +164,14 @@ async def _maybe_local_internal_agent(request: Request) -> InternalAgent | None:
     if issuer is None:
         return None
 
+    keystore = getattr(request.app.state, "local_keystore", None)
+    if keystore is None:
+        return None
+
     token = _extract_bearer_or_dpop_token(request)
     if token is None:
         return None
-    if not _is_local_kid(token, issuer):
-        return None
-
-    keystore = getattr(request.app.state, "local_keystore", None)
-    if keystore is None:
+    if not await _is_known_local_kid(token, keystore):
         return None
 
     try:
