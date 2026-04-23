@@ -404,8 +404,9 @@ class CullisClient:
         API. Authentication from here on is **API-key + DPoP**, never
         a direct login to the Court. See ADR-011 for the enrollment
         methods that produce these files (``enroll_via_byoca``,
-        ``enroll_via_spiffe``, ``enroll_via_admin_token``,
-        ``enroll_via_connector``).
+        ``enroll_via_spiffe``, or the Connector device-code flow — use
+        ``from_connector(...)`` for the Connector case since it reads
+        a different on-disk layout).
 
         Args:
             mastio_url: base URL of the Mastio (``http://proxy-a:9100``).
