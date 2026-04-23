@@ -1,0 +1,7 @@
+/docs/enrollment                   /docs/enroll/connector-device-code           301
+/docs/k8s-quickstart               /docs/install/mastio-kubernetes              301
+/docs/ops-runbook                  /docs/operate/runbook                        301
+/docs/operations-runbook           /docs/operate/runbook                        301
+/docs/spiffe-onboarding            /docs/enroll/spire                           301
+/docs/enrollment-api-reference     /docs/reference/enrollment-api               301
+/docs/migration-from-direct-login  /docs/reference/migration-from-direct-login  301

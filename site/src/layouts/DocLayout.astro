@@ -21,6 +21,10 @@ for (const doc of sorted) {
   if (!groups[doc.data.category]) groups[doc.data.category] = [];
   groups[doc.data.category].push(doc);
 }
+const categoryOrder = ['Quickstart', 'Install', 'Enroll', 'Operate', 'Reference'];
+const orderedCategories = Object.keys(groups).sort(
+  (a, b) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)
+);
 ---
 
 <Layout title={`${title} — Cullis docs`} description={description}>
@@ -31,11 +35,11 @@ for (const doc of sorted) {
           <span class="sh-label">Docs</span>
           <span class="sh-count">{all.length} articles</span>
         </a>
-        {Object.entries(groups).map(([cat, items]) => (
+        {orderedCategories.map((cat) => (
           <div class="sidebar-group">
             <div class="sidebar-cat">{cat}</div>
             <ul>
-              {items.map((doc) => (
+              {groups[cat].map((doc) => (
                 <li>
                   <a href={`/docs/${doc.id}`} class={doc.id === currentSlug ? 'is-active' : ''}>
                     {doc.data.title}

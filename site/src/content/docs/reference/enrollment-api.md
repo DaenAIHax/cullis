@@ -1,12 +1,12 @@
 ---
-title: "Enrollment API reference"
-description: "Request + response schemas for /v1/admin/agents/enroll/{byoca, spiffe} and the other ADR-011 enrollment endpoints."
+title: "Enrollment API"
+description: "Request and response schemas for /v1/admin/agents/enroll/{byoca, spiffe} and the rest of the ADR-011 enrollment surface."
 category: "Reference"
-order: 60
-updated: "2026-04-18"
+order: 10
+updated: "2026-04-23"
 ---
 
-# Cullis — Enrollment API reference
+# Enrollment API
 
 Endpoints under `/v1/admin/agents/enroll/` on the **Mastio** (never on the Court). All require `X-Admin-Secret`. Returns `201 Created` on success; API key in the response body is shown **exactly once** — the server stores only its bcrypt hash.
 
