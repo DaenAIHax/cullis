@@ -39,6 +39,26 @@ _ALEMBIC_INITIAL_REVISION = "0001_initial_snapshot"
 
 _log = logging.getLogger("mcp_proxy")
 
+
+def _engine_kwargs(url: str) -> dict:
+    """Build the ``create_async_engine`` kwargs for the given DB URL.
+
+    ADR-013 layer 4 — bound the DB connection pool explicitly so that
+    under load the Mastio queues request handlers in the app tier
+    (observable + bounded) instead of piling connections onto the DB
+    until it saturates. This only matters for Postgres; SQLite (via
+    aiosqlite) is single-writer and WAL mode covers concurrent readers,
+    so the pool-sizing knobs are no-ops there.
+    """
+    kwargs = {"echo": False, "future": True}
+    if not url.startswith("sqlite"):
+        kwargs.update(
+            pool_size=20,
+            max_overflow=10,
+            pool_timeout=5.0,
+        )
+    return kwargs
+
 # Module-level engine — set by init_db()
 _engine: AsyncEngine | None = None
 
@@ -175,7 +195,7 @@ async def init_db(db_url: str) -> None:
     if os.environ.get("PROXY_SKIP_MIGRATIONS") == "1":
         _log.warning("PROXY_SKIP_MIGRATIONS=1 — using metadata.create_all "
                      "instead of alembic upgrade head")
-        _engine = create_async_engine(url, echo=False, future=True)
+        _engine = create_async_engine(url, **_engine_kwargs(url))
         async with _engine.begin() as conn:
             if _engine.dialect.name == "sqlite":
                 await conn.execute(text("PRAGMA journal_mode=WAL"))
