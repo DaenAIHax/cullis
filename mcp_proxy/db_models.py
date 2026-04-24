@@ -18,10 +18,13 @@ primary keys use plain Integer + primary_key=True — SQLAlchemy picks SERIAL
 on Postgres and INTEGER on SQLite.
 """
 from sqlalchemy import (
+    CheckConstraint,
     Column,
+    Float,
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     SmallInteger,
     String,
     Text,
@@ -393,4 +396,91 @@ class LocalAgentResourceBinding(Base):
             "agent_id", "resource_id",
             name="uq_local_bindings_agent_resource",
         ),
+    )
+
+
+# ── Anomaly detector (ADR-013 Phase 4) ───────────────────────────────────────
+
+
+class AgentTrafficSample(Base):
+    """10-min bucketed request counts per agent (4-week rolling window).
+
+    Written by the traffic-recorder middleware (async flush every 30 s).
+    Read by the baseline roll-up cron and by the anomaly evaluator's
+    5-min windowed rate query.
+    """
+
+    __tablename__ = "agent_traffic_samples"
+
+    agent_id = Column(Text, nullable=False)
+    bucket_ts = Column(Text, nullable=False)  # ISO-8601, start of 10-min bucket
+    req_count = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "bucket_ts", name="pk_agent_traffic_samples"
+        ),
+        Index("idx_traffic_samples_bucket", "bucket_ts"),
+    )
+
+
+class AgentHourlyBaseline(Base):
+    """Rolled-up hour-of-week baselines (168 buckets/agent).
+
+    ``hour_of_week = dow * 24 + hour``. The ratio detector divides the
+    current 5-min rate by ``req_per_min_avg`` for the current
+    hour_of_week. ``req_per_min_p95`` is reserved for future tuning
+    (e.g., compare against p95 instead of mean for bursty-but-legit
+    workloads).
+    """
+
+    __tablename__ = "agent_hourly_baselines"
+
+    agent_id = Column(Text, nullable=False)
+    hour_of_week = Column(SmallInteger, nullable=False)
+    req_per_min_avg = Column(Float, nullable=False)
+    req_per_min_p95 = Column(Float, nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    updated_at = Column(Text, nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "hour_of_week", name="pk_agent_hourly_baselines"
+        ),
+        CheckConstraint(
+            "hour_of_week BETWEEN 0 AND 167",
+            name="ck_agent_hourly_baselines_hour_range",
+        ),
+    )
+
+
+class AgentQuarantineEvent(Base):
+    """Append-only audit of every quarantine decision.
+
+    One row per decision; shadow-mode events are recorded with
+    ``mode='shadow'`` and ``expires_at=NULL`` (shadow-mode decisions
+    never actually expire because they never actually disabled anyone).
+    Operator reactivation and expiry cron both write ``resolved_at`` +
+    ``resolved_by`` — the row is never updated otherwise.
+    """
+
+    __tablename__ = "agent_quarantine_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(Text, nullable=False)
+    quarantined_at = Column(Text, nullable=False)
+    mode = Column(Text, nullable=False)  # 'shadow' | 'enforce'
+    trigger_ratio = Column(Float, nullable=True)
+    trigger_abs_rate = Column(Float, nullable=True)
+    expires_at = Column(Text, nullable=True)
+    resolved_at = Column(Text, nullable=True)
+    resolved_by = Column(Text, nullable=True)  # 'operator:<hash>' | 'expired'
+    notification_sent = Column(Integer, nullable=False, server_default="0")
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('shadow', 'enforce')",
+            name="ck_agent_quarantine_events_mode",
+        ),
+        Index("idx_quarantine_agent", "agent_id", "quarantined_at"),
     )
