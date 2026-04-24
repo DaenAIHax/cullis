@@ -54,6 +54,9 @@ COPY alembic.ini .
 COPY --from=tailwind-build /out/tailwind.css /app/app/static/css/tailwind.css
 
 ENV PYTHONPATH=/app
+# See mcp_proxy/Dockerfile for the same rationale — block-buffered stderr
+# hides log records under burst load in container stdio.
+ENV PYTHONUNBUFFERED=1
 
 # Run as non-root user
 RUN useradd --no-create-home --system appuser

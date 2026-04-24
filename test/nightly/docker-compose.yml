@@ -164,6 +164,13 @@ services:
       PROXY_INTRA_ORG:             "true"
       PROXY_TRANSPORT_INTRA_ORG:   "mtls-only"
       MCP_PROXY_LOCAL_AUTH_ENABLED: "true"
+      # ADR-013 layer 2 — expose the global rate-limit knobs so tests
+      # can override them via shell env
+      # (MCP_PROXY_GLOBAL_RATE_LIMIT_RPS=5 docker compose up ...) and
+      # the shed path can be exercised without touching code. Defaults
+      # match the Settings defaults in mcp_proxy/config.py.
+      MCP_PROXY_GLOBAL_RATE_LIMIT_RPS:   "${MCP_PROXY_GLOBAL_RATE_LIMIT_RPS:-500}"
+      MCP_PROXY_GLOBAL_RATE_LIMIT_BURST: "${MCP_PROXY_GLOBAL_RATE_LIMIT_BURST:-1000}"
     volumes:
       - proxy-a-data:/data
     networks:
@@ -220,6 +227,8 @@ services:
       PROXY_INTRA_ORG:             "true"
       PROXY_TRANSPORT_INTRA_ORG:   "mtls-only"
       MCP_PROXY_LOCAL_AUTH_ENABLED: "true"
+      MCP_PROXY_GLOBAL_RATE_LIMIT_RPS:   "${MCP_PROXY_GLOBAL_RATE_LIMIT_RPS:-500}"
+      MCP_PROXY_GLOBAL_RATE_LIMIT_BURST: "${MCP_PROXY_GLOBAL_RATE_LIMIT_BURST:-1000}"
     volumes:
       - proxy-b-data:/data
     networks:

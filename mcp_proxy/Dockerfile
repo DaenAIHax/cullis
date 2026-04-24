@@ -55,6 +55,15 @@ RUN mkdir -p /data && \
 
 ENV PYTHONPATH=/app
 ENV MCP_PROXY_DATABASE_URL=sqlite+aiosqlite:////data/mcp_proxy.db
+# cullis-enterprise#11 — Python defaults stderr to block-buffering when
+# connected to a pipe (container stdio goes through a pipe to the runtime).
+# Under burst load, logging.StreamHandler(sys.stderr) records accumulate
+# in the 8 KB buffer and never surface in `docker logs` until the buffer
+# fills. Boot-time INFO records appear only because several seconds pass
+# before they hit the buffer cap. Forcing line-buffered mode fixes the
+# WARNING visibility gap surfaced by the global rate-limit middleware —
+# and, in general, keeps every mcp_proxy logger record live for ops.
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 9100
 
