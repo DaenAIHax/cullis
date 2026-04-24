@@ -464,6 +464,164 @@ operator reactivates.
 
 ---
 
+## 8b. Edge rate limiting (ADR-013 Phase 5 / Layer 1)
+
+ADR-013 describes six defense layers. Layers 2-6 are Cullis code and
+ship with the Mastio. **Layer 1 — edge / IP rate limiting — is the
+operator's responsibility.** Cullis's layered defense model assumes
+Layer 1 exists; layers 2-6 are sized to shed what gets past Layer 1,
+not to absorb raw volumetric attacks (botnet pulse, millions of req/s
+from a single subnet).
+
+Without Layer 1 the system is *incomplete* against volumetric threats.
+With Layer 1 sized correctly, Layers 2-6 only see traffic that
+survives IP-level gating — which is the shape they're tuned for.
+
+### Sizing principle
+
+| Layer | Defends against | Typical budget |
+|-------|----------------|---------------|
+| **Layer 1** (edge) | Volumetric / DDoS / botnet pulse | 5 000-20 000 rps per IP, burst up to 50 000 |
+| **Layer 2** (global bucket, Mastio) | Coordinated compromise across N creds | 500 rps total across the Mastio |
+| **Layer 3** (per-agent, Mastio) | Single-agent retry loops / bugs | 30 rps sustained / 50 burst |
+
+Layer 1's job is to be the **coarse sieve**: stop 10 000 rps bursts
+from one IP before they reach the Mastio's event loop at all. Layer 2
+is the **fine sieve**: cap aggregate Mastio load regardless of how
+many IPs the traffic came from.
+
+The numbers are illustrative. The important invariant is
+`Layer 1 per-IP budget ≫ Layer 2 global budget` so a single well-behaved
+IP never trips Layer 1, and a burst that would saturate the Mastio
+always trips Layer 1 first.
+
+### Config examples
+
+Pick one that matches your ingress. All examples gate on the client IP
+as seen by the edge (after any CDN / WAF unwrapping — verify
+`X-Forwarded-For` semantics for your setup).
+
+#### nginx
+
+Global config (inside `http { … }`):
+
+```nginx
+# Two zones — steady rate on /v1/* agent traffic, a looser one for
+# browser-facing admin endpoints (dashboards pulse harder at pageload).
+limit_req_zone $binary_remote_addr zone=cullis_api:10m rate=5000r/s;
+limit_req_zone $binary_remote_addr zone=cullis_admin:10m rate=200r/s;
+
+# Status 429 — matches what Cullis emits for layer 3 per-agent shed.
+limit_req_status 429;
+```
+
+Virtual host:
+
+```nginx
+location /v1/ {
+    limit_req  zone=cullis_api   burst=50000 nodelay;
+    proxy_pass http://mastio_upstream;
+}
+
+location /v1/admin/ {
+    limit_req  zone=cullis_admin burst=1000  nodelay;
+    proxy_pass http://mastio_upstream;
+}
+```
+
+Verify the zone actually engages:
+
+```bash
+# Flood one path above the budget; expect a mix of 200 + 429.
+ab -n 100000 -c 500 -H 'X-API-Key: test' https://mastio.example/v1/egress/peers
+# Edge log should show ``limiting requests``; Mastio log should show
+# fewer 429s than the client received (the rest were shed at edge).
+```
+
+#### Traefik (docker-compose / Helm values)
+
+```yaml
+# dynamic config / CRD
+http:
+  middlewares:
+    cullis-api-rate:
+      rateLimit:
+        average: 5000       # req/sec per-IP sustained
+        burst:   50000
+        sourceCriterion:
+          ipStrategy: { depth: 1 }   # trust one reverse-proxy hop
+    cullis-admin-rate:
+      rateLimit:
+        average: 200
+        burst:   1000
+        sourceCriterion:
+          ipStrategy: { depth: 1 }
+
+  routers:
+    cullis-api:
+      rule: "Host(`mastio.example`) && PathPrefix(`/v1/`) && !PathPrefix(`/v1/admin/`)"
+      middlewares: ["cullis-api-rate"]
+      service: mastio
+    cullis-admin:
+      rule: "Host(`mastio.example`) && PathPrefix(`/v1/admin/`)"
+      middlewares: ["cullis-admin-rate"]
+      service: mastio
+```
+
+#### Cloudflare / AWS WAF / CDN
+
+Managed edges handle rate limiting out-of-band with a web UI. The
+numbers above still apply. Checklist:
+
+- Rule A: `URI starts_with /v1/admin/` → limit 200 rps per IP,
+  action `Block` (or `Challenge` if operators use the dashboard).
+- Rule B: `URI starts_with /v1/` (everything else, same host) →
+  limit 5 000 rps per IP, action `Block`.
+- **Position rule B *after* rule A**, otherwise B matches
+  `/v1/admin/*` first and the admin-tight budget never applies.
+- Confirm the Mastio receives the originating client IP via
+  `X-Forwarded-For` (managed edges add this; self-hosted HAProxy /
+  nginx needs explicit `proxy_protocol` or header injection).
+
+### Post-deploy verification
+
+Once Layer 1 is live, confirm it is actually gating:
+
+```bash
+# Layer 1 working: flood > budget → you see 429s from the edge *before*
+# the Mastio's ``global rate limit shed`` log line appears.
+wrk -t4 -c200 -d30s -H 'X-API-Key: $TEST_KEY' https://mastio.example/v1/egress/peers
+
+# Log correlation: edge should show thousands of 429s; Mastio should
+# show a much smaller count (only traffic that survived Layer 1).
+curl -H "X-Admin-Secret: $ADMIN_SECRET" \
+     https://mastio.example/v1/admin/observability/circuit-breaker | \
+     jq .shed_count_total
+```
+
+If the Mastio's shed counter grows at the same rate as the client's
+observed 429s, Layer 1 is not engaged — double-check the edge config
+is applied, the zone includes the Mastio's path prefix, and the
+per-IP key is actually per-IP (not per-session / per-cookie).
+
+### What Layer 1 does NOT replace
+
+- **Per-agent abuse from a legitimate IP.** One compromised laptop
+  behind a corporate NAT gateway shares that IP with thousands of
+  innocents; Layer 1 is happy. Layer 3 (per-agent bucket) + Layer 5
+  (anomaly detector, Phase 4) are the catchers here.
+- **Application-level compromise** (stolen creds, DPoP-bound JWT
+  replay within the iat window). Layer 1 sees well-formed traffic
+  under budget and lets it through. Layers 4 + 5 do the work.
+- **Slow-loris / low-rate abuse.** 1 request/sec sustained for 72 h
+  is under every Layer 1 budget; the anomaly detector's ratio signal
+  against the agent's baseline is the catcher.
+
+Layer 1 is a volumetric floor. Layers 2-6 are what makes the system
+correct under the traffic Layer 1 lets through.
+
+---
+
 ## 9. Production Checklist
 
 Before going live, verify:
@@ -485,3 +643,6 @@ Before going live, verify:
       before any flip to `enforce` (`MCP_PROXY_ANOMALY_QUARANTINE_MODE`)
 - [ ] Anomaly detector thresholds reviewed against the shadow-mode
       event history (ratio, abs_rps, ceiling_per_min)
+- [ ] Edge rate limiting (Layer 1) configured per §8b — per-IP budget
+      on `/v1/*` and `/v1/admin/*`, verified with a synthetic flood
+      showing edge 429s before the Mastio's shed counter moves
