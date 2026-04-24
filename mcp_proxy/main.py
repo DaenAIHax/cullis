@@ -390,6 +390,76 @@ async def lifespan(app: FastAPI):
         settings.cb_db_latency_max_shed_fraction,
     )
 
+    # ADR-013 Phase 4 — single-agent anomaly detector. Four cooperating
+    # components share ``_require_engine()``:
+    #   * TrafficRecorder       — in-memory counter, 30 s flush.
+    #     Auth deps call ``record_agent_request`` post-auth.
+    #   * BaselineRollupScheduler — daily 04:00 UTC cron.
+    #   * AnomalyEvaluator      — 30 s tick, dual-signal detection +
+    #     cycle-level fail-closed meta-circuit-breaker.
+    #   * QuarantineExpiryScheduler — hourly hard-delete of expired
+    #     enforce-mode rows.
+    # All four are gated on the master switch
+    # ``settings.anomaly_quarantine_mode``: "off" skips startup
+    # entirely; "shadow" (default) and "enforce" bring up the stack.
+    from mcp_proxy.observability.anomaly_evaluator import AnomalyEvaluator
+    from mcp_proxy.observability.baseline_rollup import BaselineRollupScheduler
+    from mcp_proxy.observability.quarantine import (
+        QuarantineExpiryScheduler,
+        make_quarantine_apply_hook,
+    )
+    from mcp_proxy.observability.traffic_recorder import TrafficRecorder
+
+    if settings.anomaly_quarantine_mode != "off":
+        engine = _require_engine()
+
+        traffic_recorder = TrafficRecorder(engine)
+        await traffic_recorder.start()
+        app.state.traffic_recorder = traffic_recorder
+
+        baseline_rollup = BaselineRollupScheduler(
+            engine,
+            min_baseline_days=settings.anomaly_baseline_min_days,
+        )
+        await baseline_rollup.start()
+        app.state.baseline_rollup = baseline_rollup
+
+        anomaly_evaluator = AnomalyEvaluator(
+            engine,
+            mode=settings.anomaly_quarantine_mode,
+            ratio_threshold=settings.anomaly_ratio_threshold,
+            abs_threshold_rps=settings.anomaly_absolute_threshold_rps,
+            abs_threshold_rps_soft=settings.anomaly_absolute_threshold_rps_soft,
+            sustained_ticks_required=settings.anomaly_sustained_ticks_required,
+            interval_s=settings.anomaly_evaluation_interval_s,
+            ceiling_per_min=settings.anomaly_ceiling_per_min,
+            baseline_min_days=settings.anomaly_baseline_min_days,
+            apply_hook=make_quarantine_apply_hook(
+                engine, ttl_hours=settings.anomaly_quarantine_ttl_hours
+            ),
+        )
+        await anomaly_evaluator.start()
+        app.state.anomaly_evaluator = anomaly_evaluator
+
+        quarantine_expiry = QuarantineExpiryScheduler(engine)
+        await quarantine_expiry.start()
+        app.state.quarantine_expiry = quarantine_expiry
+
+        _log.info(
+            "anomaly detector: mode=%s ratio>%.1fx abs>%.0frps "
+            "sustained=%ds ceiling=%d/min ttl=%dh (ADR-013 Phase 4)",
+            settings.anomaly_quarantine_mode,
+            settings.anomaly_ratio_threshold,
+            settings.anomaly_absolute_threshold_rps,
+            settings.anomaly_sustained_ticks_required * int(
+                settings.anomaly_evaluation_interval_s
+            ),
+            settings.anomaly_ceiling_per_min,
+            settings.anomaly_quarantine_ttl_hours,
+        )
+    else:
+        _log.info("anomaly detector disabled (mode=off)")
+
     _log.info(
         "MCP Proxy started (host=%s, port=%d, env=%s)",
         settings.host, settings.port, settings.environment,
@@ -405,6 +475,29 @@ async def lifespan(app: FastAPI):
             await tracker.stop()
         except Exception as exc:  # noqa: BLE001
             _log.warning("db_latency_tracker.stop raised: %s", exc)
+
+    # ADR-013 Phase 4 — stop anomaly pipeline before engine dispose.
+    # Order matters: evaluator + recorder do DB work on stop (final
+    # flush for the recorder), so they must finish before the engine
+    # tears down. Expiry scheduler is cancel-safe. We also delattr
+    # after stop so a subsequent lifespan (common in tests that reuse
+    # the module-level app) doesn't see zombie components.
+    for attr_name in (
+        "quarantine_expiry",
+        "anomaly_evaluator",
+        "baseline_rollup",
+        "traffic_recorder",
+    ):
+        component = getattr(app.state, attr_name, None)
+        if component is not None:
+            try:
+                await component.stop()
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("%s.stop raised: %s", attr_name, exc)
+            try:
+                delattr(app.state, attr_name)
+            except AttributeError:
+                pass
 
     stop_event = getattr(app.state, "local_sweeper_stop", None)
     sweeper_task = getattr(app.state, "local_sweeper_task", None)

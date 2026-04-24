@@ -75,14 +75,13 @@ async def test_requires_admin_secret(tmp_path, monkeypatch):
     assert r.status_code == 403
 
 
-async def test_no_evaluator_returns_default_shape(tmp_path, monkeypatch):
-    """Detector not yet wired (settings=shadow default, no app.state).
-
-    Commit 6 ships the endpoint before commit 7 wires the lifespan, so
-    the "no evaluator" branch is the happy path until the wiring
-    commit lands. Must return a consistent shape with settings-based
-    config so dashboards don't 500 mid-deploy.
+async def test_mode_off_returns_default_shape(tmp_path, monkeypatch):
+    """With ``anomaly_quarantine_mode=off`` the lifespan skips wiring
+    the evaluator, and the endpoint falls back to a deterministic
+    settings-only snapshot so dashboards don't 500 when the detector
+    is intentionally disabled.
     """
+    monkeypatch.setenv("MCP_PROXY_ANOMALY_QUARANTINE_MODE", "off")
     app = await _spin_proxy(tmp_path, monkeypatch)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as cli:
@@ -93,13 +92,40 @@ async def test_no_evaluator_returns_default_shape(tmp_path, monkeypatch):
             )
     assert r.status_code == 200
     body = r.json()
-    assert body["mode"] == "shadow"
+    assert body["mode"] == "off"
     assert body["startup_ts"] is None
     assert body["cycles_run"] == 0
     assert body["quarantines_last_24h"] == 0
     assert body["config"]["ratio_threshold"] == 10.0
     assert body["config"]["abs_threshold_rps"] == 100.0
     assert body["config"]["ceiling_per_min"] == 3
+
+
+async def test_shadow_mode_default_wires_evaluator(tmp_path, monkeypatch):
+    """Default config → lifespan wires detector in shadow mode.
+
+    Validates the commit 7 wiring: evaluator + recorder land on
+    app.state, the endpoint reports their state, cycles_run is a
+    real live counter rather than the fallback zero.
+    """
+    app = await _spin_proxy(tmp_path, monkeypatch)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as cli:
+        async with app.router.lifespan_context(app):
+            # Detector is wired: attributes exist on app.state.
+            assert hasattr(app.state, "anomaly_evaluator")
+            assert hasattr(app.state, "traffic_recorder")
+            assert hasattr(app.state, "baseline_rollup")
+            assert hasattr(app.state, "quarantine_expiry")
+
+            r = await cli.get(
+                "/v1/admin/observability/anomaly-detector",
+                headers=await _headers(),
+            )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "shadow"
+    assert body["startup_ts"] is not None
 
 
 async def test_24h_counts_reflect_db_events(tmp_path, monkeypatch):
