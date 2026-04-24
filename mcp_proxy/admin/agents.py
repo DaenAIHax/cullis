@@ -472,3 +472,72 @@ async def register_agent_dpop_jwk(
         detail=f"agent_id={agent_id} jkt={jkt}",
     )
     return DpopJwkResponse(agent_id=agent_id, dpop_jkt=jkt)
+
+
+# ── ADR-013 Phase 4: operator reactivation ──────────────────────────
+
+class ReactivateResponse(BaseModel):
+    """Shape returned by the anomaly-quarantine reactivation endpoint.
+
+    ``ok=False`` maps to HTTP 404 (no active quarantine, or the agent
+    row has already been hard-deleted by the expiry cron); ``ok=True``
+    returns the resolved event id so the operator can audit-log it.
+    """
+    ok: bool
+    agent_id: str
+    resolved_event_id: int | None = None
+    message: str
+
+
+@router.post(
+    "/{agent_id}/reactivate",
+    response_model=ReactivateResponse,
+    dependencies=[Depends(_require_admin_secret)],
+    summary="Clear an active anomaly-detector quarantine",
+)
+async def reactivate_agent_endpoint(
+    agent_id: str,
+    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+) -> ReactivateResponse:
+    """Clear an active quarantine event for an agent (ADR-013 Phase 4).
+
+    Audit trail: the event row's ``resolved_by`` column records an
+    operator fingerprint derived from the admin secret — same operator
+    resolving multiple events is attributable without the raw secret
+    ever landing in the DB.
+
+    Refusal cases (returns 404):
+      * No active event row (``resolved_at IS NULL``).
+      * Most recent event was mode='shadow' — shadow events never
+        touched is_active so there is nothing to clear.
+      * Agent row has already been hard-deleted by the expiry cron;
+        re-enrollment through the normal flow is required.
+    """
+    from mcp_proxy.db import _require_engine
+    from mcp_proxy.observability.quarantine import reactivate_agent
+
+    engine = _require_engine()
+    result = await reactivate_agent(
+        engine, agent_id, admin_secret=x_admin_secret
+    )
+
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=result.message,
+        )
+
+    await log_audit(
+        agent_id="admin",
+        action="agent.reactivated_from_quarantine",
+        status="success",
+        detail=(
+            f"agent_id={agent_id} event_id={result.resolved_event_id}"
+        ),
+    )
+    return ReactivateResponse(
+        ok=True,
+        agent_id=result.agent_id,
+        resolved_event_id=result.resolved_event_id,
+        message=result.message,
+    )
