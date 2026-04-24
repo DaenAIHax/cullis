@@ -62,10 +62,14 @@ EOF
 cmd_full() {
     echo "[nightly] bringing up lean stack (agents_per_org=${AGENTS_PER_ORG})"
     mkdir -p state logs reports
+    # --build: rebuild Mastio image against the current repo code. Cheap
+    # when the layer cache is warm, mandatory when validating a fresh
+    # main merge. Without this, a cached image from before the merge
+    # keeps serving stale code (and stale endpoints look like 404s).
     AGENTS_PER_ORG="$AGENTS_PER_ORG" \
     PKI_KEY_TYPE="$PKI_KEY_TYPE" \
     ADMIN_SECRET="$ADMIN_SECRET" \
-    $COMPOSE up -d --wait
+    $COMPOSE up -d --wait --build
 
     # --wait only blocks on services with healthchecks. bootstrap-mastio is
     # restart:no with no healthcheck, so poll its exit code + the sentinel
