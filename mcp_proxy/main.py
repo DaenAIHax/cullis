@@ -545,6 +545,36 @@ async def security_headers(request: Request, call_next):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Global rate limit (ADR-013 layer 2)
+#
+# Registered last among the middlewares so Starlette's LIFO execution order
+# runs it *first* on every inbound request — before auth deps, before any
+# handler that would consume state (DPoP nonce, session row, DB write). A
+# shed returns 503 + Retry-After immediately; bypasses /health, /metrics,
+# and /.well-known/ so observability never hides under load.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from mcp_proxy.middleware.global_rate_limit import (
+    GlobalRateLimitMiddleware,
+    TokenBucket,
+)
+
+_global_rate_bucket = TokenBucket(
+    rate_per_sec=settings.global_rate_limit_rps,
+    burst=settings.global_rate_limit_burst,
+)
+# Expose the bucket on app.state so tests + future /metrics handlers can
+# read available tokens / shed counts without rebuilding the instance.
+app.state.global_rate_bucket = _global_rate_bucket
+app.add_middleware(GlobalRateLimitMiddleware, bucket=_global_rate_bucket)
+_log.info(
+    "Global rate limit: rps=%.1f burst=%d (ADR-013 layer 2)",
+    settings.global_rate_limit_rps,
+    settings.global_rate_limit_burst,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Routers
 # ─────────────────────────────────────────────────────────────────────────────
 

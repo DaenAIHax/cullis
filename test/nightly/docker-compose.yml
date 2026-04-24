@@ -1,0 +1,262 @@
+# Nightly stress test — lean topology (no SPIRE, no Keycloak, no MCP servers).
+#
+# Services: Court + 2 Mastio (orga/orgb) + bootstrap. Agents run on the host
+# as Python scripts driven by test/nightly/workload/*.py and connect via the
+# published ports (8000/9100/9200).
+#
+# State persisted in ./state/ as a bind mount so host-side scripts can read
+# the BYOCA-minted agent credentials.
+
+networks:
+  orga-internal:
+    name: cullis-nightly-orga
+    driver: bridge
+  orgb-internal:
+    name: cullis-nightly-orgb
+    driver: bridge
+  public-wan:
+    name: cullis-nightly-wan
+    driver: bridge
+
+volumes:
+  broker-ca:
+  postgres-data:
+  proxy-a-data:
+  proxy-b-data:
+
+services:
+
+  broker-ca-init:
+    build: ../../sandbox/broker-ca-init
+    environment:
+      ORG_ID: broker
+    volumes:
+      - broker-ca:/broker-certs
+    networks: [public-wan]
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     atn
+      POSTGRES_PASSWORD: atn-nightly
+      POSTGRES_DB:       agent_trust
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [public-wan]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atn -d agent_trust"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    networks: [public-wan]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  broker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      broker-ca-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ADMIN_SECRET:            "${ADMIN_SECRET:-nightly-admin-secret-change-me}"
+      KMS_BACKEND:             "local"
+      BROKER_CA_KEY_PATH:      /broker-certs/broker-ca-key.pem
+      BROKER_CA_CERT_PATH:     /broker-certs/broker-ca.pem
+      DATABASE_URL:            "postgresql+asyncpg://atn:atn-nightly@postgres:5432/agent_trust"
+      REDIS_URL:               "redis://redis:6379"
+      POLICY_BACKEND:          "webhook"
+      POLICY_ENFORCEMENT:      "true"
+      POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: "true"
+      TRUST_DOMAIN:            "court.nightly"
+      OTEL_ENABLED:            "false"
+      ENVIRONMENT:             "development"
+      FORWARDED_ALLOW_IPS:     "172.16.0.0/12"
+    tmpfs:
+      - /app/certs:uid=999,gid=999
+    volumes:
+      - broker-ca:/broker-certs:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 172.16.0.0/12
+    networks:
+      public-wan:
+        aliases: [broker]
+    expose: ["8000"]
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+
+  # ── Bootstrap: create orgs on Court + mint N agent certs ──────────────────
+
+  bootstrap:
+    build: ./bootstrap
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      BROKER_URL:       "http://broker:8000"
+      ADMIN_SECRET:     "${ADMIN_SECRET:-nightly-admin-secret-change-me}"
+      STATE_DIR:        /state
+      AGENTS_PER_ORG:   "${AGENTS_PER_ORG:-10}"
+      PKI_KEY_TYPE:     "${PKI_KEY_TYPE:-ec}"
+    volumes:
+      - ./state:/state
+    networks: [public-wan]
+    restart: "no"
+
+  # ── Org A Mastio (proxy) ──────────────────────────────────────────────────
+
+  proxy-a-init:
+    build:
+      context: ../..
+      dockerfile: sandbox/proxy-init/Dockerfile
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ORG_ID:              "orga"
+      BROKER_URL:          "http://broker:8000"
+      PROXY_PUBLIC_URL:    "http://localhost:9100"
+      PROXY_DB_PATH:       /data/mcp_proxy.db
+      STATE_DIR:           /state
+      # OIDC intentionally unset — local password auth for dashboard.
+      SEED_MCP_RESOURCES:  "0"
+    volumes:
+      - ./state:/state:ro
+      - proxy-a-data:/data
+    networks: [orga-internal, public-wan]
+    restart: "no"
+
+  proxy-a:
+    build:
+      context: ../..
+      dockerfile: mcp_proxy/Dockerfile
+    depends_on:
+      proxy-a-init:
+        condition: service_completed_successfully
+    environment:
+      MCP_PROXY_BROKER_URL:        "http://broker:8000"
+      MCP_PROXY_BROKER_JWKS_URL:   "http://broker:8000/.well-known/jwks.json"
+      MCP_PROXY_ADMIN_SECRET:      "${PROXY_A_ADMIN_SECRET:-nightly-proxy-admin-a}"
+      MCP_PROXY_DATABASE_URL:      "sqlite+aiosqlite:////data/mcp_proxy.db"
+      MCP_PROXY_ORG_ID:            "orga"
+      MCP_PROXY_ALLOWED_ORIGINS:   "http://localhost:9100"
+      MCP_PROXY_ENVIRONMENT:       "development"
+      MCP_PROXY_FEDERATION_POLL_INTERVAL_S: "2"
+      PROXY_INTRA_ORG:             "true"
+      PROXY_TRANSPORT_INTRA_ORG:   "mtls-only"
+      MCP_PROXY_LOCAL_AUTH_ENABLED: "true"
+    volumes:
+      - proxy-a-data:/data
+    networks:
+      orga-internal:
+        aliases: [proxy-a]
+      public-wan:
+        aliases: [proxy-a]
+    expose: ["9100"]
+    ports: ["9100:9100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ── Org B Mastio (proxy) ──────────────────────────────────────────────────
+
+  proxy-b-init:
+    build:
+      context: ../..
+      dockerfile: sandbox/proxy-init/Dockerfile
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      ORG_ID:              "orgb"
+      BROKER_URL:          "http://broker:8000"
+      PROXY_PUBLIC_URL:    "http://localhost:9200"
+      PROXY_DB_PATH:       /data/mcp_proxy.db
+      STATE_DIR:           /state
+      SEED_MCP_RESOURCES:  "0"
+    volumes:
+      - ./state:/state:ro
+      - proxy-b-data:/data
+    restart: "no"
+
+  proxy-b:
+    build:
+      context: ../..
+      dockerfile: mcp_proxy/Dockerfile
+    depends_on:
+      proxy-b-init:
+        condition: service_completed_successfully
+    environment:
+      MCP_PROXY_BROKER_URL:        "http://broker:8000"
+      MCP_PROXY_BROKER_JWKS_URL:   "http://broker:8000/.well-known/jwks.json"
+      MCP_PROXY_ADMIN_SECRET:      "${PROXY_B_ADMIN_SECRET:-nightly-proxy-admin-b}"
+      MCP_PROXY_DATABASE_URL:      "sqlite+aiosqlite:////data/mcp_proxy.db"
+      MCP_PROXY_ORG_ID:            "orgb"
+      MCP_PROXY_ALLOWED_ORIGINS:   "http://localhost:9200"
+      MCP_PROXY_ENVIRONMENT:       "development"
+      MCP_PROXY_FEDERATION_POLL_INTERVAL_S: "2"
+      PROXY_INTRA_ORG:             "true"
+      PROXY_TRANSPORT_INTRA_ORG:   "mtls-only"
+      MCP_PROXY_LOCAL_AUTH_ENABLED: "true"
+    volumes:
+      - proxy-b-data:/data
+    networks:
+      orgb-internal:
+        aliases: [proxy-b]
+      public-wan:
+        aliases: [proxy-b]
+    expose: ["9100"]
+    ports: ["9200:9100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ── Post-proxy-boot: pin mastio_pubkey + BYOCA enroll N agents ────────────
+
+  bootstrap-mastio:
+    build: ./bootstrap
+    depends_on:
+      broker:
+        condition: service_healthy
+      proxy-a:
+        condition: service_healthy
+      proxy-b:
+        condition: service_healthy
+    entrypoint: ["python", "/app/bootstrap_mastio.py"]
+    environment:
+      BROKER_URL:            "http://broker:8000"
+      ADMIN_SECRET:          "${ADMIN_SECRET:-nightly-admin-secret-change-me}"
+      PROXY_A_URL:           "http://proxy-a:9100"
+      PROXY_A_ADMIN_SECRET:  "${PROXY_A_ADMIN_SECRET:-nightly-proxy-admin-a}"
+      PROXY_B_URL:           "http://proxy-b:9100"
+      PROXY_B_ADMIN_SECRET:  "${PROXY_B_ADMIN_SECRET:-nightly-proxy-admin-b}"
+      BOOTSTRAP_SCOPE:       "full"
+    volumes:
+      - ./state:/state
+    networks: [public-wan, orga-internal, orgb-internal]
+    restart: "no"

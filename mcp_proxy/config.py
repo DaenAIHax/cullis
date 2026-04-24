@@ -101,8 +101,26 @@ class ProxySettings(BaseSettings):
     # without touching the legacy MCP_PROXY_* surface.
     database_url: str = "sqlite+aiosqlite:///./mcp_proxy.db"
 
-    # Rate limiting
-    rate_limit_per_minute: int = 60
+    # Rate limiting (ADR-013 layer 3 — per-agent safety net against a
+    # single buggy agent stuck in a retry loop. Not the primary DoS
+    # defence: coordinated compromise is addressed by layers 2/4/5/6.
+    # Default relaxed from 60/min to 1800/min (≈ 30 req/s sustained) so
+    # legitimate fan-out / webhook-burst patterns don't false-positive;
+    # the DB pool cap in mcp_proxy.db._engine_kwargs is the real floor
+    # that keeps the system responsive.)
+    rate_limit_per_minute: int = 1800
+
+    # ADR-013 layer 2 — global Mastio rate limit. Token bucket shared
+    # across every request (not per-agent), so coordinated compromise
+    # across many stolen credentials cannot outrun the aggregate cap.
+    # The ``burst`` window swallows legitimate spikes (fan-out, retry
+    # storm after a hiccup); the ``rps`` sets the sustained ceiling.
+    # Over-limit requests get ``503`` + ``Retry-After: 1``. In-memory
+    # only for now — multi-worker deployments effectively get N × the
+    # advertised rate, matching the per-agent limiter degradation when
+    # Redis is unavailable. A Redis-backed backend is phase 2.1.
+    global_rate_limit_rps: float = 500.0
+    global_rate_limit_burst: int = 1000
 
     # Redis — optional. Empty = in-memory JTI store + rate limiter (single-
     # instance Mastio is fine without Redis). Multi-worker / HA deploys MUST
