@@ -113,6 +113,38 @@ cmd_not_implemented() {
     exit 2
 }
 
+# Chaos dispatcher. Delegates to chaos/*.sh; all targeting the currently
+# running workload by NIGHTLY_RUN_TS or the newest logs/ subdir.
+cmd_chaos() {
+    if [[ $# -eq 0 ]]; then
+        "$SCRIPT_DIR/chaos/sequence.sh" --profile light
+        return
+    fi
+    case "$1" in
+        light|heavy)
+            "$SCRIPT_DIR/chaos/sequence.sh" --profile "$1"
+            ;;
+        kill)
+            shift
+            "$SCRIPT_DIR/chaos/kill.sh" "$@"
+            ;;
+        partition)
+            shift
+            "$SCRIPT_DIR/chaos/partition.sh" "$@"
+            ;;
+        *)
+            echo "usage: nightly.sh chaos [light|heavy|kill <svc>|partition <svc>]" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Render the markdown report for a run. With no args, picks the newest.
+cmd_report() {
+    local run_ts="${1:-}"
+    "$PY" "$SCRIPT_DIR/report/render.py" ${run_ts:+"$run_ts"}
+}
+
 # Workload orchestration. Starts spammer + chatter + sessionator drivers as
 # background children; wait blocks until SIGINT/SIGTERM, then propagates to
 # every child so JSONL logs flush cleanly.
@@ -191,8 +223,8 @@ case "$sub" in
     smoke)     cmd_smoke "$@" ;;
     logs)      cmd_logs "$@" ;;
     go)        cmd_go "$@" ;;
-    chaos)     cmd_not_implemented "chaos" "$@" ;;
-    report)    cmd_not_implemented "report" "$@" ;;
+    chaos)     cmd_chaos "$@" ;;
+    report)    cmd_report "$@" ;;
     -h|--help|help) usage ;;
     *) echo "unknown command: $sub" >&2; usage; exit 1 ;;
 esac
