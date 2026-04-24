@@ -114,6 +114,45 @@ def test_middleware_bypasses_observability_paths():
         assert client.get("/.well-known/jwks-local.json").status_code == 200
 
 
+def test_middleware_emits_warning_on_shed(capsys):
+    """Regression for cullis-enterprise#11 — shed events must land on
+    stderr as a WARNING record in the project's JSON log shape. The
+    middleware writes to ``sys.stderr`` directly (see module docstring)
+    because the ``mcp_proxy`` logger is silently muted inside the ASGI
+    dispatch path at runtime; ``capsys.readouterr().err`` sees that
+    stderr output.
+    """
+    import json as _json
+
+    bucket = TokenBucket(rate_per_sec=0.001, burst=1)
+    app = _build_app(bucket)
+
+    with TestClient(app) as client:
+        client.get("/v1/egress/peers")  # first request drains the bucket (no log)
+        client.get("/v1/egress/peers")  # shed → should log
+        client.get("/v1/egress/peers")  # shed → should log again
+
+    captured = capsys.readouterr().err
+    shed_lines = [
+        line for line in captured.splitlines()
+        if "global rate limit shed" in line
+    ]
+    assert len(shed_lines) == 2, (
+        f"expected 2 shed records on stderr, got {len(shed_lines)}:\n{captured!r}"
+    )
+
+    # Each line must be a parseable JSON record matching the proxy's
+    # JSONFormatter shape so log aggregators don't see an orphan.
+    for line in shed_lines:
+        record = _json.loads(line)
+        assert record["level"] == "WARNING"
+        assert record["logger"] == "mcp_proxy"
+        assert "timestamp" in record
+        assert "path=/v1/egress/peers" in record["message"]
+    assert "total_shed=1" in _json.loads(shed_lines[0])["message"]
+    assert "total_shed=2" in _json.loads(shed_lines[1])["message"]
+
+
 def test_middleware_tracks_shed_count():
     bucket = TokenBucket(rate_per_sec=0.001, burst=1)
     app = _build_app(bucket)
