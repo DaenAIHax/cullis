@@ -110,6 +110,18 @@ class ProxySettings(BaseSettings):
     # that keeps the system responsive.)
     rate_limit_per_minute: int = 1800
 
+    # ADR-013 layer 2 — global Mastio rate limit. Token bucket shared
+    # across every request (not per-agent), so coordinated compromise
+    # across many stolen credentials cannot outrun the aggregate cap.
+    # The ``burst`` window swallows legitimate spikes (fan-out, retry
+    # storm after a hiccup); the ``rps`` sets the sustained ceiling.
+    # Over-limit requests get ``503`` + ``Retry-After: 1``. In-memory
+    # only for now — multi-worker deployments effectively get N × the
+    # advertised rate, matching the per-agent limiter degradation when
+    # Redis is unavailable. A Redis-backed backend is phase 2.1.
+    global_rate_limit_rps: float = 500.0
+    global_rate_limit_burst: int = 1000
+
     # Redis — optional. Empty = in-memory JTI store + rate limiter (single-
     # instance Mastio is fine without Redis). Multi-worker / HA deploys MUST
     # set this so the DPoP JTI store is shared across workers (audit F-B-12).
