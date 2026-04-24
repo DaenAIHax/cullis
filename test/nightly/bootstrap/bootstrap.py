@@ -1,0 +1,461 @@
+"""Nightly stress-test bootstrap: 2 orgs, N agents/org, no MCP servers.
+
+Adapted from sandbox/bootstrap/bootstrap.py. Differences:
+- AGENTS list is generated from AGENTS_PER_ORG (default 10).
+- No BOOTSTRAP_SCOPE variants — always register both orgs + all agents.
+- No PEERS file (agents are driven by host-side scripts, not containers).
+- No MCP resource seeding logic here (done in proxy-init via SEED_MCP_*).
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import pathlib
+import secrets
+import sys
+import time
+
+import httpx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.x509.oid import NameOID
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+BROKER_URL        = os.environ.get("BROKER_URL", "http://broker:8000")
+ADMIN_SECRET      = os.environ["ADMIN_SECRET"]
+STATE             = pathlib.Path(os.environ.get("STATE_DIR", "/state"))
+DONE_FLAG         = STATE / "bootstrap.done"
+PKI_KEY_TYPE      = os.environ.get("PKI_KEY_TYPE", "ec").strip().lower()
+TRUST_DOMAIN_SUF  = os.environ.get("TRUST_DOMAIN_SUFFIX", ".test")
+AGENTS_PER_ORG    = int(os.environ.get("AGENTS_PER_ORG", "10"))
+
+_PDP_WEBHOOKS = {
+    "orga": os.environ.get("ORGA_PDP_WEBHOOK", "http://proxy-a:9100/pdp/policy"),
+    "orgb": os.environ.get("ORGB_PDP_WEBHOOK", "http://proxy-b:9100/pdp/policy"),
+}
+
+# ANSI helpers
+RESET, BOLD  = "\033[0m", "\033[1m"
+GREEN, YELLOW, RED, CYAN, GRAY = (
+    "\033[32m", "\033[33m", "\033[31m", "\033[36m", "\033[90m"
+)
+
+def _header(phase: int, title: str) -> None:
+    line = f"═══ PHASE {phase} — {title} "
+    print(f"\n{BOLD}{CYAN}{line}{'═' * max(0, 60 - len(line))}{RESET}\n", flush=True)
+
+def _ok(msg: str) -> None:   print(f"  {GREEN}✓{RESET} {msg}", flush=True)
+def _warn(msg: str) -> None: print(f"  {YELLOW}⚠{RESET} {msg}", flush=True)
+def _fail(msg: str) -> None: print(f"  {RED}✗{RESET} {msg}", flush=True)
+def _info(msg: str) -> None: print(f"  {GRAY}…{RESET} {msg}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Org / Agent definitions (parametric)
+# ---------------------------------------------------------------------------
+ORGS = [
+    {"org_id": "orga", "display_name": "Nightly Org A", "flow": "join"},
+    {"org_id": "orgb", "display_name": "Nightly Org B", "flow": "attach"},
+]
+
+def _agent_list() -> list[dict]:
+    caps = ["oneshot.message", "session.open", "session.message"]
+    out = []
+    for org in ORGS:
+        oid = org["org_id"]
+        short = oid[-1]  # 'a' or 'b'
+        for i in range(1, AGENTS_PER_ORG + 1):
+            name = f"nightly-{short}-{i:02d}"
+            out.append({
+                "agent_id": f"{oid}::{name}",
+                "org_id": oid,
+                "capabilities": caps,
+            })
+    return out
+
+AGENTS = _agent_list()
+
+
+# ---------------------------------------------------------------------------
+# PKI helpers
+# ---------------------------------------------------------------------------
+def _gen_key():
+    if PKI_KEY_TYPE == "ec":
+        return ec.generate_private_key(ec.SECP256R1())
+    if PKI_KEY_TYPE == "rsa":
+        return rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    raise SystemExit(f"bootstrap: unsupported PKI_KEY_TYPE={PKI_KEY_TYPE!r}")
+
+def _thumbprint(cert: x509.Certificate) -> str:
+    return cert.fingerprint(hashes.SHA256()).hex()[:16]
+
+def _serial_hex(cert: x509.Certificate) -> str:
+    return format(cert.serial_number, "x")
+
+def _trust_domain(org_id: str) -> str:
+    return f"{org_id}{TRUST_DOMAIN_SUF}"
+
+def _spiffe_id(org_id: str, agent_name: str) -> str:
+    return f"spiffe://{_trust_domain(org_id)}/{org_id}/{agent_name}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Wait for Court
+# ---------------------------------------------------------------------------
+def _wait_broker(client: httpx.Client, timeout_s: float = 120.0) -> None:
+    _header(1, "Waiting for Court (broker)")
+    _info(f"polling {BROKER_URL}/health (timeout {timeout_s:.0f}s)")
+    start = time.monotonic()
+    last_exc: Exception | None = None
+    while time.monotonic() - start < timeout_s:
+        try:
+            r = client.get(f"{BROKER_URL}/health")
+            if r.status_code == 200:
+                _ok(f"GET /health → 200 OK  ({time.monotonic() - start:.1f}s)")
+                return
+        except Exception as exc:
+            last_exc = exc
+        time.sleep(1)
+    _fail(f"broker not healthy after {timeout_s:.0f}s — last error: {last_exc}")
+    raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Generate Org CAs
+# ---------------------------------------------------------------------------
+def _gen_org_ca(org_id: str) -> tuple[x509.Certificate, bytes, bytes]:
+    key = _gen_key()
+    name = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, f"{org_id} CA"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_id),
+    ])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now).not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True, key_cert_sign=True, crl_sign=True,
+                content_commitment=False, key_encipherment=False,
+                data_encipherment=False, key_agreement=False,
+                encipher_only=False, decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    return cert, cert_pem, key_pem
+
+def _persist_org(org_id: str, display_name: str, cert_pem: bytes,
+                 key_pem: bytes, org_secret: str) -> None:
+    d = STATE / org_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "ca.pem").write_bytes(cert_pem)
+    (d / "ca-key.pem").write_bytes(key_pem)
+    (d / "org_secret").write_text(org_secret)
+    (d / "display_name").write_text(display_name)
+    for p in d.iterdir():
+        p.chmod(0o644)
+
+def _load_existing_org(org_id: str) -> dict | None:
+    d = STATE / org_id
+    required = ("ca.pem", "ca-key.pem", "org_secret", "display_name")
+    if not all((d / f).exists() for f in required):
+        return None
+    try:
+        cert_pem = (d / "ca.pem").read_bytes()
+        key_pem = (d / "ca-key.pem").read_bytes()
+        org_secret = (d / "org_secret").read_text().strip()
+        display_name = (d / "display_name").read_text().strip()
+        cert = x509.load_pem_x509_certificate(cert_pem)
+    except Exception as exc:
+        _warn(f"state files unreadable for {org_id} ({exc}) — regenerating")
+        return None
+    return {"cert": cert, "cert_pem": cert_pem, "key_pem": key_pem,
+            "org_secret": org_secret, "display_name": display_name}
+
+def phase_2_generate_cas() -> dict[str, dict]:
+    _header(2, "Generate Org CAs")
+    out: dict[str, dict] = {}
+    for org in ORGS:
+        oid = org["org_id"]
+        reused = _load_existing_org(oid)
+        if reused is not None:
+            cert = reused["cert"]
+            cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+            _ok(f"org_id={BOLD}{oid}{RESET}  {YELLOW}reused from state{RESET}  CN={cn}")
+            _ok(f"serial={GRAY}{_serial_hex(cert)}{RESET}  thumbprint={CYAN}{_thumbprint(cert)}{RESET}")
+            out[oid] = reused
+            continue
+        cert, cert_pem, key_pem = _gen_org_ca(oid)
+        org_secret = secrets.token_urlsafe(32)
+        _persist_org(oid, org["display_name"], cert_pem, key_pem, org_secret)
+        cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        _ok(f"org_id={BOLD}{oid}{RESET}  key={PKI_KEY_TYPE.upper()}  CN={cn}")
+        _ok(f"serial={GRAY}{_serial_hex(cert)}{RESET}  thumbprint={CYAN}{_thumbprint(cert)}{RESET}")
+        _ok(f"persisted → {STATE / oid}/")
+        out[oid] = {"cert": cert, "cert_pem": cert_pem, "key_pem": key_pem,
+                    "org_secret": org_secret, "display_name": org["display_name"]}
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Register orgs on Court
+# ---------------------------------------------------------------------------
+def _admin_headers() -> dict[str, str]:
+    return {"x-admin-secret": ADMIN_SECRET}
+
+def _org_headers(org_id: str, org_secret: str) -> dict[str, str]:
+    return {"x-org-id": org_id, "x-org-secret": org_secret}
+
+def _log_http(method: str, path: str, r: httpx.Response) -> None:
+    color = GREEN if 200 <= r.status_code < 300 else (YELLOW if r.status_code < 400 else RED)
+    _ok(f"{method} {path} → {color}{r.status_code} {r.reason_phrase or ''}{RESET}")
+
+def _onboard_via_join(client: httpx.Client, org_id: str, display_name: str,
+                      cert_pem: bytes, org_secret: str) -> None:
+    r = client.post(f"{BROKER_URL}/v1/admin/invites",
+                    json={"label": f"nightly-{org_id}", "ttl_hours": 1},
+                    headers=_admin_headers())
+    r.raise_for_status()
+    token = r.json()["token"]
+    _log_http("POST", "/v1/admin/invites", r)
+
+    r = client.post(f"{BROKER_URL}/v1/onboarding/join", json={
+        "org_id": org_id, "display_name": display_name, "secret": org_secret,
+        "ca_certificate": cert_pem.decode(),
+        "contact_email": f"admin@{org_id}.test",
+        "invite_token": token, "trust_domain": _trust_domain(org_id),
+        "webhook_url": _PDP_WEBHOOKS.get(org_id),
+    })
+    if r.status_code == 409:
+        _warn(f"{org_id} already registered — skipping join")
+        return
+    if r.status_code not in (200, 201, 202):
+        _fail(f"join failed: {r.status_code} {r.text}")
+        raise SystemExit(1)
+    _log_http("POST", "/v1/onboarding/join", r)
+
+    r = client.post(f"{BROKER_URL}/v1/admin/orgs/{org_id}/approve",
+                    headers=_admin_headers())
+    if r.status_code not in (200, 409):
+        r.raise_for_status()
+    _log_http("POST", f"/v1/admin/orgs/{org_id}/approve", r)
+    _ok(f"{BOLD}{org_id}{RESET} active via join flow")
+
+def _onboard_via_attach(client: httpx.Client, org_id: str, display_name: str,
+                        cert_pem: bytes, org_secret: str) -> None:
+    r = client.post(f"{BROKER_URL}/v1/registry/orgs", json={
+        "org_id": org_id, "display_name": display_name,
+        "secret": "placeholder-will-be-rotated",
+    }, headers=_admin_headers())
+    if r.status_code == 409:
+        _warn(f"{org_id} already registered — skipping attach")
+        return
+    r.raise_for_status()
+    _log_http("POST", "/v1/registry/orgs", r)
+
+    r = client.post(f"{BROKER_URL}/v1/admin/orgs/{org_id}/attach-invite",
+                    json={"label": f"nightly-attach-{org_id}", "ttl_hours": 1},
+                    headers=_admin_headers())
+    r.raise_for_status()
+    token = r.json()["token"]
+    _log_http("POST", f"/v1/admin/orgs/{org_id}/attach-invite", r)
+
+    r = client.post(f"{BROKER_URL}/v1/onboarding/attach", json={
+        "ca_certificate": cert_pem.decode(), "invite_token": token,
+        "secret": org_secret, "trust_domain": _trust_domain(org_id),
+        "webhook_url": _PDP_WEBHOOKS.get(org_id),
+    })
+    if r.status_code not in (200, 201, 202):
+        _fail(f"attach failed: {r.status_code} {r.text}")
+        raise SystemExit(1)
+    _log_http("POST", "/v1/onboarding/attach", r)
+    _ok(f"{BOLD}{org_id}{RESET} active via attach flow")
+
+def phase_3_register_orgs(client: httpx.Client, orgs_data: dict[str, dict]) -> None:
+    _header(3, "Register orgs on Court")
+    for org in ORGS:
+        oid = org["org_id"]
+        d = orgs_data[oid]
+        _info(f"registering {BOLD}{oid}{RESET} via {org['flow']} flow")
+        if org["flow"] == "join":
+            _onboard_via_join(client, oid, d["display_name"], d["cert_pem"], d["org_secret"])
+        elif org["flow"] == "attach":
+            _onboard_via_attach(client, oid, d["display_name"], d["cert_pem"], d["org_secret"])
+        else:
+            raise SystemExit(f"unknown flow: {org['flow']}")
+
+    r = client.get(f"{BROKER_URL}/v1/registry/orgs", headers=_admin_headers())
+    r.raise_for_status()
+    active = {o["org_id"] for o in r.json() if o.get("status") == "active"}
+    expected = {o["org_id"] for o in ORGS}
+    missing = expected - active
+    if missing:
+        _fail(f"orgs not active: {missing}")
+        raise SystemExit(1)
+    _ok(f"verified {len(expected)} orgs active on Court")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Mint agent certs
+# ---------------------------------------------------------------------------
+def _gen_agent_cert(agent_id: str, org_id: str,
+                    ca_cert_pem: bytes, ca_key_pem: bytes) -> tuple[x509.Certificate, bytes, bytes]:
+    ca_cert = x509.load_pem_x509_certificate(ca_cert_pem)
+    ca_key = load_pem_private_key(ca_key_pem, password=None)
+    key = _gen_key()
+    _, agent_name = agent_id.split("::", 1)
+    spiffe = _spiffe_id(org_id, agent_name)
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, agent_id),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_id),
+    ])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject).issuer_name(ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now).not_valid_after(now + datetime.timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.UniformResourceIdentifier(spiffe)]),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    return cert, cert_pem, key_pem
+
+def _provision_agent(agent_def: dict, orgs_data: dict[str, dict]) -> dict:
+    agent_id = agent_def["agent_id"]
+    org_id = agent_def["org_id"]
+    caps = agent_def["capabilities"]
+    _, agent_name = agent_id.split("::", 1)
+    spiffe = _spiffe_id(org_id, agent_name)
+    od = orgs_data[org_id]
+
+    cert, cert_pem, key_pem = _gen_agent_cert(agent_id, org_id, od["cert_pem"], od["key_pem"])
+
+    agent_dir = STATE / org_id / "agents" / agent_name
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "agent.pem").write_bytes(cert_pem)
+    (agent_dir / "agent-key.pem").write_bytes(key_pem)
+    (agent_dir / "agent.pem").chmod(0o644)
+    (agent_dir / "agent-key.pem").chmod(0o644)
+
+    return {"agent_id": agent_id, "org_id": org_id, "spiffe_id": spiffe,
+            "capabilities": caps, "cert_serial": _serial_hex(cert),
+            "cert_thumbprint": _thumbprint(cert)}
+
+def phase_4_register_agents(orgs_data: dict[str, dict]) -> list[dict]:
+    _header(4, f"Mint agent certs (count={len(AGENTS)})")
+    results = []
+    for agent_def in AGENTS:
+        results.append(_provision_agent(agent_def, orgs_data))
+
+    # Progress line per 5 agents to avoid wall of text at scale
+    n = len(results)
+    by_org: dict[str, int] = {}
+    for m in results:
+        by_org[m["org_id"]] = by_org.get(m["org_id"], 0) + 1
+    for oid, c in by_org.items():
+        _ok(f"{oid}: {c} agents minted → /state/{oid}/agents/*/")
+
+    manifest = [
+        {"agent_id": a["agent_id"], "org_id": a["org_id"],
+         "agent_name": a["agent_id"].split("::", 1)[1],
+         "capabilities": a["capabilities"]}
+        for a in AGENTS
+    ]
+    (STATE / "agents.json").write_text(json.dumps(manifest, indent=2))
+    (STATE / "agents.json").chmod(0o644)
+    _ok(f"manifest ({n} agents) → {STATE / 'agents.json'}")
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Session policies (allow-all per org)
+# ---------------------------------------------------------------------------
+def phase_5_session_policies(client: httpx.Client, orgs_data: dict[str, dict]) -> None:
+    _header(5, "Create session policies")
+    for org in ORGS:
+        oid = org["org_id"]
+        od = orgs_data[oid]
+        policy_id = f"{oid}::session-allow-all"
+        r = client.post(
+            f"{BROKER_URL}/v1/policy/rules",
+            json={
+                "policy_id": policy_id, "org_id": oid, "policy_type": "session",
+                "rules": {"effect": "allow",
+                          "conditions": {"target_org_id": [], "capabilities": []}},
+            },
+            headers=_org_headers(oid, od["org_secret"]),
+        )
+        if r.status_code not in (200, 201, 409):
+            _fail(f"policy create {policy_id}: {r.status_code} {r.text}")
+            raise SystemExit(1)
+        _log_http("POST", "/v1/policy/rules", r)
+        _ok(f"policy_id={BOLD}{policy_id}{RESET}  effect={GREEN}allow{RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Summary
+# ---------------------------------------------------------------------------
+def phase_6_summary(agents_meta: list[dict]) -> None:
+    _header(6, "Summary")
+    print(f"  {BOLD}{'ORG ID':<12} {'DISPLAY NAME':<22} {'FLOW':<8} {'AGENTS'}{RESET}", flush=True)
+    print(f"  {'─' * 12} {'─' * 22} {'─' * 8} {'─' * 6}", flush=True)
+    by_org: dict[str, int] = {}
+    for m in agents_meta:
+        by_org[m["org_id"]] = by_org.get(m["org_id"], 0) + 1
+    for org in ORGS:
+        oid = org["org_id"]
+        print(f"  {GREEN}{oid:<12}{RESET} {org['display_name']:<22} "
+              f"{org['flow']:<8} {by_org.get(oid, 0):<6}", flush=True)
+    print(flush=True)
+    DONE_FLAG.touch()
+    _ok(f"bootstrap.done → {DONE_FLAG}")
+    print(f"\n  {BOLD}{GREEN}Bootstrap complete.{RESET}\n", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> int:
+    STATE.mkdir(parents=True, exist_ok=True)
+    if DONE_FLAG.exists():
+        DONE_FLAG.unlink()
+
+    with httpx.Client(verify=False, timeout=30.0) as client:
+        _wait_broker(client)
+        orgs_data = phase_2_generate_cas()
+        phase_3_register_orgs(client, orgs_data)
+        agents_meta = phase_4_register_agents(orgs_data)
+        phase_5_session_policies(client, orgs_data)
+    phase_6_summary(agents_meta)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
