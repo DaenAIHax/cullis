@@ -1,8 +1,11 @@
 ---
 import Layout from '../layouts/Layout.astro';
 
-const RELEASE = 'connector-v0.2.0-rc5';
-const BASE = `https://github.com/cullis-security/cullis/releases/download/${RELEASE}`;
+// `releases/latest/download/<file>` is GitHub's stable redirect: it always
+// resolves to the latest published (non-prerelease) Connector release. No
+// need to bump this on every tag — push a new release and the site picks
+// it up automatically.
+const BASE = 'https://github.com/cullis-security/cullis/releases/latest/download';
 
 const platforms = [
   {
@@ -41,8 +44,8 @@ const platforms = [
         </aside>
         <div>
           <div class="eyebrow reveal" data-delay="1">
-            <span class="eyebrow-number">Latest</span>
-            <code class="v-badge">{RELEASE}</code>
+            <span class="eyebrow-number">Latest release</span>
+            <a class="v-badge" href="https://github.com/cullis-security/cullis/releases/latest">view on GitHub →</a>
           </div>
           <h1 class="reveal" data-delay="2">
             Get the <em>Connector</em>.

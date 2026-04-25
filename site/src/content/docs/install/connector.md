@@ -23,29 +23,24 @@ Pick one of three install channels. All produce the same `cullis-connector` bina
 
 ### A. Desktop installer (zip from GitHub Releases)
 
-The official release bundles a single executable per platform — no Python install, no network libraries to match.
-
-```bash
-# Find the latest release URL (always points to connector-v0.3.0 or newer)
-open https://github.com/cullis-security/cullis/releases/tag/connector-v0.3.0
-```
-
-Unpack the zip for your platform:
+The official release bundles a single executable per platform — no Python install, no network libraries to match. The links below always resolve to the latest release.
 
 | Platform | File | Unpack |
 |---|---|---|
-| macOS (Apple Silicon) | `cullis-connector-macos-arm64.zip` | `unzip cullis-connector-macos-arm64.zip && chmod +x cullis-connector` |
-| macOS (Intel) | `cullis-connector-macos-amd64.zip` | `unzip cullis-connector-macos-amd64.zip && chmod +x cullis-connector` |
-| Linux amd64 | `cullis-connector-linux-amd64.zip` | `unzip cullis-connector-linux-amd64.zip && chmod +x cullis-connector` |
-| Windows | `cullis-connector-windows-amd64.zip` | Right-click → Extract All, then place `cullis-connector.exe` on your `PATH` |
+| macOS (Apple Silicon) | [`cullis-connector-macos.zip`](https://github.com/cullis-security/cullis/releases/latest/download/cullis-connector-macos.zip) | `unzip cullis-connector-macos.zip && chmod +x cullis-connector-macos-arm64` |
+| Linux x86_64 | [`cullis-connector-linux.zip`](https://github.com/cullis-security/cullis/releases/latest/download/cullis-connector-linux.zip) | `unzip cullis-connector-linux.zip && chmod +x cullis-connector-linux-x86_64` |
+| Windows x86_64 | [`cullis-connector-windows.zip`](https://github.com/cullis-security/cullis/releases/latest/download/cullis-connector-windows.zip) | Right-click → Extract All. Then place `cullis-connector-windows-x86_64.exe` on your `PATH`. |
 
-Move the binary somewhere on your `PATH`:
+Each zip ships the platform-specific binary plus an `install.sh` / `install.command` / `install.bat` helper that puts the binary on `PATH` for you. If you prefer to do it by hand:
 
 ```bash
-sudo mv cullis-connector /usr/local/bin/
+# Linux example — adjust filename for your platform
+sudo mv cullis-connector-linux-x86_64 /usr/local/bin/cullis-connector
 cullis-connector --version
-# cullis-connector 0.3.0
+# cullis-connector 0.3.1
 ```
+
+> macOS Intel and Linux on ARM are not currently published as standalone binaries. Use **option B (`pip install`)** on those platforms.
 
 ### B. `pip install` (Python 3.10+)
 
@@ -60,12 +55,9 @@ Useful if you want the `[dashboard,desktop]` extras for the native OS webview:
 pip install 'cullis-connector[dashboard,desktop]'
 ```
 
-### C. Homebrew (macOS, Linux)
+### C. Homebrew (macOS, Linux) — *coming soon*
 
-```bash
-brew tap cullis-security/tap
-brew install cullis-connector
-```
+A `cullis-security/homebrew-tap` is on the roadmap but not yet published. In the meantime use option **A** (zip) or **B** (`pip install`) on macOS — both produce the same `cullis-connector` binary.
 
 ## 2. First enrollment
 
