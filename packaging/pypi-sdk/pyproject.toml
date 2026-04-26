@@ -1,0 +1,108 @@
+# Standalone PyPI packaging for `cullis-sdk`.
+#
+# DO NOT invoke `python -m build` directly against this directory —
+# this pyproject expects a staged source tree next to it, created by
+# the build helper at `packaging/pypi-sdk/build.sh`. The helper copies
+# the monorepo `cullis_sdk/` package and the root license files into
+# this directory so hatchling can build a self-contained wheel and
+# sdist without cross-directory `..` include paths (which sdist
+# rejects by design).
+#
+# Run:
+#     ./packaging/pypi-sdk/build.sh       # stages + builds wheel+sdist
+#
+# The release workflow in `.github/workflows/release-sdk.yml` invokes
+# the same helper.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cullis-sdk"
+version = "0.1.0"
+description = "Python SDK for Cullis — federated agent-trust network. E2E-encrypted agent↔agent messaging, x509 mutual auth, DPoP-bound tokens."
+readme = "README_PKG.md"
+requires-python = ">=3.10"
+license = { text = "FSL-1.1-Apache-2.0" }
+authors = [
+    { name = "Cullis Security", email = "hello@cullis.io" },
+]
+keywords = [
+    "cullis",
+    "agent",
+    "agent-trust",
+    "identity",
+    "spiffe",
+    "dpop",
+    "federation",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Networking",
+    "License :: Other/Proprietary License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "httpx>=0.24.0",
+    "cryptography>=41.0.0",
+    "PyJWT[crypto]>=2.8.0",
+    "websockets>=12.0",
+    "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+spiffe = [
+    "spiffe>=0.2.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+    "build>=1.0",
+]
+
+[project.urls]
+Homepage = "https://cullis.io"
+Documentation = "https://github.com/cullis-security/cullis/tree/main/cullis_sdk"
+Repository = "https://github.com/cullis-security/cullis"
+Issues = "https://github.com/cullis-security/cullis/issues"
+Changelog = "https://github.com/cullis-security/cullis/blob/main/CHANGELOG.md"
+
+# Hatchling defaults to consulting VCS (.gitignore) when selecting files.
+# That breaks us: `packaging/pypi-sdk/cullis_sdk/` is intentionally
+# gitignored at the monorepo root (it's staged at build time), so VCS
+# mode would produce an empty wheel. Turn VCS-mode off and rely on
+# explicit include/exclude globs.
+[tool.hatch.build]
+include = [
+    "cullis_sdk/**/*.py",
+    "cullis_sdk/py.typed",
+    "LICENSE",
+    "LICENSE-APACHE-2.0",
+    "NOTICE",
+    "CHANGELOG.md",
+    "README_PKG.md",
+    "pyproject.toml",
+]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.pytest_cache",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["cullis_sdk"]
+
+[tool.hatch.build.targets.sdist]
+support-legacy = true

@@ -83,6 +83,14 @@ packaging/pypi/LICENSE-APACHE-2.0
 packaging/pypi/NOTICE
 packaging/pypi/CHANGELOG.md
 
+# Same staging pattern for the standalone `cullis-sdk` PyPI build.
+packaging/pypi-sdk/cullis_sdk/
+packaging/pypi-sdk/README_PKG.md
+packaging/pypi-sdk/LICENSE
+packaging/pypi-sdk/LICENSE-APACHE-2.0
+packaging/pypi-sdk/NOTICE
+packaging/pypi-sdk/CHANGELOG.md
+
 # Python build outputs
 dist/
 build/
