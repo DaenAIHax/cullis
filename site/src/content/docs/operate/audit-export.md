@@ -14,7 +14,7 @@ updated: "2026-04-23"
 
 - Admin secret (Mastio or Court, depending on which chain you're exporting)
 - `curl`, `jq`, `python3` on the host
-- Cullis CLI installed (`pip install cullis-sdk[cli]` or the Connector's bundled `cullis` binary)
+- Cullis CLI installed (the Connector's bundled `cullis-connector` binary; a standalone `cullis` CLI on PyPI is on the roadmap)
 
 ## What's in the chain
 

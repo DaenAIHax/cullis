@@ -37,7 +37,7 @@ Each zip ships the platform-specific binary plus an `install.sh` / `install.comm
 # Linux example — adjust filename for your platform
 sudo mv cullis-connector-linux-x86_64 /usr/local/bin/cullis-connector
 cullis-connector --version
-# cullis-connector 0.3.1
+# cullis-connector 0.3.2
 ```
 
 > macOS Intel and Linux on ARM are not currently published as standalone binaries. Use **option B (`pip install`)** on those platforms.
