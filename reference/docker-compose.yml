@@ -646,6 +646,193 @@ services:
       retries: 20
       start_period: 20s
 
+  # ── Reference LLM agents — six total, three per org ────────────────────────
+  #
+  # Each agent runs `reference/agent/llm_agent.py`, calls Ollama on the host
+  # via `host.docker.internal`, and acts according to its `AGENT_ROLE` system
+  # prompt (buyer / inventory / broker / supplier). Identity files
+  # (api-key + dpop.jwk + cert + key) come from the read-only bootstrap-state
+  # volume, populated by `bootstrap-mastio` via the three enrollment paths.
+  #
+  # Ollama URL defaults to `host.docker.internal:11434` via the `extra_hosts`
+  # gateway entry — works without Docker Desktop on Linux. Override with the
+  # `OLLAMA_HOST` env var if Ollama runs elsewhere on the network.
+
+  alice-byoca:
+    build:
+      context: ..
+      dockerfile: reference/agent/Dockerfile
+    depends_on:
+      bootstrap-mastio:
+        condition: service_completed_successfully
+      proxy-a:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "http://proxy-a:9100"
+      ORG_ID: "orga"
+      AGENT_NAME: "alice-byoca"
+      AGENT_ROLE: "buyer"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma3:1b}"
+      INITIAL_PROMPT: "${ALICE_BYOCA_INITIAL_PROMPT:-}"
+    volumes:
+      - bootstrap-state:/state:ro
+    networks: [orga-internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 30s
+
+  alice-spiffe:
+    build:
+      context: ..
+      dockerfile: reference/agent/Dockerfile
+    depends_on:
+      bootstrap-mastio:
+        condition: service_completed_successfully
+      proxy-a:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "http://proxy-a:9100"
+      ORG_ID: "orga"
+      AGENT_NAME: "alice-spiffe"
+      AGENT_ROLE: "inventory"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma3:1b}"
+    volumes:
+      - bootstrap-state:/state:ro
+    networks: [orga-internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 30s
+
+  alice-connector:
+    build:
+      context: ..
+      dockerfile: reference/agent/Dockerfile
+    depends_on:
+      bootstrap-mastio:
+        condition: service_completed_successfully
+      proxy-a:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "http://proxy-a:9100"
+      ORG_ID: "orga"
+      AGENT_NAME: "alice-connector"
+      AGENT_ROLE: "broker"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma3:1b}"
+    volumes:
+      - bootstrap-state:/state:ro
+    networks: [orga-internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 30s
+
+  bob-byoca:
+    build:
+      context: ..
+      dockerfile: reference/agent/Dockerfile
+    depends_on:
+      bootstrap-mastio:
+        condition: service_completed_successfully
+      proxy-b:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "http://proxy-b:9100"
+      ORG_ID: "orgb"
+      AGENT_NAME: "bob-byoca"
+      AGENT_ROLE: "inventory"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma3:1b}"
+    volumes:
+      - bootstrap-state:/state:ro
+    networks: [orgb-internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 30s
+
+  bob-spiffe:
+    build:
+      context: ..
+      dockerfile: reference/agent/Dockerfile
+    depends_on:
+      bootstrap-mastio:
+        condition: service_completed_successfully
+      proxy-b:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "http://proxy-b:9100"
+      ORG_ID: "orgb"
+      AGENT_NAME: "bob-spiffe"
+      AGENT_ROLE: "supplier"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma3:1b}"
+    volumes:
+      - bootstrap-state:/state:ro
+    networks: [orgb-internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 30s
+
+  bob-connector:
+    build:
+      context: ..
+      dockerfile: reference/agent/Dockerfile
+    depends_on:
+      bootstrap-mastio:
+        condition: service_completed_successfully
+      proxy-b:
+        condition: service_healthy
+    environment:
+      BROKER_URL: "http://proxy-b:9100"
+      ORG_ID: "orgb"
+      AGENT_NAME: "bob-connector"
+      AGENT_ROLE: "broker"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-gemma3:1b}"
+    volumes:
+      - bootstrap-state:/state:ro
+    networks: [orgb-internal]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+      start_period: 30s
+
   # ── MCP servers (ADR-007) ──────────────────────────────────────────────────
 
   mcp-catalog:
