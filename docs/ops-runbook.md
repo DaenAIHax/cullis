@@ -373,8 +373,12 @@ Master switch: `MCP_PROXY_ANOMALY_QUARANTINE_MODE ∈ {shadow,enforce,off}`.
 ### Observability
 
 ```bash
-curl -H "X-Admin-Secret: $ADMIN_SECRET" \
-     http://mastio:9100/v1/admin/observability/anomaly-detector | jq
+# ADR-014 — the Mastio is fronted by the mastio-nginx sidecar on 9443
+# with TLS. -k accepts the self-signed Org CA leaf; for strict checking
+# extract /etc/nginx/certs/org-ca.crt from the sidecar volume and pass
+# --cacert.
+curl -k -H "X-Admin-Secret: $ADMIN_SECRET" \
+     https://mastio:9443/v1/admin/observability/anomaly-detector | jq
 ```
 
 Fields worth watching:
@@ -403,8 +407,8 @@ Fields worth watching:
 3. If the trigger was a one-off (known migration, legit campaign),
    reactivate:
    ```bash
-   curl -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
-        http://mastio:9100/v1/admin/agents/<id>/reactivate
+   curl -k -X POST -H "X-Admin-Secret: $ADMIN_SECRET" \
+        https://mastio:9443/v1/admin/agents/<id>/reactivate
    ```
 4. If the agent's baseline has shifted permanently (agent changed
    workload shape), let the next daily roll-up at 04:00 UTC
@@ -502,6 +506,14 @@ as seen by the edge (after any CDN / WAF unwrapping — verify
 `X-Forwarded-For` semantics for your setup).
 
 #### nginx
+
+> **ADR-014.** The example below is for an **edge** nginx in front of the
+> Mastio (e.g. cluster ingress, public-facing LB). The Mastio itself ships
+> with its own nginx sidecar on port 9443 that terminates TLS and enforces
+> mTLS — your edge upstream points at `https://<mastio-pod-ip>:9443`, not
+> at the in-pod proxy port 9100. Set `proxy_pass https://mastio_upstream;`
+> (note the `https`) and configure your upstream block with `server
+> <mastio>:9443;`.
 
 Global config (inside `http { … }`):
 

@@ -133,51 +133,60 @@ jobs:
               --set broker.image.pullPolicy=Never \
               --wait --timeout 5m
           else
+            # ADR-014 — cullis-proxy chart now bundles the nginx sidecar.
+            # standalone=true tells the Mastio to derive its own Org CA at
+            # first-boot, which is the only way the sidecar gets cert
+            # material to serve (no broker uplink in CI).
             helm install ${{ matrix.chart }} deploy/helm/${{ matrix.chart }}/ \
               -n cullis-test \
               -f deploy/helm/${{ matrix.chart }}/values-dev.yaml \
               --set proxy.image.repository=cullis-proxy \
               --set proxy.image.tag=ci-local \
               --set proxy.image.pullPolicy=Never \
+              --set proxy.standalone=true \
               --wait --timeout 5m
           fi
 
+      # ADR-014 — for cullis-proxy the Service hands raw TLS bytes from
+      # the in-pod nginx sidecar on 9443. We curl over HTTPS with -sk
+      # because the leaf is signed by the Mastio's auto-generated Org CA
+      # (we're testing "the chart serves healthz", not TLS validation).
       - name: Assert /healthz 200
         if: steps.filter.outputs.helm == 'true'
         run: |
           if [ "${{ matrix.chart }}" = "cullis" ]; then
-            SVC=cullis-broker PORT=8000
+            SVC=cullis-broker PORT=8000 SCHEME=http CURL_FLAGS="-sf"
           else
-            SVC=cullis-proxy PORT=9100
+            SVC=cullis-proxy PORT=9443 SCHEME=https CURL_FLAGS="-skf"
           fi
           kubectl -n cullis-test run curl-healthz --rm -i --restart=Never \
             --image=curlimages/curl:8.10.1 -- \
-            curl -sf --max-time 10 http://$SVC:$PORT/healthz
+            curl $CURL_FLAGS --max-time 10 $SCHEME://$SVC:$PORT/healthz
 
       - name: Assert /readyz 200
         if: steps.filter.outputs.helm == 'true'
         run: |
           if [ "${{ matrix.chart }}" = "cullis" ]; then
-            SVC=cullis-broker PORT=8000
+            SVC=cullis-broker PORT=8000 SCHEME=http CURL_FLAGS="-sf"
           else
-            SVC=cullis-proxy PORT=9100
+            SVC=cullis-proxy PORT=9443 SCHEME=https CURL_FLAGS="-skf"
           fi
           kubectl -n cullis-test run curl-readyz --rm -i --restart=Never \
             --image=curlimages/curl:8.10.1 -- \
-            curl -sf --max-time 10 http://$SVC:$PORT/readyz
+            curl $CURL_FLAGS --max-time 10 $SCHEME://$SVC:$PORT/readyz
 
       - name: Dump /readyz body on failure
         if: failure() && steps.filter.outputs.helm == 'true'
         run: |
           if [ "${{ matrix.chart }}" = "cullis" ]; then
-            SVC=cullis-broker PORT=8000
+            SVC=cullis-broker PORT=8000 SCHEME=http CURL_FLAGS="-s"
           else
-            SVC=cullis-proxy PORT=9100
+            SVC=cullis-proxy PORT=9443 SCHEME=https CURL_FLAGS="-sk"
           fi
           echo "::group::/readyz body"
           kubectl -n cullis-test run curl-readyz-dump --rm -i --restart=Never \
             --image=curlimages/curl:8.10.1 -- \
-            curl -s --max-time 10 "http://$SVC:$PORT/readyz" || true
+            curl $CURL_FLAGS --max-time 10 "$SCHEME://$SVC:$PORT/readyz" || true
           echo ""
           echo "::endgroup::"
 

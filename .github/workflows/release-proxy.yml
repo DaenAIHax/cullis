@@ -198,15 +198,15 @@ jobs:
           Docker image: \`ghcr.io/${{ github.repository_owner }}/mcp-proxy:${version}\`
           Helm chart:   \`oci://ghcr.io/${{ github.repository_owner }}/charts/cullis-proxy:${version}\`
 
-          Standalone \`docker run\`:
+          ADR-014 — single \`docker run\` is no longer the deploy path.
+          The Mastio is fronted by an nginx sidecar that terminates TLS
+          and enforces mTLS on agent-identity routes. Use compose:
 
           \`\`\`bash
-          docker run -d --name cullis-proxy -p 9100:9100 \\
-            -e MCP_PROXY_STANDALONE=true \\
-            -e MCP_PROXY_ORG_ID=acme \\
-            -e MCP_PROXY_PROXY_PUBLIC_URL=https://cullis.acme.internal \\
-            -v cullis-proxy-data:/data \\
-            ghcr.io/${{ github.repository_owner }}/mcp-proxy:${version}
+          # Clone or copy docker-compose.proxy.yml + docker-compose.proxy.standalone.yml
+          # + nginx/mastio/{mastio.conf,00-maps.conf} from this release.
+          ./deploy_proxy.sh --standalone
+          # Reaches https://localhost:9443 with mTLS on /v1/egress/* + /v1/agents/*
           \`\`\`
 
           Kubernetes:
@@ -215,9 +215,14 @@ jobs:
           helm install cullis-proxy \\
             oci://ghcr.io/${{ github.repository_owner }}/charts/cullis-proxy \\
             --version ${version} \\
-            --set proxy.orgId=acme \\
+            --set nginx.san="cullis.acme.internal,mastio.local" \\
             --set proxy.proxyPublicUrl=https://cullis.acme.internal
           \`\`\`
+
+          The chart deploys the sidecar in the same pod and exposes
+          port 9443 via the Service. \`org_id\` is derived from the
+          auto-generated Org CA (ADR-006 §2.2) — no \`--set\` needed
+          unless you bring your own CA.
           NOTES
           fi
           cat release-notes.md

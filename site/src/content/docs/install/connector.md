@@ -14,7 +14,7 @@ updated: "2026-04-23"
 
 - macOS 12+, Windows 10+, or Linux with `glibc ≥ 2.31`
 - 100 MB disk, 200 MB RAM
-- Your Mastio URL (ask your admin — typically `https://cullis.acme.local` or `http://localhost:9100` during first-time setup)
+- Your Mastio URL (ask your admin — typically `https://cullis.acme.local` or `https://localhost:9443` during first-time setup; ADR-014 made the Mastio TLS-only with a self-signed Org-CA leaf — pass `--insecure-tls` for the dev case)
 - A reachable admin who can approve your enrollment in the Mastio dashboard
 
 ## 1. Download
