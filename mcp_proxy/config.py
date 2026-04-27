@@ -47,6 +47,20 @@ class ProxySettings(BaseSettings):
     allowed_origins: str = ""
     environment: str = "development"
 
+    # ADR-014 — TLS material for the nginx sidecar that fronts the
+    # Mastio. ``nginx_cert_dir`` is the path inside the Mastio
+    # container where Org CA + server cert + server key are written
+    # at first-boot; the sidecar mounts the same docker volume read-
+    # only at ``/etc/nginx/certs``. Empty disables the cert provisioning
+    # path entirely (useful in unit tests + legacy deploys without
+    # the sidecar).
+    nginx_cert_dir: str = "/var/lib/mastio/nginx-certs"
+    # SAN(s) baked into the server cert. Comma-separated for multi-
+    # host deployments. Default ``mastio.local`` matches the
+    # docker-compose default; override with MCP_PROXY_NGINX_SAN for
+    # production hostnames.
+    nginx_san: str = "mastio.local"
+
     # DPoP
     dpop_iat_window: int = 60
     dpop_clock_skew: int = 5

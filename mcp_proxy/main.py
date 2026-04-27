@@ -160,6 +160,30 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # defensive — never block lifespan on this
             _log.warning("Mastio identity bootstrap failed: %s", exc)
 
+        # ADR-014 — emit the TLS server cert that the nginx sidecar
+        # serves on 9443. The CA bundle (public Org CA cert) goes
+        # alongside so nginx can verify Connector certs at the TLS
+        # handshake. Idempotent across boots; only mints fresh
+        # material when the existing pair is missing, expired, or
+        # SAN-mismatched against the configured value.
+        if settings.nginx_cert_dir:
+            try:
+                sans = [
+                    s.strip()
+                    for s in (settings.nginx_san or "mastio.local").split(",")
+                    if s.strip()
+                ]
+                await agent_mgr.ensure_nginx_server_cert(
+                    out_dir=settings.nginx_cert_dir,
+                    sans=sans,
+                )
+            except Exception as exc:  # don't block lifespan on cert write
+                _log.warning(
+                    "ADR-014 nginx server cert provisioning failed: %s — "
+                    "the sidecar will fail readiness until this is resolved",
+                    exc,
+                )
+
     app.state.agent_manager = agent_mgr
     app.state.org_id = org_id
 

@@ -136,8 +136,12 @@ if [[ "$MODE" == "production" ]]; then
     fi
 
     _public="$(_load_env MCP_PROXY_PROXY_PUBLIC_URL)"
-    if [[ -z "$_public" || "$_public" == "http://localhost:9100" ]]; then
+    if [[ -z "$_public" || "$_public" == "http://localhost:9100" || "$_public" == "https://localhost:9443" ]]; then
         _errors+=("MCP_PROXY_PROXY_PUBLIC_URL still localhost — set the public URL where internal agents reach this proxy")
+    fi
+    # ADR-014 — production must use HTTPS through the mastio-nginx sidecar.
+    if [[ "$_public" == http://* ]]; then
+        _errors+=("MCP_PROXY_PROXY_PUBLIC_URL uses plain HTTP — ADR-014 requires HTTPS via the mastio-nginx sidecar (default port 9443)")
     fi
 
     if [[ ${#_errors[@]} -gt 0 ]]; then
@@ -176,20 +180,28 @@ ok "Containers started"
 # ── Wait for health ─────────────────────────────────────────────────────────
 step "Waiting for services"
 
+# ADR-014 — the Mastio listens behind the mastio-nginx sidecar on
+# 9443 TLS. The sidecar healthcheck (in compose) waits for cert
+# material to land on the shared volume, so by the time it's healthy
+# the Mastio already booted, ran first-boot cert provisioning, and
+# nginx is serving. We poll TLS here with -k because the cert is
+# self-signed off the Org CA — operators who care about strict
+# verification can extract /var/lib/mastio/nginx-certs/org-ca.crt
+# from the mcp-proxy container and pass --cacert.
 PROXY_PORT="$(grep -E '^MCP_PROXY_PORT=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2-)"
-PROXY_PORT="${PROXY_PORT:-9100}"
+PROXY_PORT="${PROXY_PORT:-9443}"
 
-echo -n "  Proxy + PDP "
-for i in $(seq 1 30); do
-    if curl -sf "http://localhost:${PROXY_PORT}/health" >/dev/null 2>&1; then
+echo -n "  Proxy + nginx "
+for i in $(seq 1 60); do
+    if curl -skf "https://localhost:${PROXY_PORT}/health" >/dev/null 2>&1; then
         echo -e " ${GREEN}ready${RESET}"
         break
     fi
     echo -n "."
     sleep 1
-    if [[ $i -eq 30 ]]; then
+    if [[ $i -eq 60 ]]; then
         echo -e " ${RED}timeout${RESET}"
-        warn "Proxy did not become healthy — check logs: $COMPOSE $COMPOSE_FILES logs mcp-proxy"
+        warn "Proxy did not become healthy — check logs: $COMPOSE $COMPOSE_FILES logs mcp-proxy mastio-nginx"
     fi
 done
 
@@ -208,12 +220,16 @@ echo ""
 if [[ "$MODE" == "development" ]]; then
     echo "  Next steps (development):"
     echo "    1. Open ${PUBLIC_URL}/proxy/login"
+    echo "       (browser will warn — the TLS cert is signed by your local"
+    echo "        Org CA, not a public CA. Accept the self-signed warning.)"
     echo "    2. Paste broker URL + invite token from the broker admin"
     echo "    3. Register your organization (certs auto-generated)"
     echo "    4. Wait for approval, then create agents"
 else
     echo "  Next steps (production):"
-    echo "    1. Reverse proxy (nginx/Traefik) in front of :${PROXY_PORT} with your public TLS cert"
+    echo "    1. ADR-014 — the mastio-nginx sidecar terminates TLS on :${PROXY_PORT}"
+    echo "       with a server cert signed by your Org CA. Front-door TLS for the"
+    echo "       public hostname is up to your edge load-balancer (LB → sidecar :${PROXY_PORT})."
     echo "    2. DNS: ${PUBLIC_URL}  →  this host"
     echo "    3. Share the dashboard URL with your org admin (credentials in proxy.env)"
     echo "    4. Broker admin generates an attach-ca or join invite for you"

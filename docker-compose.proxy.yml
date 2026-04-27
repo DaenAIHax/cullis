@@ -8,6 +8,11 @@
 # as an override — it swaps the external network for an internal one and
 # expects a full URL in MCP_PROXY_BROKER_URL.
 #
+# ADR-014 — the Mastio listens on 9100 only inside the broker_net docker
+# network. The mastio-nginx sidecar terminates TLS on host port 9443 and
+# enforces mTLS on the agent-identity routes. Host port 9100 is NOT
+# published — anyone reaching the Mastio comes through nginx.
+#
 # Usage:
 #   ./deploy_proxy.sh                       # dev, same host as broker
 #   ./deploy_proxy.sh --standalone          # remote broker
@@ -26,8 +31,10 @@ services:
     build:
       context: .
       dockerfile: mcp_proxy/Dockerfile
-    ports:
-      - "${MCP_PROXY_PORT:-9100}:9100"
+    # ADR-014 — no host port publish. The Mastio listens on 9100 only
+    # on broker_net; the mastio-nginx sidecar below publishes 9443.
+    expose:
+      - "9100"
     environment:
       MCP_PROXY_ENVIRONMENT:       ${MCP_PROXY_ENVIRONMENT:-development}
       # ADR-006 Trojan Horse — flip to true to run this Mastio as a
@@ -48,8 +55,15 @@ services:
       # On the shared network, the broker reaches the proxy by service name.
       MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}
       # Public URL the proxy advertises to its own internal agents (DPoP HTU).
-      MCP_PROXY_PROXY_PUBLIC_URL:  ${MCP_PROXY_PROXY_PUBLIC_URL:-http://localhost:9100}
+      # ADR-014 — points at the nginx sidecar's TLS endpoint, not the
+      # in-network mcp-proxy listener.
+      MCP_PROXY_PROXY_PUBLIC_URL:  ${MCP_PROXY_PROXY_PUBLIC_URL:-https://localhost:9443}
       MCP_PROXY_ALLOWED_ORIGINS:   ${MCP_PROXY_ALLOWED_ORIGINS:-}
+      # ADR-014 — TLS material for the nginx sidecar. The Mastio writes
+      # the server cert + Org CA bundle into this directory at first-
+      # boot; the sidecar mounts the same docker volume read-only.
+      MCP_PROXY_NGINX_CERT_DIR:    ${MCP_PROXY_NGINX_CERT_DIR:-/var/lib/mastio/nginx-certs}
+      MCP_PROXY_NGINX_SAN:         ${MCP_PROXY_NGINX_SAN:-mastio.local,localhost}
       # Custom CA bundle for HTTPS brokers with enterprise/internal certs.
       # SSL_CERT_FILE is honored by stdlib ssl + httpx/certifi.
       SSL_CERT_FILE:               ${MCP_PROXY_BROKER_CA_BUNDLE:-}
@@ -76,6 +90,9 @@ services:
       # only if MCP_PROXY_BROKER_CA_BUNDLE is set, so the directory can safely
       # stay empty in dev.
       - ./certs:/certs:ro
+      # ADR-014 — shared volume for nginx sidecar TLS material.
+      # Mastio (this service) writes; mastio-nginx mounts ro.
+      - mastio_nginx_certs:/var/lib/mastio/nginx-certs:rw
     networks:
       - broker_net
     restart: unless-stopped
@@ -86,6 +103,42 @@ services:
       retries: 3
       start_period: 10s
 
+  # ADR-014 — TLS terminator + mTLS gate for Connector → Mastio.
+  mastio-nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${MCP_PROXY_PORT:-9443}:9443"
+    volumes:
+      - ./nginx/mastio:/etc/nginx/conf.d:ro
+      # The Mastio writes here at first-boot; nginx reads. The volume
+      # is the only way nginx sees Org CA + leaf material; if the
+      # Mastio hasn't bootstrapped yet, the files are absent and the
+      # healthcheck fails closed (no half-up nginx without trust
+      # material).
+      - mastio_nginx_certs:/etc/nginx/certs:ro
+    depends_on:
+      mcp-proxy:
+        condition: service_healthy
+    networks:
+      - broker_net
+    restart: unless-stopped
+    healthcheck:
+      # Verify the cert pair landed AND nginx itself is serving.
+      # ``-k`` because we only check that TLS terminates; the cert is
+      # self-signed off the Org CA which the curl in nginx:alpine
+      # doesn't trust by default.
+      test:
+        - CMD-SHELL
+        - >-
+          test -s /etc/nginx/certs/mastio-server.crt &&
+          test -s /etc/nginx/certs/mastio-server.key &&
+          test -s /etc/nginx/certs/org-ca.crt &&
+          wget -q --no-check-certificate -O /dev/null https://localhost:9443/health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 networks:
   broker_net:
     external: true
@@ -93,4 +146,9 @@ networks:
 
 volumes:
   mcp_proxy_data:
+    driver: local
+  # ADR-014 — Mastio writes Org CA + nginx server cert here; sidecar
+  # mounts read-only. Survives compose restarts so cert reuse path
+  # in ``ensure_nginx_server_cert`` short-circuits on warm boots.
+  mastio_nginx_certs:
     driver: local

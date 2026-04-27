@@ -284,6 +284,197 @@ class AgentManager:
         )
         return hashlib.sha256(pubkey_der).hexdigest()[:16]
 
+    # ── ADR-014: nginx sidecar TLS material ──────────────────────────
+
+    async def ensure_nginx_server_cert(
+        self,
+        *,
+        out_dir: str,
+        sans: list[str] | None = None,
+        validity_days: int = 365,
+        renew_within_days: int = 30,
+    ) -> bool:
+        """Emit / refresh the TLS server cert that the nginx sidecar uses.
+
+        Writes three files into ``out_dir``:
+
+        - ``org-ca.crt`` — the Org CA's public certificate (the trust
+          bundle nginx uses as ``ssl_client_certificate`` to verify
+          Connector certs at the TLS handshake).
+        - ``mastio-server.crt`` — the leaf cert nginx serves on 9443,
+          signed by the Org CA, with the requested SANs.
+        - ``mastio-server.key`` — the leaf's private key.
+
+        Idempotent: at every boot the method checks whether the existing
+        files are still valid (parseable, not expiring within
+        ``renew_within_days``, SAN list matches, issued by the current
+        Org CA). If yes, nothing changes. If no, a fresh leaf is minted
+        and the trust bundle is rewritten.
+
+        Returns ``True`` if files were rewritten, ``False`` if the
+        existing material was reused.
+        """
+        if not self.ca_loaded:
+            raise RuntimeError("Org CA not loaded — cannot emit nginx server cert")
+
+        from pathlib import Path
+
+        def _aware(dt: datetime) -> datetime:
+            """cryptography <42 returns naive UTC datetimes from cert
+            properties; ≥42 returns aware. Normalize to aware for math
+            and ISO formatting."""
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+        san_list = list(sans) if sans else ["mastio.local"]
+
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        ca_path = out / "org-ca.crt"
+        crt_path = out / "mastio-server.crt"
+        key_path = out / "mastio-server.key"
+
+        # ── Reuse path: validate existing files in one shot ─────────
+        reuse = False
+        if ca_path.exists() and crt_path.exists() and key_path.exists():
+            try:
+                existing = x509.load_pem_x509_certificate(crt_path.read_bytes())
+                # SAN match
+                try:
+                    san_ext = existing.extensions.get_extension_for_class(
+                        SubjectAlternativeName,
+                    ).value
+                    existing_dns = sorted(
+                        san_ext.get_values_for_type(x509.DNSName)
+                    )
+                except x509.ExtensionNotFound:
+                    existing_dns = []
+                # Issuer match (current Org CA's subject)
+                issuer_ok = (
+                    existing.issuer.rfc4514_string()
+                    == self._org_ca_cert.subject.rfc4514_string()
+                )
+                # Expiry guard
+                now = datetime.now(timezone.utc)
+                expires_in = _aware(existing.not_valid_after) - now
+                expiry_ok = expires_in > timedelta(days=renew_within_days)
+                # CA bundle file matches the in-memory CA
+                ca_ondisk = x509.load_pem_x509_certificate(ca_path.read_bytes())
+                ca_ok = (
+                    ca_ondisk.public_bytes(serialization.Encoding.DER)
+                    == self._org_ca_cert.public_bytes(serialization.Encoding.DER)
+                )
+
+                if (
+                    issuer_ok
+                    and expiry_ok
+                    and ca_ok
+                    and sorted(san_list) == existing_dns
+                ):
+                    reuse = True
+            except Exception as exc:  # treat any parse failure as "regenerate"
+                logger.info(
+                    "nginx server cert on disk failed validation (%s) — "
+                    "will regenerate",
+                    exc,
+                )
+
+        if reuse:
+            logger.info(
+                "nginx server cert reused (sans=%s, expiring=%s)",
+                ",".join(san_list),
+                _aware(existing.not_valid_after).isoformat(timespec="seconds"),
+            )
+            return False
+
+        # ── Mint path ───────────────────────────────────────────────
+        # ECDSA P-256 leaf — fast, modern, matches the Connector cert
+        # algorithm so nginx negotiates TLS 1.3 + ECDSA cleanly.
+        leaf_key = ec.generate_private_key(ec.SECP256R1())
+
+        subject = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, san_list[0]),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, self._org_id or "cullis"),
+        ])
+
+        now = datetime.now(timezone.utc)
+        builder = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(self._org_ca_cert.subject)
+            .public_key(leaf_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=5))
+            .not_valid_after(now + timedelta(days=validity_days))
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None),
+                critical=True,
+            )
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    content_commitment=False,
+                    key_encipherment=True,  # required for TLS RSA-style ciphers
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(
+                x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+                critical=False,
+            )
+            .add_extension(
+                SubjectAlternativeName([x509.DNSName(s) for s in san_list]),
+                critical=False,
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key()),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                    self._org_ca_cert.public_key(),
+                ),
+                critical=False,
+            )
+        )
+        leaf_cert = builder.sign(self._org_ca_key, hashes.SHA256())
+
+        # Write atomically: tmp file then rename. nginx watches the
+        # files and reload (SIGHUP) is the operator's job; mid-boot
+        # we just need the writes consistent so a restart-within-restart
+        # never observes a torn pair.
+        ca_pem = self._org_ca_cert.public_bytes(serialization.Encoding.PEM)
+        crt_pem = leaf_cert.public_bytes(serialization.Encoding.PEM)
+        key_pem = leaf_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+
+        for path, payload, mode in (
+            (ca_path, ca_pem, 0o644),
+            (crt_path, crt_pem, 0o644),
+            (key_path, key_pem, 0o600),
+        ):
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_bytes(payload)
+            tmp.chmod(mode)
+            tmp.replace(path)
+
+        logger.info(
+            "nginx server cert minted (sans=%s, valid_until=%s, dir=%s)",
+            ",".join(san_list),
+            _aware(leaf_cert.not_valid_after).isoformat(timespec="seconds"),
+            out_dir,
+        )
+        return True
+
     # ── Certificate generation ──────────────────────────────────────
 
     def _generate_agent_cert(self, agent_name: str) -> tuple[str, str]:

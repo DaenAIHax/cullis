@@ -48,10 +48,12 @@ COPY cullis_sdk/ ./cullis_sdk/
 # Inject pre-compiled Tailwind stylesheet (shake-out P1-10)
 COPY --from=tailwind-build /out/tailwind.css /app/mcp_proxy/dashboard/static/css/tailwind.css
 
-# Data directory for SQLite
-RUN mkdir -p /data && \
+# Data directory for SQLite + ADR-014 nginx-cert directory shared with
+# the mastio-nginx sidecar (Mastio writes Org CA + server cert here at
+# first-boot; sidecar mounts read-only).
+RUN mkdir -p /data /var/lib/mastio/nginx-certs && \
     useradd --no-create-home --system proxyuser && \
-    chown proxyuser:proxyuser /data
+    chown proxyuser:proxyuser /data /var/lib/mastio/nginx-certs
 
 ENV PYTHONPATH=/app
 ENV MCP_PROXY_DATABASE_URL=sqlite+aiosqlite:////data/mcp_proxy.db

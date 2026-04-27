@@ -77,7 +77,8 @@ case "$MODE" in
         ;;
     defaults)
         BROKER="${BROKER_URL:-http://broker:8000}"
-        PUBLIC="${PROXY_PUBLIC_URL:-http://localhost:9100}"
+        # ADR-014 — public URL points at the mastio-nginx sidecar (TLS).
+        PUBLIC="${PROXY_PUBLIC_URL:-https://localhost:9443}"
         JWKS="${BROKER%/}/.well-known/jwks.json"
         ENVIRONMENT="development"
         ;;
@@ -85,8 +86,8 @@ case "$MODE" in
         echo ""
         read -rp "  Broker URL [http://broker:8000]: " BROKER
         BROKER="${BROKER:-http://broker:8000}"
-        read -rp "  Proxy public URL [http://localhost:9100]: " PUBLIC
-        PUBLIC="${PUBLIC:-http://localhost:9100}"
+        read -rp "  Proxy public URL [https://localhost:9443]: " PUBLIC
+        PUBLIC="${PUBLIC:-https://localhost:9443}"
         JWKS="${BROKER%/}/.well-known/jwks.json"
         ENVIRONMENT="development"
         ;;
