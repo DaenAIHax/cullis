@@ -92,6 +92,17 @@ COMPOSE_FILES="-f docker-compose.proxy.yml"
 [[ $STANDALONE -eq 1 ]]    && COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.proxy.standalone.yml"
 [[ "$MODE" == "production" ]] && COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.proxy.prod.yml"
 
+# ADR-006 Trojan Horse — flag --standalone selects the network override
+# above AND tells the Mastio itself to run in mini-broker mode (derive
+# Org CA at first boot, skip broker uplink). Both knobs were drifting
+# apart — flag set the network but the Mastio still booted federated,
+# never derived the Org CA, and the nginx sidecar (ADR-014) had no
+# cert material to serve. Propagate the flag through the env so the
+# container picks it up at lifespan startup.
+if [[ $STANDALONE -eq 1 ]]; then
+    export MCP_PROXY_STANDALONE=true
+fi
+
 # ── Down early-exit ─────────────────────────────────────────────────────────
 if [[ "$ACTION" == "down" ]]; then
     step "Stopping MCP Proxy"
