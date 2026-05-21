@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Modern dogfood stack — 4 end-to-end scenario assertions.
+# Modern dogfood stack — end-to-end scenario assertions.
 #
 # Scenarios:
 #   B1. Ollama chat completion via Mastio A AI gateway (admin endpoint)
@@ -9,6 +9,10 @@
 #   B5. mario (user) → Frontdesk → Mastio AI gateway → Ollama qwen2.5:0.5b
 #   B6. cross-user isolation: alice chat ≠ mario chat (Finding #16 regression
 #       — single-router fork on _per_user_credentials, no workload-cred leak)
+#   B7. agents-demo registration: 3 demo agents enrolled (kyc/pitchbook/dora) +
+#       13 MCP resources seeded on Mastio A + 13 active bindings. Sanity check
+#       that sandbox/agents-demo/agent_*/main_stack.py has a working stack to
+#       point at.
 #
 # Target wall: <60s on a warm stack.
 set -uo pipefail
@@ -273,12 +277,94 @@ print('OK chat-audit per-user', rows)
   return 0
 }
 
+# ── B7. agents-demo registration sanity ──────────────────────────────────────
+#
+# Asserts that ./stack/demo.sh up has seeded the three reference demo agents
+# under sandbox/agents-demo/ end-to-end:
+#   - 3 rows in mastio-a internal_agents  (kyc-screener, pitchbook-builder, dora-reporter)
+#   - 13 rows in mastio-a local_mcp_resources (4 KYC + 5 Pitchbook + 4 DORA tools)
+#   - 13 rows in mastio-a local_agent_resource_bindings (one per resource→agent)
+#
+# This is the precondition for the host-side main_stack.py CLI runs.
+
+scenario_agents_demo_registration() {
+  local assert_out
+  assert_out="$(docker compose exec -T mastio-a python -c "
+import sqlite3
+c = sqlite3.connect('/data/mcp_proxy.db')
+
+# 1. Internal agents (BYOCA enrollment by bootstrap_mastio.py)
+agents = c.execute('''
+    SELECT agent_id FROM internal_agents
+    WHERE agent_id IN (
+      'orga::kyc-screener',
+      'orga::pitchbook-builder',
+      'orga::dora-reporter'
+    )
+    ORDER BY agent_id
+''').fetchall()
+if len(agents) != 3:
+    print('FAIL internal_agents rows:', agents); raise SystemExit(1)
+
+# 2. MCP resources (proxy-init seed)
+expected_names = {
+    'verify_identity', 'screen_sanctions', 'query_beneficial_owners',
+    'escalate_to_compliance',
+    'query_comps_db', 'read_internal_research', 'news_feed_query',
+    'generate_excel', 'generate_pptx',
+    'list_third_party_vendors', 'query_vendor_assessment',
+    'draft_dora_register_entry', 'submit_to_auditor_org',
+}
+resources = c.execute('''
+    SELECT name, endpoint_url FROM local_mcp_resources
+    WHERE name IN ({})
+    AND enabled = 1
+'''.format(','.join('?' for _ in expected_names)), list(expected_names)).fetchall()
+got_names = {r[0] for r in resources}
+missing = expected_names - got_names
+if missing:
+    print('FAIL missing resources:', sorted(missing)); raise SystemExit(2)
+
+# 3. Bindings (one per resource→agent pair)
+bindings = c.execute('''
+    SELECT agent_id, COUNT(*) FROM local_agent_resource_bindings
+    WHERE agent_id IN (
+      'orga::kyc-screener',
+      'orga::pitchbook-builder',
+      'orga::dora-reporter'
+    )
+    AND revoked_at IS NULL
+    GROUP BY agent_id
+    ORDER BY agent_id
+''').fetchall()
+expected_counts = {
+    'orga::dora-reporter': 4,
+    'orga::kyc-screener': 4,
+    'orga::pitchbook-builder': 5,
+}
+got_counts = dict(bindings)
+for aid, want in expected_counts.items():
+    got = got_counts.get(aid, 0)
+    if got != want:
+        print(f'FAIL bindings for {aid}: got={got} want={want}'); raise SystemExit(3)
+
+print(f'OK agents=3 resources={len(got_names)} bindings={sum(got_counts.values())}')
+" 2>&1)"
+  if ! echo "$assert_out" | grep -q '^OK '; then
+    echo "${C_DIM}    ${assert_out}${C_RST}" >&2
+    return 1
+  fi
+  echo "${C_DIM}    ${assert_out}${C_RST}" >&2
+  return 0
+}
+
 run "B1. Ollama chat completion via Mastio A AI gateway" scenario_ollama_chat
 run "B2. A2A cross-org oneshot (agent-a → orgb::agent-b)" scenario_a2a_cross_org
 run "B3. MCP send_message (DB write)" scenario_mcp_send_message
 run "B4. MCP list_messages (DB read)" scenario_mcp_list_messages
 run "B5. mario → Frontdesk → Ollama qwen2.5:0.5b" scenario_mario_chat_via_frontdesk
 run "B6. Cross-user isolation (alice ≠ mario, Finding #16)" scenario_cross_user_isolation
+run "B7. agents-demo registration (3 agents + 13 MCP resources + 13 bindings)" scenario_agents_demo_registration
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

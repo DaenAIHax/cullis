@@ -28,6 +28,9 @@ volumes:
   mastio-a-nginx-certs:
   mastio-b-nginx-certs:
   mcp-messages-data:
+  mcp-kyc-data:
+  mcp-pitchbook-data:
+  mcp-dora-data:
   frontdesk-connector-data:
 
 services:
@@ -163,6 +166,52 @@ services:
       SEED_MCP_1_NAME:     "list_messages"
       SEED_MCP_1_ENDPOINT: "http://mcp-messages:9500/"
       SEED_MCP_1_AGENTS:   "orga::agent-a,orga::byoca-bot"
+      # ── Reference demo agent tools (sandbox/agents-demo/) ────────────────
+      # Each SEED_MCP_N row creates a local_mcp_resources record; the agent's
+      # local_agent_resource_bindings row gates access at runtime.
+      # mcp-kyc (4 tools) -> kyc-screener
+      SEED_MCP_2_NAME:     "verify_identity"
+      SEED_MCP_2_ENDPOINT: "http://mcp-kyc:9600/"
+      SEED_MCP_2_AGENTS:   "orga::kyc-screener"
+      SEED_MCP_3_NAME:     "screen_sanctions"
+      SEED_MCP_3_ENDPOINT: "http://mcp-kyc:9600/"
+      SEED_MCP_3_AGENTS:   "orga::kyc-screener"
+      SEED_MCP_4_NAME:     "query_beneficial_owners"
+      SEED_MCP_4_ENDPOINT: "http://mcp-kyc:9600/"
+      SEED_MCP_4_AGENTS:   "orga::kyc-screener"
+      SEED_MCP_5_NAME:     "escalate_to_compliance"
+      SEED_MCP_5_ENDPOINT: "http://mcp-kyc:9600/"
+      SEED_MCP_5_AGENTS:   "orga::kyc-screener"
+      # mcp-pitchbook (5 tools) -> pitchbook-builder
+      SEED_MCP_6_NAME:     "query_comps_db"
+      SEED_MCP_6_ENDPOINT: "http://mcp-pitchbook:9700/"
+      SEED_MCP_6_AGENTS:   "orga::pitchbook-builder"
+      SEED_MCP_7_NAME:     "read_internal_research"
+      SEED_MCP_7_ENDPOINT: "http://mcp-pitchbook:9700/"
+      SEED_MCP_7_AGENTS:   "orga::pitchbook-builder"
+      SEED_MCP_8_NAME:     "news_feed_query"
+      SEED_MCP_8_ENDPOINT: "http://mcp-pitchbook:9700/"
+      SEED_MCP_8_AGENTS:   "orga::pitchbook-builder"
+      SEED_MCP_9_NAME:     "generate_excel"
+      SEED_MCP_9_ENDPOINT: "http://mcp-pitchbook:9700/"
+      SEED_MCP_9_AGENTS:   "orga::pitchbook-builder"
+      SEED_MCP_10_NAME:     "generate_pptx"
+      SEED_MCP_10_ENDPOINT: "http://mcp-pitchbook:9700/"
+      SEED_MCP_10_AGENTS:   "orga::pitchbook-builder"
+      # mcp-dora (4 tools) -> dora-reporter; submit_to_auditor_org mocks
+      # the cross-org A2A handoff to orgb in-process for now.
+      SEED_MCP_11_NAME:     "list_third_party_vendors"
+      SEED_MCP_11_ENDPOINT: "http://mcp-dora:9800/"
+      SEED_MCP_11_AGENTS:   "orga::dora-reporter"
+      SEED_MCP_12_NAME:     "query_vendor_assessment"
+      SEED_MCP_12_ENDPOINT: "http://mcp-dora:9800/"
+      SEED_MCP_12_AGENTS:   "orga::dora-reporter"
+      SEED_MCP_13_NAME:     "draft_dora_register_entry"
+      SEED_MCP_13_ENDPOINT: "http://mcp-dora:9800/"
+      SEED_MCP_13_AGENTS:   "orga::dora-reporter"
+      SEED_MCP_14_NAME:     "submit_to_auditor_org"
+      SEED_MCP_14_ENDPOINT: "http://mcp-dora:9800/"
+      SEED_MCP_14_AGENTS:   "orga::dora-reporter"
     volumes:
       - bootstrap-state:/state:ro
       - proxy-a-data:/data
@@ -192,7 +241,7 @@ services:
       # the cookie worker A signed).
       MCP_PROXY_DASHBOARD_SIGNING_KEY: "stack-mastio-a-dashboard-signing-key-not-secure"
       MCP_PROXY_DB_ENCRYPTION_KEY: "stack-dev-key-not-secure-must-be-32-chars-or-longer"
-      MCP_PROXY_ANTHROPIC_API_KEY: ""
+      MCP_PROXY_ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       MCP_PROXY_AI_GATEWAY_BACKEND: "litellm_embedded"
       MCP_PROXY_AI_GATEWAY_PROVIDER: "ollama"
       PROXY_TRUST_DOMAIN: "orga.test"
@@ -481,6 +530,71 @@ services:
     expose: ["9500"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9500/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Reference demo agent MCP servers (sandbox/agents-demo/) ──────────────
+
+  mcp-kyc:
+    build:
+      context: ./mcp-kyc
+      dockerfile: ../../sandbox/mcp-server.Dockerfile
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9600"]
+    environment:
+      MCP_KYC_DB: "/data/kyc_events.jsonl"
+    volumes:
+      - mcp-kyc-data:/data
+    networks:
+      orga-internal:
+        aliases: [mcp-kyc]
+    expose: ["9600"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9600/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mcp-pitchbook:
+    build:
+      context: ./mcp-pitchbook
+      dockerfile: ../../sandbox/mcp-server.Dockerfile
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9700"]
+    environment:
+      MCP_PITCHBOOK_DB: "/data/pitchbook_artifacts.jsonl"
+    volumes:
+      - mcp-pitchbook-data:/data
+    networks:
+      orga-internal:
+        aliases: [mcp-pitchbook]
+    expose: ["9700"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9700/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mcp-dora:
+    build:
+      context: ./mcp-dora
+      dockerfile: ../../sandbox/mcp-server.Dockerfile
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "9800"]
+    environment:
+      MCP_DORA_DB: "/data/dora_evidence.jsonl"
+    volumes:
+      - mcp-dora-data:/data
+    # Joined to both org networks so the cross-org A2A handoff (auditor
+    # org = orgb) is reachable on the same MCP server. Real cross-org
+    # would split this into two Mastios + sealed envelope; the demo
+    # keeps it in-process and documents the gap.
+    networks:
+      orga-internal:
+        aliases: [mcp-dora]
+      orgb-internal:
+        aliases: [mcp-dora]
+    expose: ["9800"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9800/healthz')"]
       interval: 5s
       timeout: 3s
       retries: 10
