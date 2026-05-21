@@ -102,12 +102,46 @@ AGENTS = [
         "org_id": "orgb",
         "capabilities": ["order.read", "order.write", "oneshot.message", "sandbox.read"],
     },
+    # ── Reference demo agents (sandbox/agents-demo/) ─────────────────────────
+    # Three reference agents that exercise Cullis governance primitives under
+    # different LLM stacks. See sandbox/agents-demo/agent_*/README.md.
+    {
+        "agent_id": "orga::kyc-screener",
+        "org_id": "orga",
+        "capabilities": [
+            "kyc.read", "kyc.submit", "kyc.auto_approve", "kyc.escalate",
+            "oneshot.message",
+        ],
+    },
+    {
+        "agent_id": "orga::pitchbook-builder",
+        "org_id": "orga",
+        "capabilities": [
+            "pitchbook.draft", "pitchbook.read_comps", "pitchbook.read_research",
+            "pitchbook.read_news", "pitchbook.generate_artifact",
+            "oneshot.message",
+        ],
+    },
+    {
+        "agent_id": "orga::dora-reporter",
+        "org_id": "orga",
+        "capabilities": [
+            "dora.read", "dora.draft_report", "dora.cross_org_submit",
+            "oneshot.message",
+        ],
+    },
 ]
 
 PEERS = {
-    "orga::agent-a":   ["orgb::agent-b", "orga::byoca-bot"],
-    "orga::byoca-bot":  ["orgb::agent-b", "orga::agent-a"],
-    "orgb::agent-b":   ["orga::agent-a", "orga::byoca-bot"],
+    "orga::agent-a":           ["orgb::agent-b", "orga::byoca-bot"],
+    "orga::byoca-bot":         ["orgb::agent-b", "orga::agent-a"],
+    "orgb::agent-b":           ["orga::agent-a", "orga::byoca-bot"],
+    # Reference demo agents (sandbox/agents-demo/) -- they reach tools via the
+    # Mastio MCP reverse-proxy, not direct A2A; the DORA reporter has agent-b
+    # as a notional peer for the cross-org submission path.
+    "orga::kyc-screener":      [],
+    "orga::pitchbook-builder": [],
+    "orga::dora-reporter":     ["orgb::agent-b"],
 }
 
 # ---------------------------------------------------------------------------

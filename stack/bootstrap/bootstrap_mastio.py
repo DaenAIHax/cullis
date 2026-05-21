@@ -348,13 +348,23 @@ def _bind_agents_on_court(
         elif ar.status_code in (409, 500) and "already" in ar.text.lower() or "approved" in ar.text.lower():
             _ok(f"{agent_id}: binding {binding_id} already approved (idempotent skip)")
         elif ar.status_code in (409, 500):
-            # Verify via GET — if status=approved, treat as ok.
+            # Verify via LIST — if status=approved, treat as ok.
+            # Court only exposes GET /v1/registry/bindings (list), not
+            # GET /bindings/{id}. The 500 with body
+            # ``{"detail":"Internal server error"}`` is the known
+            # idempotent re-approve hit (app/registry/binding_router.py
+            # approve_binding returns None when already approved, then
+            # the handler dereferences binding.agent_id).
             gr = client.get(
-                f"{BROKER_URL}/v1/registry/bindings/{binding_id}",
-                headers=headers, timeout=10.0,
+                f"{BROKER_URL}/v1/registry/bindings",
+                params={"org_id": org_id}, headers=headers, timeout=10.0,
             )
-            if gr.status_code == 200 and gr.json().get("status") == "approved":
-                _ok(f"{agent_id}: binding {binding_id} already approved (verified via GET)")
+            listed = gr.json() if gr.status_code == 200 else []
+            existing = next(
+                (b for b in listed if b.get("id") == binding_id), None,
+            )
+            if existing and existing.get("status") == "approved":
+                _ok(f"{agent_id}: binding {binding_id} already approved (verified via LIST)")
             else:
                 _fail(
                     f"{agent_id}: binding approve failed "
