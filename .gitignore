@@ -28,8 +28,6 @@ tests/e2e/.fixtures/
 imp/
 /demo/
 drafts/
-# generate_certs.py is INTENTIONALLY tracked, runtime dependency
-# of deploy_broker.sh (invoked on a fresh clone to bootstrap the broker CA).
 CLAUDE.md
 .claude/
 enterprise-lab/
@@ -126,3 +124,54 @@ scripts/stress/intra-org-summary*.json
 scripts/stress/stress_frontdesk_users.json
 scripts/stress/frontdesk-summary*.json
 scripts/stress/*.log
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Portkey-style cleanup (PR #884, 2026-05-21)
+#
+# The public repo ships one product: Cullis Mastio (mcp_proxy/) + Cullis SDK
+# (cullis_sdk/). Everything else (Connector, Frontdesk, Court, sandbox demos,
+# TypeScript SDK, modern stack) lives in the private cullis-enterprise repo.
+#
+# The paths below are intentionally untracked so that a contributor who runs
+# `git clone` of cullis-enterprise alongside this checkout, or who symlinks an
+# enterprise component back in for local debugging, does not accidentally
+# re-introduce the private code into a public PR.
+# ─────────────────────────────────────────────────────────────────────────────
+/app/
+/alembic/
+/alembic.ini
+/cullis_connector/
+/frontend/
+/sdk-ts/
+/sandbox/
+/demo_network/
+/stack/
+/enterprise-kit/
+/agents/
+/reference/
+/Dockerfile
+/deploy_broker.sh
+/generate_certs.py
+/pytest.ini
+/tests/
+/packaging/connector/
+/packaging/pypi/
+/packaging/pyinstaller/
+/packaging/installers/
+/packaging/homebrew/
+/packaging/nginx-reload-watcher/
+/packaging/frontdesk-bundle/
+/packaging/mastio-enterprise-bundle/
+/packaging/docker/
+/packaging/RELEASING.md
+/packaging/smoke-customer-path.sh
+/packaging/test-bundle-backup-symmetry.sh
+/scripts/build-spa.sh
+/scripts/stress/
+/deploy/helm/cullis/
+/deploy/compose/docker-compose.yml
+/deploy/compose/docker-compose.prod.yml
+/deploy/compose/docker-compose.proxy.shared-broker.yml
+/docs/runbooks/frontdesk-shared-hardening.md
+/site/src/pages/insurance.astro
+/site/src/pages/download.astro

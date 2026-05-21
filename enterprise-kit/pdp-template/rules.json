@@ -1,7 +1,0 @@
-{
-  "allowed_initiator_orgs": ["partner-org", "supplier-org"],
-  "allowed_target_orgs": ["partner-org", "supplier-org"],
-  "allowed_capabilities": ["order.read", "order.write", "inventory.check"],
-  "blocked_agents": [],
-  "max_sessions_per_org": 0
-}
