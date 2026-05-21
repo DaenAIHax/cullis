@@ -1,0 +1,34 @@
+# Pitchbook Builder -- Cullis capability binding.
+
+agent: pitchbook_builder
+quadrant: U2A + A2A intra-org (cross-desk segregation)   # ADR-020
+eu_ai_act_articles:
+  - "Art. 13 (transparency, citation of every source)"
+  - "Information Barriers / MAR (MNPI segregation across desks)"
+
+capabilities:
+  pitchbook.draft:
+    description: "Required to invoke the agent at all."
+    granted_at: "enrollment"
+
+  pitchbook.read_comps:
+    description: "Read public comparables DB. No desk gate, public-side data."
+    granted_at: "enrollment"
+
+  pitchbook.read_research:
+    description: >
+      Read internal research memos. The gate enforces that the desk on
+      the memo matches the desk scope of the invoking principal. Any
+      cross-desk read raises a ChineseWallViolation audit event.
+    granted_at: "enrollment"
+    required_scopes:
+      desk:
+        from_context: memo_desk
+
+  pitchbook.generate_artifact:
+    description: "Generate Excel / PowerPoint artefact output."
+    granted_at: "enrollment"
+
+  pitchbook.read_news:
+    description: "Public news feed access."
+    granted_at: "enrollment"
