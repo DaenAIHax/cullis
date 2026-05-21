@@ -44,7 +44,7 @@ from .tools import HANDLERS, TOOL_SCHEMAS, dispatch  # noqa: E402
 
 _log = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "anthropic/claude-haiku-4-5-20251001"
 CAPABILITIES_PATH = _THIS_DIR / "capabilities.yaml"
 SYSTEM_PROMPT_PATH = _THIS_DIR / "system_prompt.md"
 MAX_LOOP_ITERATIONS = 8

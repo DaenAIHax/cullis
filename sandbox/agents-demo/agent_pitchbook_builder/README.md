@@ -2,7 +2,7 @@
 
 Reference demo agent that uses Cullis governance primitives (per-user
 desk scope, Chinese Wall capability gate, MNPI-aware audit log) under a
-Claude Opus 4.7 brain.
+Claude Haiku 4.5 brain.
 
 ## Anthropic Finance Agent overlap
 
@@ -39,9 +39,11 @@ how Mastio implements desk separation without per-desk replicated agents.
 
 ## Stack
 
-- **LLM**: Claude Opus 4.7 via the Mastio embedded LiteLLM gateway
-  (ADR-017). Opus is selected over Sonnet because pitch drafting is
-  high-stakes and benefits from the stronger model.
+- **LLM**: Claude Haiku 4.5 via the Mastio embedded LiteLLM gateway
+  (ADR-017). The demo defaults to Haiku for cost; a production deployment
+  would route high-stakes pitch drafting to Sonnet or Opus tier instead.
+  The governance layer (audit + capability gate + Chinese Wall) is
+  identical across tiers.
 - **Audit chain**: append-only RSA-PSS-SHA256 hash chain.
 
 ## Files
@@ -60,7 +62,7 @@ how Mastio implements desk separation without per-desk replicated agents.
 pytest sandbox/agents-demo/agent_pitchbook_builder/ -v
 ```
 
-To run with a real Claude Opus 4.7 brain:
+To run with a real Claude Haiku 4.5 brain:
 
 ```bash
 export CULLIS_AGENT_DEMO_MODE=live

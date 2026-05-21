@@ -1,7 +1,7 @@
 # Agent 1 -- KYC Screener
 
 Reference demo agent that uses Cullis governance primitives (per-agent
-identity, capability gate, hash-chained audit log) under a Claude Sonnet 4.6
+identity, capability gate, hash-chained audit log) under a Claude Haiku 4.5
 brain.
 
 ## Anthropic Finance Agent overlap
@@ -36,7 +36,7 @@ capability set. There is no agent-to-agent fanout in this scenario.
 
 ## Stack
 
-- **LLM**: Claude Sonnet 4.6 via the Mastio embedded LiteLLM gateway (ADR-017).
+- **LLM**: Claude Haiku 4.5 via the Mastio embedded LiteLLM gateway (ADR-017).
 - **Tool model**: OpenAI-style function calling envelope (LiteLLM normalizes
   Anthropic + OpenAI to the same shape).
 - **Audit chain**: in-memory append-only RSA-PSS-SHA256 chain (mirrors
@@ -61,7 +61,7 @@ From the repo root:
 pytest sandbox/agents-demo/agent_kyc_screener/ -v
 ```
 
-To run with a real Claude Sonnet 4.6 brain (4-6 calls per case, ~$0.05-0.15
+To run with a real Claude Haiku 4.5 brain (4-6 calls per case, ~$0.05-0.15
 per case at 2026-05 list pricing):
 
 ```bash
