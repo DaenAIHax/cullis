@@ -34,13 +34,20 @@ Source: `imp/2026-05-21-frustrated-pilots-research.md` (Sezione 1, Banking #5)
 their own user identity; the agent inherits the user's `org_id`, role and
 capability set. There is no agent-to-agent fanout in this scenario.
 
-## Stack
+## Stack — three interchangeable runtimes
 
-- **LLM**: Claude Haiku 4.5 via the Mastio embedded LiteLLM gateway (ADR-017).
-- **Tool model**: OpenAI-style function calling envelope (LiteLLM normalizes
-  Anthropic + OpenAI to the same shape).
-- **Audit chain**: in-memory append-only RSA-PSS-SHA256 chain (mirrors
-  `app/db/audit_log.py`).
+The KYC Screener ships in **three forms** that share the same system
+prompt, tool schemas, capability YAML and audit semantics. They differ
+only in how the agent loop is driven:
+
+| Runtime | LLM transport | Chat passes through Cullis Mastio? | When to use |
+|---|---|---|---|
+| `main.py` | `litellm` chat completions (LLM-agnostic) | No (or yes when paired with `main_stack.py`) | Offline CI tests + LLM-agnostic positioning |
+| `main_sdk.py` | **Official Anthropic `claude-agent-sdk`** | No — direct to api.anthropic.com | **Anthropic Partner Network pitch** + native Claude tooling |
+| `main_stack.py` | `cullis_sdk` mTLS+DPoP → Mastio AI gateway | Yes (full Cullis governance on chat too) | Live demo against a running Cullis Mastio |
+
+All three call the same `tools.py` handlers, so the capability gate +
+audit chain fire identically across runtimes.
 
 ## Files
 
@@ -49,26 +56,45 @@ capability set. There is no agent-to-agent fanout in this scenario.
 | `system_prompt.md` | Hard rules + scoring rubric + output format. |
 | `tools.py` | 4 MCP-style tool handlers + JSON schemas. |
 | `capabilities.yaml` | Capability binding (kyc.read, kyc.submit, kyc.auto_approve, kyc.escalate). |
-| `main.py` | Agent loop + decision parser + outcome-level gate. |
+| `main.py` | litellm variant — hand-written loop, MockLLMClient in CI. |
+| `main_sdk.py` | **Claude Agent SDK variant** — official Anthropic agent loop. |
+| `main_stack.py` | CullisClient variant — chat through Mastio AI gateway. |
 | `test_e2e.py` | 4 scenarios: happy path, sanctions hit, PEP hit, capability bypass. |
 
-## How to run the E2E
+## How to run
 
 From the repo root:
 
 ```bash
-# Run with deterministic mock LLM (no API key needed). This is the CI path.
+# Deterministic mock LLM (no API key needed). CI path.
 pytest sandbox/agents-demo/agent_kyc_screener/ -v
 ```
 
-To run with a real Claude Haiku 4.5 brain (4-6 calls per case, ~$0.05-0.15
-per case at 2026-05 list pricing):
+**litellm variant** (LLM-agnostic, default `main.py`):
 
 ```bash
+pip install -e sandbox/agents-demo/[live]
 export CULLIS_AGENT_DEMO_MODE=live
 export ANTHROPIC_API_KEY=sk-ant-...
 python -m agent_kyc_screener.main
 ```
+
+**Claude Agent SDK variant** (recommended for Anthropic Partner pitch):
+
+```bash
+pip install -e sandbox/agents-demo/[sdk]
+export ANTHROPIC_API_KEY=sk-ant-...
+python -m agent_kyc_screener.main_sdk \
+    --case-id case_demo_001 \
+    --document-id doc_low_risk_retail
+```
+
+The SDK variant uses the bundled `claude` CLI as the agent loop driver
+and exposes the 4 KYC tools as an in-process MCP server via the
+`@tool` decorator. The Cullis capability gate fires inside each tool
+wrapper before the mock provider runs — same governance contract as
+the other two variants, just hosted by the SDK's loop instead of a
+home-grown `while`.
 
 The demo entry point processes the synthetic `doc_low_risk_retail` case and
 prints the decision JSON + the audit chain length.

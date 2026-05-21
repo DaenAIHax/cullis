@@ -9,11 +9,19 @@ dossier `imp/2026-05-21-frustrated-pilots-research.md`.
 
 ## The three agents
 
-| Agent | LLM | Quadrant (ADR-020) | Regulatory hook |
-|---|---|---|---|
-| [KYC Screener](agent_kyc_screener/README.md) | Claude Haiku 4.5 | U2A | EU AI Act Art. 12 + 14 + Annex III |
-| [Pitchbook Builder](agent_pitchbook_builder/README.md) | Claude Haiku 4.5 | U2A + A2A intra-org (Chinese Wall) | EU AI Act Art. 13 + MAR / Information Barriers |
-| [DORA Vendor/TPA Reporter](agent_dora_reporter/README.md) | **Ollama on-prem** (default `mistral-small`) | A2A cross-org | DORA Art. 28 + EU AI Act Art. 12 |
+| Agent | LLM | Loop runtime | Quadrant (ADR-020) | Regulatory hook |
+|---|---|---|---|---|
+| [KYC Screener](agent_kyc_screener/README.md) | Claude Haiku 4.5 | **Claude Agent SDK** (`main_sdk.py`) + litellm + Mastio variants | U2A | EU AI Act Art. 12 + 14 + Annex III |
+| [Pitchbook Builder](agent_pitchbook_builder/README.md) | Claude Haiku 4.5 | litellm chat completions | U2A + A2A intra-org (Chinese Wall) | EU AI Act Art. 13 + MAR / Information Barriers |
+| [DORA Vendor/TPA Reporter](agent_dora_reporter/README.md) | **Ollama on-prem** (default `mistral-small`) | litellm chat completions | A2A cross-org | DORA Art. 28 + EU AI Act Art. 12 |
+
+The three agents demonstrate Cullis governance under **three different
+loop drivers** on purpose: KYC uses the official Anthropic
+`claude-agent-sdk` (proves Cullis composes with native Claude tooling),
+Pitchbook uses the LLM-agnostic litellm pattern (proves Cullis is not
+locked to one SDK), DORA uses litellm against on-prem Ollama (proves
+Cullis governs even SaaS-free deployments — a DORA Art. 28 control by
+itself).
 
 The KYC + Pitchbook agents demonstrate that **Cullis governs cloud
 LLMs** (Claude via Anthropic) — the audit chain, capability gate and
