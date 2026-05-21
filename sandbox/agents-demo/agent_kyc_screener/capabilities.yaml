@@ -1,0 +1,35 @@
+# KYC Screener -- Cullis capability binding.
+#
+# Mirrors the per-agent capability binding that Mastio enforces at the
+# `mcp_proxy/registry/store.py` + `mcp_proxy/tools/executor.py` layer.
+# Capabilities declared here MUST be granted to the invoking principal
+# (user or agent) at enrollment time; the runtime gate is fail-closed.
+
+agent: kyc_screener
+quadrant: U2A   # User-to-Agent (ADR-020)
+eu_ai_act_articles:
+  - "Art. 12 (logging of every document ingested + reasoning + score)"
+  - "Art. 14 (human oversight on escalation)"
+  - "Annex III (high-risk identification)"
+
+capabilities:
+  kyc.read:
+    description: "Required to invoke the agent at all."
+    granted_at: "enrollment"
+  kyc.submit:
+    description: "Required to finalize a KYC decision (auto_approve or escalate)."
+    granted_at: "enrollment"
+  kyc.auto_approve:
+    description: >
+      Required only when the agent wants to auto-approve. Gate evaluator
+      additionally checks that the agent's reported score is strictly below
+      the configured threshold (default 30/100).
+    granted_at: "enrollment"
+    fine_grained:
+      score_threshold: 30
+  kyc.escalate:
+    description: "Required to escalate a case to a human compliance officer."
+    granted_at: "enrollment"
+
+# `kyc.auto_reject` is intentionally NOT defined. The system NEVER auto-rejects;
+# a high-risk score must always escalate to a human (EU AI Act Art. 14).
