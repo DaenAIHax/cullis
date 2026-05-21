@@ -23,13 +23,14 @@ import Layout from '../layouts/Layout.astro';
         </div>
         <div class="hero-aside">
           <p class="hero-lead reveal" data-delay="2">
-            88% of enterprise AI agent pilots never reach production.
-            Top blockers cited: <strong>governance 57%</strong>,
-            <strong>reliability 51%</strong>. Cullis Mastio ships the
-            primitives Anthropic, OpenAI, AWS Bedrock, and Azure Foundry
-            do not: cryptographic per-agent identity, tamper-evident
-            hash-chained audit, capability gates, cross-org federation.
-            Self-hosted, <strong>LLM-agnostic</strong>, FSL-1.1+Apache-2.0.
+            EU regulated banks and insurers want to deploy AI agents.
+            What they do not have is a way to prove to a regulator who
+            decided what, when, with which input, eighteen months
+            later. Cullis Mastio ships the primitives Anthropic,
+            OpenAI, AWS Bedrock, and Azure Foundry do not: cryptographic
+            per-agent identity, tamper-evident hash-chained audit,
+            capability gates, cross-org federation. Self-hosted,
+            <strong>LLM-agnostic</strong>, FSL-1.1+Apache-2.0.
           </p>
           <div class="hero-actions reveal" data-delay="3">
             <a href="#quickstart" class="btn btn-primary">Get the Mastio bundle</a>
@@ -97,76 +98,41 @@ import Layout from '../layouts/Layout.astro';
         </h2>
         <p class="reveal" data-delay="2">
           Anthropic published 10 Finance Agent templates on 5 May 2026.
-          Every major EU bank and insurer is piloting them. None has
-          shipped to production at a named institution, because the
-          EU AI Act enforcement cliff hits on <strong>2 August 2026</strong>
-          for Annex III high-risk systems, and the vendor harnesses do
-          not ship the primitives EU regulators require.
+          Every major EU bank and insurer is piloting them. The EU AI
+          Act Annex III enforcement cliff hits on <strong>2 August 2026</strong>
+          for high-risk systems. The vendor harnesses do not ship the
+          governance primitives that close the audit-trail gap. The
+          tier-1 institutions are reinventing the layer themselves.
         </p>
       </div>
 
-      <div class="stuck-stats reveal" data-delay="3">
-        <div class="stat-card">
-          <div class="stat-number">88%</div>
-          <div class="stat-label">enterprise AI agent pilots</div>
-          <div class="stat-sub">do not reach production</div>
-          <div class="stat-source">MIT NANDA · IDC · Gartner 2025-26</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-number">73%</div>
-          <div class="stat-label">banking AI initiatives</div>
-          <div class="stat-sub">never leave pilot stage</div>
-          <div class="stat-source">Gartner 2025</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-number">96%</div>
-          <div class="stat-label">banking executives</div>
-          <div class="stat-sub">cite regulatory compliance as top blocker</div>
-          <div class="stat-source">KPMG AI Pulse Q1 2026</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-number">18%</div>
-          <div class="stat-label">are confident</div>
-          <div class="stat-sub">they could pass an independent AI controls review</div>
-          <div class="stat-source">KPMG AI Pulse Q1 2026</div>
-        </div>
-      </div>
-
-      <div class="quotes-head reveal" data-delay="4">
-        <h3>What the named EU institutions are quietly building</h3>
+      <div class="quotes-head reveal" data-delay="3">
+        <h3>What the named EU institutions are publicly building</h3>
         <p>
-          The same governance gap is showing up everywhere. Five
-          tier-1 banks and insurers in EU have publicly named or
-          shipped an internal "governance layer" because the vendor
-          stack does not provide one.
+          Three reference points, all 2026, all public, all primary
+          sources. Each one is a tier-1 institution describing an
+          internal "governance layer" that the vendor stack does not
+          provide.
         </p>
       </div>
 
-      <ul class="quote-list reveal" data-delay="5">
+      <ul class="quote-list reveal" data-delay="4">
         <li>
-          <span class="quote-firm">Intesa Sanpaolo</span>
-          <span class="quote-line">Built <em>"Guardian Agents"</em> internally — an explicit layer to govern a multi-agent ecosystem because nothing off-the-shelf existed.</span>
+          <span class="quote-firm">Allianz × Anthropic</span>
+          <span class="quote-line">January 2026 global partnership identifies its third workstream as <em>"Driving Transparency and Compliance with AI"</em>, committing to "log every decision, rationale, and data source to address insurance-specific risks". Without that substrate, Project Nemo cannot scale beyond food-spoilage claims. <a href="https://www.allianz.com/en/mediacenter/news/media-releases/260109-allianz-and-anthropic-forge-global-partnership.html" target="_blank" rel="noopener">[primary source]</a></span>
         </li>
         <li>
           <span class="quote-firm">Société Générale</span>
-          <span class="quote-line">Named their agent <em>"Lineage AI"</em>. The name itself is the admission: regulatory reporting needs traceable lineage that vendor logs cannot give.</span>
-        </li>
-        <li>
-          <span class="quote-firm">Allianz × Anthropic</span>
-          <span class="quote-line">January 2026 partnership announces its third workstream as <em>"AI transparency and compliance, logging every decision, rationale and data source"</em>. Project Nemo can't scale beyond food-spoilage claims without it.</span>
+          <span class="quote-line">Named their agent <em>"Lineage AI"</em>. Its job is data traceability for financial and compliance reports. The name itself is the admission: vendor logs do not give regulators traceable lineage. <a href="https://secretsdedata.substack.com/p/ia-agentique-chez-sg-plateforme-et" target="_blank" rel="noopener">[secondary source]</a></span>
         </li>
         <li>
           <span class="quote-firm">Lloyds (Envoy)</span>
-          <span class="quote-line">Published <em>"compliance and safety harness"</em> + a <em>"board-bot bias-checking agent"</em> alongside the agent platform.</span>
-        </li>
-        <li>
-          <span class="quote-firm">BNP Paribas</span>
-          <span class="quote-line">May 2026: <em>"hybrid AI governance now critical for European banking"</em>.</span>
+          <span class="quote-line">The internal agent platform ships with a <em>"compliance and safety harness combined with a board-bot bias-checking agent"</em>. The harness is alongside the agents, not inside them. <a href="https://www.resultsense.com/news/2026-05-04-lloyds-envoy-ai-agent-platform" target="_blank" rel="noopener">[secondary source]</a></span>
         </li>
       </ul>
 
-      <p class="quotes-tag reveal" data-delay="6">
-        All five reinventing the same layer. <strong>Cullis is that layer, productized.</strong>
+      <p class="quotes-tag reveal" data-delay="5">
+        Three tier-1 institutions reinventing the same layer. <strong>Cullis is that layer, productized.</strong>
       </p>
     </div>
   </section>

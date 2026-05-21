@@ -21,19 +21,19 @@
 
 ## The problem Cullis solves
 
-**88% of enterprise AI agent pilots do not graduate to production** (MIT NANDA, IDC, Gartner 2025-2026). For banking specifically the number is 73% (Gartner). Top blockers cited by enterprises: **governance 57%, reliability 51%, evaluation 64%** (Wolters Kluwer Q1 2026, KPMG Q1 2026).
+EU regulated banks and insurers want to deploy AI agents. They have the use cases, the data, and the engineering teams. What they do not have is a way to prove to a regulator that the agent did what it was supposed to do, with which inputs, by whose authority, eighteen months after the fact.
 
-Anthropic published 10 Finance Agent templates on 5 May 2026 (KYC Screener, Pitchbook Builder, Month-End Closer, Statement Auditor, and others). All ten are being piloted across EU regulated banks. None has shipped to production at named EU institutions, because the EU AI Act enforcement cliff hits on **2 August 2026** for Annex III high-risk systems, and none of the Anthropic, OpenAI, AWS Bedrock, Azure Foundry, or Google Vertex agent harnesses ship the primitives EU regulators require: cryptographic per-agent identity, tamper-evident audit chain, capability gates per tool, cross-organization delegation.
+The EU AI Act Annex III enforcement cliff hits on **2 August 2026** for high-risk systems (credit scoring, life and health insurance pricing, recruitment). DORA Art. 28 already requires cryptographic third-party identity per action. None of the Anthropic, OpenAI, AWS Bedrock, Azure Foundry, or Google Vertex agent harnesses ship the primitives that close this audit-trail gap.
 
-Three signals from the market that confirm this gap, all 2026:
+The tier-1 institutions are reinventing the layer themselves:
 
-- **Intesa Sanpaolo** built **"Guardian Agents"** internally — their own governance layer for agent identity, because nothing off-the-shelf existed
-- **Société Générale** named their agent **"Lineage AI"** — the name itself an admission of the audit-trail blocker
-- **Allianz + Anthropic** January 2026 partnership identifies its third workstream as "AI transparency and compliance, logging every decision, rationale and data source" — exactly what Project Nemo needs to scale beyond narrow food-spoilage claims
-- **Lloyds Envoy** ships a published "compliance and safety harness" + a "board-bot bias-checking agent" alongside their agent platform
-- **BNP Paribas** declared May 2026 "hybrid AI governance now critical for European banking"
+- **Allianz + Anthropic** (Jan 2026 partnership announcement): identifies its third workstream as **"Driving Transparency and Compliance with AI"**, committing to "log every decision, rationale, and data source to address insurance-specific risks" — exactly the substrate Project Nemo needs to scale beyond narrow food-spoilage claims. ([source](https://www.allianz.com/en/mediacenter/news/media-releases/260109-allianz-and-anthropic-forge-global-partnership.html))
+- **Société Générale**: named their agent **"Lineage AI"** — the agent's job is data traceability for financial and compliance reports. The name itself is the admission. ([source](https://secretsdedata.substack.com/p/ia-agentique-chez-sg-plateforme-et))
+- **Lloyds Envoy**: the internal agent platform ships with a published **"compliance and safety harness combined with a board-bot bias-checking agent"**. ([source](https://www.resultsense.com/news/2026-05-04-lloyds-envoy-ai-agent-platform))
 
-All five are reinventing the same layer. **Cullis is that layer, productized.**
+Anthropic published 10 Finance Agent templates on **5 May 2026** (KYC Screener, Pitchbook Builder, Month-End Closer, Statement Auditor, and seven more). The templates are technically sound. They do not ship the governance primitives EU regulators require, because that is not Anthropic's product surface. ([source](https://www.anthropic.com/news/finance-agents))
+
+**Cullis is the layer those banks are publicly reinventing, productized as a self-hosted binary.**
 
 ---
 
