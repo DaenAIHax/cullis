@@ -132,6 +132,29 @@ def run(
         verify_tls=verify_tls,
         ca_chain_path=ca_chain_path,
     )
+    client._cert_pem = (identity_dir / "agent.pem").read_text()
+    client._signing_key_pem = (identity_dir / "agent-key.pem").read_text()
+    client.login_via_proxy_with_local_key()
+
+    # Workaround for chat_completion DPoP pinning bug (see CullisClient memo
+    # feedback_chat_completion_dpop_pinning_bug). The SDK egress path signs
+    # with the persistent egress DPoP key, but the proof rejection chain
+    # currently returns 401 with no auto-retry on cold nonce in some setups.
+    # Mastio's /v1/llm/chat accepts mTLS cert-only auth as a fallback, so
+    # we route the chat completion through a raw httpx client with the same
+    # client cert. The MCP aggregator (list_mcp_tools / call_mcp_tool) keeps
+    # using the SDK because that path works.
+    import httpx as _httpx
+    _direct = _httpx.Client(
+        cert=(str(identity_dir / "agent.pem"), str(identity_dir / "agent-key.pem")),
+        verify=False,  # demo: Mastio server CA different from Org A CA; for prod use Mastio public CA
+        timeout=60.0,
+    )
+
+    def _direct_chat(request: dict[str, Any]) -> dict[str, Any]:
+        r = _direct.post(f"{mastio_url.rstrip('/')}/v1/llm/chat", json=request)
+        r.raise_for_status()
+        return r.json()
 
     tools = _resolve_tools(client)
     system_prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
@@ -160,7 +183,7 @@ def run(
     trace_ids: list[str] = []
 
     for iteration in range(MAX_LOOP_ITERATIONS):
-        response = client.chat_completion(
+        response = _direct_chat(
             {"model": model, "messages": messages, "tools": tools}
         )
         if (tid := response.get("cullis_trace_id")):
