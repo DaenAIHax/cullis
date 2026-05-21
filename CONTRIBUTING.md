@@ -16,23 +16,31 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Run tests
-pytest tests/ -v
+# Run tests (parallel, ~60-100s)
+pytest tests/ -n auto --dist=loadfile
 
-# Full broker deployment (Docker + PKI + Vault) — development profile
-./deploy_broker.sh --dev
-
-# Or boot the full enterprise sandbox (SPIRE, Keycloak, Vault, Postgres,
-# 3 agents, 2 MCP servers in 2 orgs) and replay a scenario:
+# Boot the full sandbox (Court + 2 Mastios + 3 agents + 2 MCP servers in
+# 2 orgs, plus SPIRE / Keycloak / Vault / Postgres) and replay scenarios:
 ./sandbox/demo.sh full
-./sandbox/demo.sh oneshot-a-to-b
+./sandbox/demo.sh oneshot-a-to-b      # cross-org A2A
+./sandbox/demo.sh mcp-catalog          # intra-org MCP
+./sandbox/demo.sh down
+
+# Or run Cullis Court alone in a dev profile (Docker + PKI + Vault):
+./deploy_broker.sh --dev
 ```
+
+> The `deploy_broker.sh` / `deploy_proxy.sh` scripts at the repo root are
+> the historical entry points for standalone Court / Mastio dev deploys.
+> For production-style deploys use the release bundles under
+> [`packaging/`](packaging/). For end-to-end demo flows use
+> [`sandbox/demo.sh`](sandbox/).
 
 ## Frontend Assets (Dashboard)
 
-The broker and proxy dashboards ship compiled Tailwind CSS and a bundled copy
-of htmx — no CDN dependency. Generated CSS is `.gitignore`'d; you need to
-build it once before running the broker outside Docker:
+The Court and Mastio dashboards ship compiled Tailwind CSS and a bundled
+copy of htmx — no CDN dependency. Generated CSS is `.gitignore`'d; build
+it once before running outside Docker:
 
 ```bash
 # Uses the Tailwind standalone CLI (no Node/npm install required).
@@ -41,8 +49,8 @@ build it once before running the broker outside Docker:
 ./scripts/build_frontend.sh --watch
 ```
 
-The Docker images (`Dockerfile`, `mcp_proxy/Dockerfile`) run the build in a
-dedicated stage, so `./deploy_broker.sh` and `./deploy_proxy.sh` already
+The Docker images (`Dockerfile`, `mcp_proxy/Dockerfile`) run the build in
+a dedicated stage, so `./deploy_broker.sh` and `./deploy_proxy.sh`
 produce the CSS automatically.
 
 Templates should rely on Tailwind utility classes only — inline `tailwind.config = {...}`
@@ -71,10 +79,11 @@ Update `tailwind.config.js` at the repo root if you need new theme tokens.
 
 Before submitting, verify:
 
-- [ ] All tests pass (`pytest tests/ -v`)
+- [ ] All tests pass (`pytest tests/ -n auto --dist=loadfile`)
 - [ ] Type hints added to public functions
 - [ ] No secrets, private keys, or credentials in the code
 - [ ] New endpoints have Pydantic schemas
+- [ ] Commits are signed off with `git commit -s` (DCO, see below)
 
 ## What to Contribute
 
