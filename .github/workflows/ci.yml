@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile all Python modules
+        run: |
+          python -m compileall -q app mcp_proxy cullis_sdk cullis_connector
+
+  metadata:
+    name: Repo metadata sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Required top-level files exist
+        run: |
+          set -e
+          for f in README.md LICENSE LICENSE-APACHE-2.0 NOTICE SECURITY.md CONTRIBUTING.md CHANGELOG.md pyproject.toml; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+      - name: No tracked maintainer-internal notes
+        run: |
+          if git ls-files imp/ | grep -q .; then
+            echo "imp/ contains tracked files — should be local-only per .gitignore"
+            git ls-files imp/
+            exit 1
+          fi

@@ -242,7 +242,7 @@ tests/             Unit, integration, e2e tests
 ```
 
 > [!NOTE]
-> `app/` and `mcp_proxy/` are legacy directory names that predate the Court/Mastio rebrand. The on-disk paths and the brand names refer to the same components. Python package imports follow the same legacy (`from app import ...` for Court, `from mcp_proxy import ...` for Mastio). Each directory has its own README with a per-component overview.
+> The on-disk module paths map one-to-one onto the product names: `from app import ...` is Cullis Court, `from mcp_proxy import ...` is Cullis Mastio. Each directory has its own README with a per-component overview.
 
 Runtime: Python 3.11 · FastAPI · PostgreSQL 16 · Redis · HashiCorp Vault · cryptography · PyJWT · OpenTelemetry + Jaeger (Court) · Prometheus (Mastio) · OPA · Docker · Helm.
 
