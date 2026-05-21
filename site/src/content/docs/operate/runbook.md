@@ -175,7 +175,7 @@ Redis is ephemeral. The DPoP JTI blacklist and rate-limit counters rebuild as tr
 
 **Recover**
 
-- **ACME**: `./deploy_broker.sh --prod-acme --domain X --email Y` re-runs certbot; nginx reloads automatically.
+- **ACME**: re-run the Mastio bundle deploy script with ACME enabled (`./deploy.sh --acme --domain X --email Y` inside the unpacked bundle); nginx reloads automatically.
 - **BYOCA**: drop the new cert + key in `nginx/certs/`, then `docker compose exec nginx nginx -s reload`.
 
 **Prevent**
