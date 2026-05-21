@@ -2,7 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="Cullis — AI agent identity and audit">
+<Layout title="Cullis — The governance layer AI agent pilots need to ship">
 
   <!-- 01 HERO -->
   <section class="hero">
@@ -17,23 +17,23 @@ import Layout from '../layouts/Layout.astro';
       <div class="hero-top">
         <div class="hero-text">
           <h1 class="hero-title reveal" data-delay="1">
-            Identity and audit.<br />
-            <em>Built for the compliance wave.</em>
+            From pilot to production.<br />
+            <em>The layer that unblocks it.</em>
           </h1>
         </div>
         <div class="hero-aside">
           <p class="hero-lead reveal" data-delay="2">
-            Cullis Mastio gives every AI agent in your organization a
-            cryptographic identity, enforces policy before each call,
-            and writes a tamper-evident audit chain. Designed for
-            <strong>EU AI Act</strong> high-risk systems,
-            <strong>Colorado AI Act</strong>, <strong>NIST AI RMF</strong>,
-            and <strong>ISO 42001</strong>. Self-hosted, open source,
-            drop-in for Claude, GPT, Mistral, and any MCP-compatible tool.
+            88% of enterprise AI agent pilots never reach production.
+            Top blockers cited: <strong>governance 57%</strong>,
+            <strong>reliability 51%</strong>. Cullis Mastio ships the
+            primitives Anthropic, OpenAI, AWS Bedrock, and Azure Foundry
+            do not: cryptographic per-agent identity, tamper-evident
+            hash-chained audit, capability gates, cross-org federation.
+            Self-hosted, <strong>LLM-agnostic</strong>, FSL-1.1+Apache-2.0.
           </p>
           <div class="hero-actions reveal" data-delay="3">
             <a href="#quickstart" class="btn btn-primary">Get the Mastio bundle</a>
-            <a href="/docs" class="btn btn-ghost">Read the docs</a>
+            <a href="/insurance" class="btn btn-ghost">Insurance scenario</a>
           </div>
           <div class="hero-meta reveal" data-delay="4">
             <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="hero-meta-link">
@@ -84,12 +84,101 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 02 WHAT MASTIO DOES -->
+  <!-- 02 WHY PILOTS DON'T GRADUATE -->
+  <section class="stuck-section">
+    <div class="container wide">
+      <div class="stuck-head">
+        <div class="eyebrow reveal">
+          <span class="eyebrow-number">02</span>
+          The graduation gap
+        </div>
+        <h2 class="reveal" data-delay="1">
+          Pilots work. <em>Production audits don't pass.</em>
+        </h2>
+        <p class="reveal" data-delay="2">
+          Anthropic published 10 Finance Agent templates on 5 May 2026.
+          Every major EU bank and insurer is piloting them. None has
+          shipped to production at a named institution, because the
+          EU AI Act enforcement cliff hits on <strong>2 August 2026</strong>
+          for Annex III high-risk systems, and the vendor harnesses do
+          not ship the primitives EU regulators require.
+        </p>
+      </div>
+
+      <div class="stuck-stats reveal" data-delay="3">
+        <div class="stat-card">
+          <div class="stat-number">88%</div>
+          <div class="stat-label">enterprise AI agent pilots</div>
+          <div class="stat-sub">do not reach production</div>
+          <div class="stat-source">MIT NANDA · IDC · Gartner 2025-26</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">73%</div>
+          <div class="stat-label">banking AI initiatives</div>
+          <div class="stat-sub">never leave pilot stage</div>
+          <div class="stat-source">Gartner 2025</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">96%</div>
+          <div class="stat-label">banking executives</div>
+          <div class="stat-sub">cite regulatory compliance as top blocker</div>
+          <div class="stat-source">KPMG AI Pulse Q1 2026</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">18%</div>
+          <div class="stat-label">are confident</div>
+          <div class="stat-sub">they could pass an independent AI controls review</div>
+          <div class="stat-source">KPMG AI Pulse Q1 2026</div>
+        </div>
+      </div>
+
+      <div class="quotes-head reveal" data-delay="4">
+        <h3>What the named EU institutions are quietly building</h3>
+        <p>
+          The same governance gap is showing up everywhere. Five
+          tier-1 banks and insurers in EU have publicly named or
+          shipped an internal "governance layer" because the vendor
+          stack does not provide one.
+        </p>
+      </div>
+
+      <ul class="quote-list reveal" data-delay="5">
+        <li>
+          <span class="quote-firm">Intesa Sanpaolo</span>
+          <span class="quote-line">Built <em>"Guardian Agents"</em> internally — an explicit layer to govern a multi-agent ecosystem because nothing off-the-shelf existed.</span>
+        </li>
+        <li>
+          <span class="quote-firm">Société Générale</span>
+          <span class="quote-line">Named their agent <em>"Lineage AI"</em>. The name itself is the admission: regulatory reporting needs traceable lineage that vendor logs cannot give.</span>
+        </li>
+        <li>
+          <span class="quote-firm">Allianz × Anthropic</span>
+          <span class="quote-line">January 2026 partnership announces its third workstream as <em>"AI transparency and compliance, logging every decision, rationale and data source"</em>. Project Nemo can't scale beyond food-spoilage claims without it.</span>
+        </li>
+        <li>
+          <span class="quote-firm">Lloyds (Envoy)</span>
+          <span class="quote-line">Published <em>"compliance and safety harness"</em> + a <em>"board-bot bias-checking agent"</em> alongside the agent platform.</span>
+        </li>
+        <li>
+          <span class="quote-firm">BNP Paribas</span>
+          <span class="quote-line">May 2026: <em>"hybrid AI governance now critical for European banking"</em>.</span>
+        </li>
+      </ul>
+
+      <p class="quotes-tag reveal" data-delay="6">
+        All five reinventing the same layer. <strong>Cullis is that layer, productized.</strong>
+      </p>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- 03 WHAT MASTIO DOES -->
   <section class="feature-switch">
     <div class="container wide">
       <div class="feature-head">
         <div class="eyebrow reveal">
-          <span class="eyebrow-number">02</span>
+          <span class="eyebrow-number">03</span>
           Mastio · org control point
         </div>
         <h2 class="feature-title reveal" data-delay="1">
@@ -100,7 +189,8 @@ import Layout from '../layouts/Layout.astro';
           One Docker container per organization. Authority over AI agent
           identity. Policy enforced before the LLM call lands. An
           append-only chain of every action, externally verifiable by
-          your auditor or regulator.
+          your auditor or regulator. Works underneath Claude Agent SDK,
+          OpenAI Agents SDK, LangGraph, CrewAI, or any MCP-aware stack.
         </p>
       </div>
 
@@ -110,11 +200,12 @@ import Layout from '../layouts/Layout.astro';
             <div class="feature-num">01</div>
             <h3>Cryptographic identity, per agent</h3>
             <p>
-              x509 cert and SPIFFE ID per agent process. The caller
-              authenticated at the gateway is the agent itself, not a
-              shared API key reused by twelve services. Identity
-              rotates on its own schedule, revocation propagates in
-              seconds.
+              x509 cert and SPIFFE ID per agent process. mTLS RFC 8705
+              + DPoP RFC 9449. The caller authenticated at the gateway
+              is the agent itself, not a shared API key reused by twelve
+              services. Identity rotates on its own schedule, revocation
+              propagates in seconds. Addresses EU AI Act Art. 12 logging
+              and DORA Art. 28 cryptographic identity per action.
             </p>
             <a class="feature-link" href="/architecture#identity">Identity model →</a>
           </li>
@@ -124,8 +215,10 @@ import Layout from '../layouts/Layout.astro';
             <p>
               PDP fires before the LLM API or MCP tool. Per-principal
               scopes (this agent can read claim files, that agent
-              cannot). Decisions logged with reason. OPA-compatible
-              bundles or built-in DSL.
+              cannot). 4-eye approval capability. Decisions logged with
+              reason. OPA-compatible bundles or built-in DSL. Addresses
+              EU AI Act Art. 14 human oversight and Annex III high-risk
+              segregation of duties.
             </p>
             <a class="feature-link" href="/architecture#registry">Policy model →</a>
           </li>
@@ -134,9 +227,10 @@ import Layout from '../layouts/Layout.astro';
             <h3>Tamper-evident audit chain</h3>
             <p>
               Every event (auth, enroll, message, tool call, LLM token)
-              hashed and chained. RFC 3161 anchoring optional. Your
-              auditor verifies the chain externally without trusting
-              Cullis or your IT team.
+              hashed and chained. RFC 3161 TSA anchoring. Your auditor
+              verifies the chain externally without trusting Cullis or
+              your IT team. Addresses EU AI Act Art. 12 + Art. 13
+              transparency and EIOPA Aug 2025 record-keeping requirements.
             </p>
             <a class="feature-link" href="/architecture#audit">Audit chain →</a>
           </li>
@@ -163,20 +257,21 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 03 HOW IT FITS -->
+  <!-- 04 HOW IT FITS -->
   <section class="bridge-section">
     <div class="container narrow">
       <div class="eyebrow reveal">
-        <span class="eyebrow-number">03</span>
-        Drop-in integration
+        <span class="eyebrow-number">04</span>
+        Drop-in integration · LLM-agnostic
       </div>
       <h2 class="reveal" data-delay="1">
         Wherever your <em>agent lives.</em>
       </h2>
       <p class="reveal" data-delay="2">
-        Your AI agents are already running in different places:
-        laptops, browsers, backend services, containers. Mastio
-        attaches without you rewriting them.
+        Cullis sits underneath, not next to. Same governance primitives
+        for Claude Agent SDK, OpenAI Agents SDK, LangGraph, CrewAI,
+        Ollama on-prem. Switch model providers with one env-var; the
+        identity, policy, and audit chain do not change.
       </p>
 
       <ul class="shapes reveal" data-delay="3">
@@ -186,7 +281,7 @@ import Layout from '../layouts/Layout.astro';
         </li>
         <li>
           <span class="shape-name">Cullis Chat</span>
-          <span class="shape-where">browser SPA · single power user or multi-user SSO deployment</span>
+          <span class="shape-where">browser SPA · single power user or multi-user SSO deployment (Frontdesk)</span>
         </li>
         <li>
           <span class="shape-name">SDK</span>
@@ -208,68 +303,77 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 04 USE CASES -->
+  <!-- 05 USE CASES -->
   <section class="use-cases">
     <div class="container wide">
       <div class="use-cases-head">
         <div class="eyebrow reveal">
-          <span class="eyebrow-number">04</span>
-          Use cases
+          <span class="eyebrow-number">05</span>
+          Use cases · Anthropic Finance Agents on Cullis
         </div>
         <h2 class="reveal" data-delay="1">
-          One infrastructure.<br />
-          <em>Many compliance regimes.</em>
+          The pilots that don't graduate.<br />
+          <em>Three demos that do.</em>
         </h2>
         <p class="reveal" data-delay="2">
-          The same identity-policy-audit pattern serves regulated
-          industries across Europe and the United States. Pick your use
-          case.
+          Three reference agents shipped in
+          <code>sandbox/agents-demo/</code>. Two map directly to
+          Anthropic Finance Agent templates announced 5 May 2026, one
+          is Cullis-unique. Stack heterogeneity (Claude + OpenAI) proves
+          the governance layer is LLM-agnostic.
         </p>
       </div>
 
       <div class="use-case-grid reveal" data-delay="3">
         <article class="use-case-card">
-          <div class="use-case-region">Insurance · EU</div>
-          <h3>Claim handling under AI Act high-risk</h3>
+          <div class="use-case-region">Banking · KYC · Claude Agent SDK</div>
+          <h3>KYC Screener (Anthropic FA direct overlap)</h3>
           <p>
-            Claim intake agents, fraud detection, senior adjuster
-            override, reassurer signoff. Every decision auditable
-            end-to-end under AI Act Annex III and IDD Art. 17.
+            Entity file assembly, document review, AML escalation. The
+            published Anthropic template plus Cullis primitives that
+            satisfy EU AI Act Art. 14 (human oversight) and Art. 12
+            (logging). Demo flow: User-to-Agent in Frontdesk dropdown.
+          </p>
+          <a class="use-case-link" href="https://github.com/cullis-security/cullis/tree/main/sandbox/agents-demo">See the code →</a>
+        </article>
+
+        <article class="use-case-card">
+          <div class="use-case-region">IB · Pitchbook · Claude Agent SDK</div>
+          <h3>Pitchbook Builder + Chinese Walls</h3>
+          <p>
+            Pitch drafting on the Anthropic template, plus cross-desk
+            capability gate that blocks MNPI leakage. Demonstrates A2A
+            intra-org segregation: an agent invoked by the
+            "Industrials" desk cannot read docs from the "Tech" desk.
+            Addresses MAR + EU AI Act Art. 13.
+          </p>
+          <a class="use-case-link" href="https://github.com/cullis-security/cullis/tree/main/sandbox/agents-demo">See the code →</a>
+        </article>
+
+        <article class="use-case-card">
+          <div class="use-case-region">Banking · DORA · OpenAI GPT-5</div>
+          <h3>DORA Vendor/TPA Compliance Reporter</h3>
+          <p>
+            Cullis-unique. No Anthropic template. Runs on
+            <strong>OpenAI GPT-5 via LiteLLM</strong> to prove
+            LLM-agnostic. Cross-organization A2A federation: bank →
+            external auditor → regulator. DORA Art. 28 cryptographic
+            identity per action.
+          </p>
+          <a class="use-case-link" href="https://github.com/cullis-security/cullis/tree/main/sandbox/agents-demo">See the code →</a>
+        </article>
+
+        <article class="use-case-card use-case-card-highlight">
+          <div class="use-case-region">Vertical scenario · Insurance EU</div>
+          <h3>Claim handling end-to-end audit walkthrough</h3>
+          <p>
+            One claim, six agents, one audit chain. From intake to
+            regulator audit 18 months later. AI Act Annex III + IDD
+            Art. 17 + DORA Art. 28 mapped per step. Pilot offer
+            included: 90 days, EUR 15-25k, external pentest Letter of
+            Attestation.
           </p>
           <a class="use-case-link" href="/insurance">Read the scenario →</a>
-        </article>
-
-        <article class="use-case-card">
-          <div class="use-case-region">Banking · EU + US</div>
-          <h3>KYC automation under DORA / SR 11-7</h3>
-          <p>
-            Customer service agents, KYC document review, transaction
-            monitoring. Audit trail aligned with DORA Art. 28-30 and
-            Fed SR 11-7 model risk management.
-          </p>
-          <span class="use-case-link use-case-link-soon">Coming soon</span>
-        </article>
-
-        <article class="use-case-card">
-          <div class="use-case-region">Healthcare · EU + US</div>
-          <h3>Clinical decision support under HIPAA / MDR</h3>
-          <p>
-            Triage agents, diagnosis assistance, prescription review.
-            Audit trail mapped to HIPAA 164.312(b) integrity controls
-            and MDR post-market surveillance.
-          </p>
-          <span class="use-case-link use-case-link-soon">Coming soon</span>
-        </article>
-
-        <article class="use-case-card">
-          <div class="use-case-region">Public sector · EU + US</div>
-          <h3>Citizen services under NIS2 / Colorado AI Act</h3>
-          <p>
-            Citizen-facing agents in social services, taxation, public
-            procurement. Sovereign deployment, audit chain mappable to
-            NIS2 essential-entity obligations and Colorado AI Act.
-          </p>
-          <span class="use-case-link use-case-link-soon">Coming soon</span>
         </article>
       </div>
     </div>
@@ -277,12 +381,12 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 05 COMPLIANCE MAPPING -->
+  <!-- 06 COMPLIANCE MAPPING -->
   <section class="compliance-mapping">
     <div class="container wide">
       <div class="compliance-head">
         <div class="eyebrow reveal">
-          <span class="eyebrow-number">05</span>
+          <span class="eyebrow-number">06</span>
           Compliance mapping
         </div>
         <h2 class="reveal" data-delay="1">
@@ -307,13 +411,33 @@ import Layout from '../layouts/Layout.astro';
           <tbody>
             <tr>
               <td><strong>EU AI Act</strong></td>
-              <td>Art. 12, 15, 72</td>
-              <td>Tamper-evident audit chain, model run logging, post-market traceability</td>
+              <td>Art. 12 (logging), 13 (transparency), 14 (human oversight)</td>
+              <td>Tamper-evident audit chain, per-decision reasoning capture, ADR-020 4-quadrant identity</td>
+            </tr>
+            <tr>
+              <td><strong>EU AI Act Annex III</strong></td>
+              <td>High-risk classification (credit, insurance pricing, recruitment)</td>
+              <td>Per-agent identity + per-decision audit + 4-eye approval capability</td>
             </tr>
             <tr>
               <td><strong>DORA</strong></td>
-              <td>Art. 28, 30</td>
-              <td>Self-hosted deployment, append-only ICT third-party audit trail</td>
+              <td>Art. 28 (third-party ICT)</td>
+              <td>mTLS + DPoP cryptographic identity per action, self-hosted deployer model</td>
+            </tr>
+            <tr>
+              <td><strong>EIOPA</strong></td>
+              <td>Aug 2025 Opinion 8-axis governance</td>
+              <td>Mastio dashboard + audit export + policy decision logging across fairness, data, record, transparency, oversight, accuracy, robustness, cyber</td>
+            </tr>
+            <tr>
+              <td><strong>IDD</strong></td>
+              <td>Art. 17 (fair treatment), Art. 20, 30</td>
+              <td>Per-claim audit chain, exportable signed bundle for customer complaint reconstruction</td>
+            </tr>
+            <tr>
+              <td><strong>EU GMP Annex 22</strong></td>
+              <td>AI/ML in pharma manufacturing</td>
+              <td>Per-agent identity + immutable change log + signed releases for validated lifecycle</td>
             </tr>
             <tr>
               <td><strong>NIST AI RMF</strong></td>
@@ -322,7 +446,7 @@ import Layout from '../layouts/Layout.astro';
             </tr>
             <tr>
               <td><strong>Colorado AI Act</strong></td>
-              <td>Consumer disclosure for high-risk AI</td>
+              <td>Consumer disclosure for high-risk AI (June 2026)</td>
               <td>Decision logging with reason, per-decision provenance</td>
             </tr>
             <tr>
@@ -334,11 +458,6 @@ import Layout from '../layouts/Layout.astro';
               <td><strong>HIPAA</strong></td>
               <td>164.312(b) audit controls</td>
               <td>Append-only audit chain, integrity controls, external verification</td>
-            </tr>
-            <tr>
-              <td><strong>SR 11-7</strong></td>
-              <td>Model risk management</td>
-              <td>Model run traceability, override logging, accountable identity</td>
             </tr>
           </tbody>
         </table>
@@ -358,11 +477,11 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 06 QUICKSTART -->
+  <!-- 07 QUICKSTART -->
   <section class="prose-section" id="quickstart">
     <div class="container narrow">
       <div class="eyebrow reveal">
-        <span class="eyebrow-number">06</span>
+        <span class="eyebrow-number">07</span>
         Quickstart
       </div>
       <h2 class="reveal" data-delay="1">
@@ -384,31 +503,36 @@ pip install cullis-connector
 cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code></pre>
       <p class="reveal" data-delay="6">
         Full per-component install instructions, enrolment paths, and
-        production overrides on the <a href="/docs">docs</a>.
+        production overrides on the <a href="/docs">docs</a>. The 3
+        demo agents (KYC Screener, Pitchbook Builder, DORA Reporter)
+        ship in <code>sandbox/agents-demo/</code> of the
+        <a href="https://github.com/cullis-security/cullis">repo</a>.
       </p>
     </div>
   </section>
 
   <hr class="divider" />
 
-  <!-- 07 CLOSING -->
+  <!-- 08 CLOSING -->
   <section class="closing">
     <div class="container narrow">
       <div class="closing-rule"></div>
       <div class="eyebrow reveal">
-        <span class="eyebrow-number">07</span>
-        Continue
+        <span class="eyebrow-number">08</span>
+        Pilot conversation
       </div>
-      <h2 class="reveal" data-delay="1">Read the code. <em>Then write us.</em></h2>
+      <h2 class="reveal" data-delay="1">Read the code. <em>Then schedule a 30-minute call.</em></h2>
       <p class="reveal" data-delay="2">
-        We're early and looking for pilot partners — security and
-        compliance teams running their first AI agents in production.
-        Read the source, the architecture, the research; if Cullis
-        fits, write us.
+        Two to three design partners in EU regulated banking and
+        insurance for H2 2026. Conservative scope, reversible, no SLA,
+        signed audit bundle of real production journeys as output. See
+        the <a href="/insurance">insurance scenario</a> for the
+        reference offer (90 days, EUR 15-25k, Letter of Attestation
+        from external pentest included).
       </p>
       <div class="hero-actions reveal" data-delay="3">
         <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="btn btn-primary">GitHub</a>
-        <a href="https://mazzolad.com/writing" target="_blank" rel="noopener" class="btn btn-ghost">Read the research</a>
+        <a href="/insurance" class="btn btn-ghost">Insurance scenario</a>
         <a href="mailto:hello@cullis.io?subject=Cullis%20pilot%20enquiry" class="btn btn-ghost">Pilot enquiry</a>
       </div>
     </div>
@@ -659,6 +783,160 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
   .marker-text { color: var(--text-tertiary); }
 
   /* ====================================================
+     STUCK SECTION (graduation gap)
+  ==================================================== */
+  .stuck-section { padding: clamp(4rem, 10vw, 7rem) 0; }
+
+  .stuck-head {
+    max-width: 820px;
+    margin-bottom: clamp(3rem, 6vw, 4.5rem);
+  }
+
+  .stuck-head h2 {
+    font-size: clamp(2.2rem, 5vw, 4rem);
+    line-height: 1.05;
+    margin-bottom: 1.5rem;
+    font-weight: 400;
+  }
+
+  .stuck-head p {
+    font-size: 1.05rem;
+    color: var(--text-secondary);
+    max-width: 64ch;
+    line-height: 1.7;
+  }
+
+  .stuck-head strong { color: var(--text-primary); font-weight: 500; }
+
+  .stuck-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1.2rem;
+    margin-bottom: clamp(3rem, 6vw, 4.5rem);
+  }
+
+  .stat-card {
+    padding: 1.6rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .stat-number {
+    font-family: var(--font-display);
+    font-size: clamp(2.6rem, 4vw, 3.6rem);
+    color: var(--accent-cyan);
+    line-height: 1;
+    font-weight: 400;
+    letter-spacing: -0.025em;
+    margin-bottom: 0.3rem;
+  }
+
+  .stat-label {
+    font-family: var(--font-display);
+    font-size: clamp(0.95rem, 1.4vw, 1.1rem);
+    color: var(--text-primary);
+    line-height: 1.3;
+  }
+
+  .stat-sub {
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+
+  .stat-source {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px dashed var(--border-subtle);
+  }
+
+  .quotes-head {
+    max-width: 760px;
+    margin-bottom: 2rem;
+  }
+
+  .quotes-head h3 {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 2.8vw, 2rem);
+    line-height: 1.2;
+    margin: 0 0 1rem 0;
+    font-weight: 400;
+    color: var(--text-primary);
+  }
+
+  .quotes-head p {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    max-width: 60ch;
+  }
+
+  .quote-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-width: 900px;
+  }
+
+  .quote-list li {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.8fr) minmax(0, 3fr);
+    gap: 1.5rem;
+    padding: 1.2rem 0;
+    border-top: 1px solid var(--border-subtle);
+    align-items: baseline;
+  }
+
+  .quote-list li:first-child { border-top: none; padding-top: 0; }
+
+  .quote-firm {
+    font-family: var(--font-display);
+    font-size: clamp(1.1rem, 1.6vw, 1.3rem);
+    color: var(--text-primary);
+    font-style: italic;
+    line-height: 1.3;
+  }
+
+  .quote-line {
+    font-size: 0.98rem;
+    line-height: 1.65;
+    color: var(--text-secondary);
+  }
+
+  .quote-line em {
+    color: var(--accent-cyan);
+    font-style: normal;
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    padding: 0.05em 0.3em;
+    background: rgba(0, 229, 199, 0.06);
+    border-radius: 2px;
+  }
+
+  .quotes-tag {
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 2px solid var(--accent-cyan);
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 60ch;
+  }
+
+  .quotes-tag strong {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  /* ====================================================
      FEATURE SWITCHER · MASTIO
   ==================================================== */
   .feature-switch { padding: clamp(4rem, 10vw, 7rem) 0; }
@@ -873,6 +1151,15 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
     line-height: 1.7;
   }
 
+  .use-cases-head code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    color: var(--accent-cyan);
+    background: rgba(0, 229, 199, 0.06);
+    padding: 0.1em 0.35em;
+    border-radius: 2px;
+  }
+
   .use-case-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -891,6 +1178,11 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
   .use-case-card:hover {
     border-color: var(--accent-cyan-dim);
     transform: translateY(-2px);
+  }
+
+  .use-case-card-highlight {
+    border-color: var(--accent-cyan-dim);
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0, 229, 199, 0.03) 100%);
   }
 
   .use-case-region {
@@ -919,6 +1211,8 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
     flex: 1;
   }
 
+  .use-case-card strong { color: var(--text-primary); font-weight: 500; }
+
   .use-case-link {
     display: inline-block;
     font-family: var(--font-mono);
@@ -931,15 +1225,6 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
   }
 
   .use-case-link:hover { border: none; color: var(--text-primary); }
-
-  .use-case-link-soon {
-    color: var(--text-tertiary);
-    cursor: default;
-  }
-
-  .use-case-link-soon:hover {
-    color: var(--text-tertiary);
-  }
 
   /* ====================================================
      COMPLIANCE MAPPING
@@ -1070,6 +1355,13 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
     .product-frame-hero { transform: none; }
 
     .use-case-grid { grid-template-columns: 1fr; }
+
+    .stuck-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .quote-list li {
+      grid-template-columns: 1fr;
+      gap: 0.4rem;
+    }
   }
 
   @media (max-width: 640px) {
@@ -1082,6 +1374,8 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
     .product-frame-status { display: none; }
 
     .feature-item p { max-width: 100%; }
+
+    .stuck-stats { grid-template-columns: 1fr; }
 
     .compliance-table th,
     .compliance-table td {
