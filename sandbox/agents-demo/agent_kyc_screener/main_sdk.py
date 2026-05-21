@@ -259,18 +259,24 @@ def run(
     model: str = DEFAULT_MODEL,
     audit: AuditChain | None = None,
 ) -> tuple[KYCDecision, AuditChain]:
-    """Sync wrapper around ``run_async``."""
+    """Sync wrapper around ``run_async``.
+
+    ``anyio.run`` only accepts positional args for the target coroutine,
+    so we adapt via a no-arg closure.
+    """
 
     import anyio
 
-    return anyio.run(
-        run_async,
-        case_id=case_id,
-        document_id=document_id,
-        principal=principal,
-        model=model,
-        audit=audit,
-    )
+    async def _adapter() -> tuple[KYCDecision, AuditChain]:
+        return await run_async(
+            case_id=case_id,
+            document_id=document_id,
+            principal=principal,
+            model=model,
+            audit=audit,
+        )
+
+    return anyio.run(_adapter)
 
 
 def _parse_decision(content: str, *, case_id: str, document_id: str) -> KYCDecision:
