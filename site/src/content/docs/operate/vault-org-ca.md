@@ -3,24 +3,18 @@ title: "Vault as Org CA private key store"
 description: "Move the Mastio Org CA root key out of the local database and into HashiCorp Vault KV v2. Step-by-step migration for an existing deploy and zero-day setup for a new one."
 category: "Operate"
 order: 16
-updated: "2026-05-14"
+updated: "2026-05-22"
 ---
 
 # Vault as Org CA private key store
 
-The Mastio Org CA is the trust root of your org: it signs every agent
-certificate and every Connector user certificate. By default it lives
-as plaintext PEM in the local proxy database (the
-`proxy_config.org_ca_key` row). That is fine for a single-operator
-sandbox, but in a regulated production deploy you usually want the
-private key inside an audited secret store with fine-grained ACL,
-auto-unseal, and out-of-band backup. This page is how to get there.
+The Mastio Org CA is the trust root of your org: it signs every agent certificate. By default it lives as plaintext PEM in the local Mastio database (the `proxy_config.org_ca_key` row). That is fine for a single-operator dev deploy, but in a regulated production environment you usually want the private key inside an audited secret store with fine-grained ACL, auto-unseal, and out-of-band backup. This page is how to get there.
 
 ## When to use this
 
 | Setup | Use case |
 |-------|----------|
-| Local DB (default) | Sandbox, dev workstation, single-operator pilots |
+| Local DB (default) | Dev workstation, single-operator pilots, evaluation |
 | HashiCorp Vault KV v2 | Production with on-call rotations, regulated deploys (DORA, AI Act high-risk, ISO 42001) |
 | Cloud KMS (AWS / Azure / GCP) | Enterprise plugin, separate operator guide |
 
@@ -48,10 +42,7 @@ The factory at `mcp_proxy.kms.factory.get_kms_provider` resolves
 `vault` directly, ahead of the enterprise-plugin registry that
 handles cloud KMS backends.
 
-The Org CA key never leaves Vault except into the Mastio process
-memory at first read, where it stays cached for the lifetime of the
-process. Every signing operation (CSR signing for a new agent, user
-cert reissue) uses that in-memory copy. A Mastio restart re-fetches.
+The Org CA key never leaves Vault except into the Mastio process memory at first read, where it stays cached for the lifetime of the process. Every signing operation (CSR signing for a new agent, agent cert reissue, framework-update CA rotation) uses that in-memory copy. A Mastio restart re-fetches.
 
 ## Vault path layout
 
@@ -80,11 +71,8 @@ under one wildcard.
    dashboard `/proxy/vault` page: `MCP_PROXY_VAULT_ADDR`,
    `MCP_PROXY_VAULT_TOKEN`. If you also want to pin a custom CA bundle,
    set `MCP_PROXY_VAULT_CA_CERT_PATH`.
-3. **A Mastio at v0.4.2 or newer**: the `VaultKMSProvider` shipped in
-   PR #684 (mastio-v0.5.0 at the earliest tag carrying it; verify with
-   `cullis-proxy --version`).
-4. **The migration CLI**: shipped in PR #685, same release as the
-   provider.
+3. **A Mastio at v0.5.0 or newer** carrying the `VaultKMSProvider`. Verify with `docker compose -p cullis-mastio exec mcp-proxy printenv CULLIS_MASTIO_VERSION`.
+4. **The migration CLI** `cullis-proxy migrate-org-ca-to-vault` (bundled in the same image as the provider).
 
 ## Minimal Vault policy
 
@@ -149,7 +137,7 @@ Make sure the Mastio is healthy and the Org CA actually lives in the
 DB (it should, unless you wiped `proxy_config`):
 
 ```bash
-docker compose exec mcp-proxy sqlite3 /var/lib/mcp_proxy/mcp_proxy.db \
+docker compose -p cullis-mastio exec mcp-proxy sqlite3 /data/mcp_proxy.db \
   "SELECT length(value) FROM proxy_config WHERE key='org_ca_key';"
 ```
 
@@ -158,16 +146,16 @@ You should see a positive integer (length in bytes of the PEM).
 Make sure your Vault settings reach the Mastio container:
 
 ```bash
-docker compose exec mcp-proxy printenv MCP_PROXY_VAULT_ADDR MCP_PROXY_VAULT_TOKEN
+docker compose -p cullis-mastio exec mcp-proxy \
+    printenv MCP_PROXY_VAULT_ADDR MCP_PROXY_VAULT_TOKEN
 ```
 
-If either is empty, set them in `proxy.env` and restart the container
-before continuing.
+If either is empty, set them in `proxy.env` and restart the container before continuing.
 
 ### 2. Dry-run the migration
 
 ```bash
-docker compose exec mcp-proxy cullis-proxy migrate-org-ca-to-vault --dry-run --yes
+docker compose -p cullis-mastio exec mcp-proxy cullis-proxy migrate-org-ca-to-vault --dry-run --yes
 ```
 
 This validates: the DB has the keys, Vault is reachable, the target
@@ -178,7 +166,7 @@ them first.
 ### 3. Run the migration with verification, without clearing the DB
 
 ```bash
-docker compose exec mcp-proxy cullis-proxy migrate-org-ca-to-vault --yes
+docker compose -p cullis-mastio exec mcp-proxy cullis-proxy migrate-org-ca-to-vault --yes
 ```
 
 This step writes the Org CA to Vault and verifies by read-back. It
@@ -213,8 +201,7 @@ Restart the Mastio:
 ./deploy.sh --pull
 ```
 
-Watch the logs for `KMS provider: vault`. Issue a Connector enrollment
-or trigger a cert reissue to confirm signing still works.
+Watch the logs for `KMS provider: vault`. Enroll a fresh agent or trigger a cert reissue (`POST /registry/agents/<id>/rotate-cert`) to confirm signing still works.
 
 ### 5. Clear the DB (optional but recommended)
 
@@ -222,7 +209,7 @@ Once you are satisfied Vault is serving the key correctly in
 production, run the migration once more with `--clear-db`:
 
 ```bash
-docker compose exec mcp-proxy cullis-proxy migrate-org-ca-to-vault \
+docker compose -p cullis-mastio exec mcp-proxy cullis-proxy migrate-org-ca-to-vault \
   --yes --force --clear-db
 ```
 
@@ -286,5 +273,6 @@ audited per request.
 ## Related
 
 - [ADR-031: Vault as Org CA private key store](https://github.com/cullis-security/cullis/blob/main/docs/adrs/adr-031-vault-org-ca-kms-provider.md)
-- [Vault auto-unseal](/docs/operate/vault-auto-unseal/)
-- [Rotating keys](/docs/operate/rotate-keys/)
+- [Vault auto-unseal](vault-auto-unseal) — pair Vault with cloud KMS unseal for zero-touch boot
+- [Rotate keys](rotate-keys) — Org CA rotation procedures, with or without Vault
+- [Disaster recovery](disaster-recovery) — what changes in backup procedure once the Org CA lives in Vault

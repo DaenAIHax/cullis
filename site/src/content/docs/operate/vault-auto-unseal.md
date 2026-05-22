@@ -22,7 +22,7 @@ for emergency operations and never for daily unseal.
 
 | Setup | Use case |
 |-------|----------|
-| Shamir manual (default) | Single operator, dev workstation, sandbox demos |
+| Shamir manual (default) | Single operator, dev workstation, evaluation |
 | Auto-unseal AWS KMS | Production on AWS, on-call rotation, multi-AZ |
 | Auto-unseal Azure Key Vault | Production on Azure |
 | Auto-unseal GCP CKMS | Production on GCP |

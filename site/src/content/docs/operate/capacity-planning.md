@@ -203,8 +203,7 @@ before tagging.
 - **DPoP egress throughput**: measure how many `/v1/egress/...`
   calls per second the proxy can sign-and-verify. CPU-bound on the
   RSA/ECDSA path.
-- **A2A intra-org routing**: measure end-to-end message dispatch
-  through PDP plus broker plus E2E encryption.
+- **MCP tool-call throughput**: measure end-to-end MCP tool dispatch through PDP plus capability gate plus audit chain write.
 - **Enrolment burst**: measure concurrent CSR issuance + DB insert.
 
 The placeholders for each scenario live alongside the live script in
