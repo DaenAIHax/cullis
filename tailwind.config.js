@@ -1,7 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
-    './app/dashboard/templates/**/*.html',
     './mcp_proxy/dashboard/templates/**/*.html',
   ],
   theme: {
