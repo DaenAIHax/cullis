@@ -28,7 +28,7 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 **Identity.** Each agent receives an x509 leaf certificate signed by an organization-owned CA, bound to a SPIFFE SAN, pinned by thumbprint. The certificate is the credential. The Mastio rejects any token presented without the matching client certificate (mTLS RFC 8705 §3) and verifies a DPoP proof (RFC 9449) on every authenticated request, refusing plain Bearer tokens outright.
 
-**Policy.** A policy decision point evaluates each request before the LLM or MCP tool is reached. Default-deny for new sessions, default-allow for messages with optional restrictions. An OPA bundle or a webhook backend is supported, both fail safe on timeout. Capability gates apply per agent and per typed principal (user, workload, agent), so a Frontdesk user can never invoke an agent-only tool by accident.
+**Policy.** A policy decision point evaluates each request before the LLM or MCP tool is reached. Default-deny for new sessions, default-allow for messages with optional restrictions. An OPA bundle or a webhook backend is supported, both fail safe on timeout. Capability gates apply per agent and per typed principal (user, workload, agent), so a human user can never invoke an agent-only tool by accident.
 
 **Audit.** Every accepted action lands as a row in an append-only audit log, hash-chained per organization, optionally anchored to RFC 3161 TSA on a configurable cadence. The chain replays deterministically: an external auditor can verify it offline without holding any Cullis credentials.
 
