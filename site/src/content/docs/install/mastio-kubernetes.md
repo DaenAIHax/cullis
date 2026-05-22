@@ -8,7 +8,7 @@ updated: "2026-04-23"
 
 # Mastio on Kubernetes
 
-**Who this is for**: an operator deploying Cullis on a managed or self-hosted Kubernetes cluster. For a single-host deploy, see [Self-host the Mastio](mastio-self-host) instead.
+**Who this is for**: an operator deploying Cullis on a managed or self-hosted Kubernetes cluster. For a single-host deploy, see [Mastio on Docker](mastio-bundle) instead.
 
 Tested against: `kind`, `k3d`, and managed Kubernetes (EKS / GKE / AKS — pending customer validation at scale).
 
@@ -206,4 +206,4 @@ Full `values.yaml` options are documented inline in the chart.
 - [Enroll agents via BYOCA](../enroll/byoca) — on a k8s cluster, BYOCA is usually the right enrollment method for agent workloads
 - [Enroll agents via SPIRE](../enroll/spire) — if SPIRE is already part of your workload identity fabric
 - [Runbook](../operate/runbook) — production incident response
-- [Self-host the Mastio](mastio-self-host) — the single-host alternative
+- [Mastio on Docker](mastio-bundle) — the single-host alternative
