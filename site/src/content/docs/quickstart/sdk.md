@@ -8,7 +8,7 @@ updated: "2026-05-22"
 
 # Python SDK quickstart
 
-**Scope of this page**: enrollment + transport-layer authentication. LLM completions and MCP tool calls (`client.chat_completion`, `client.call_mcp_tool`) are documented on their own pages — this one gets you to the point where those calls work.
+**Scope of this page**: enrollment + transport-layer authentication. LLM completions and MCP tool calls (`client.chat_completion`, `client.call_mcp_tool`) get you to the point where those calls work; companion pages for the call surfaces are in progress. Until they land, the reference agent in `agent_kyc_screener/main_stack.py` (cullis-enterprise repo) shows the full loop end-to-end.
 
 **Python only.** TypeScript / Go / Java SDKs are not available publicly.
 
@@ -20,8 +20,6 @@ The flow is two phases that happen at different times by different people:
 2. **Runtime** (every agent start, agent itself). Agent reads those files and authenticates to Mastio via mTLS.
 
 > **Need a Mastio to talk to?** A single-host Docker bundle gives you `https://localhost:9443` in two commands — see [Install Mastio on Docker](../install/mastio-bundle). The rest of this page uses `https://mastio.acme.corp` as a placeholder; substitute the host you actually reach.
-
-> **Known issue, current release**: `client.chat_completion()` has a DPoP pinning bug that surfaces as a 401 with no auto-retry. Workaround in the reference agents is a direct `httpx.Client(cert=...)` call against `POST /v1/llm/chat` — `agent_kyc_screener/main_stack.py` lines 162–176 in the demo stack shows the pattern. mTLS still applies, only the SDK helper path is broken. Tracked, fix on the roadmap.
 
 ## 1. Install
 
@@ -52,6 +50,10 @@ The agent's runtime identity is **three files**:
 - `dpop.jwk` — EC P-256 private key bound to the cert thumbprint (DPoP, [RFC 9449](https://datatracker.ietf.org/doc/html/rfc9449) — a JWT that proves the request comes from the holder of the matching private key, not just a token bearer)
 
 **A note on agent IDs.** Cullis identifies agents as `<org-id>::<agent-name>` (e.g. `orga::kyc-screener`). When you call the **raw HTTP admin API** you pass the full `agent_id`. When you call the **SDK** you pass only `agent_name` — the SDK derives the org from the admin token and prepends it. The two paths show both styles below.
+
+**A note on `capabilities`.** Free-form strings. There is no closed vocabulary. The convention is `<area>.<verb>` (e.g. `kyc.read`, `kyc.submit`, `portfolio.place_order`) but Mastio does not validate the syntax at enrollment. What matters is that the strings here **match exactly** the capabilities required by the MCP tools the agent will call — Mastio's capability gate compares them literally when a tool is dispatched. Each MCP tool declares its required capability in its server manifest; ask the team that operates the MCP server for the list, or list them at runtime with `client.list_mcp_tools()`.
+
+**A note on `X-Admin-Secret`.** It's the Mastio operator secret. First-boot wizard bcrypts it into Vault; the env var (`MCP_PROXY_ADMIN_SECRET`) is consulted only when the hash is empty. Rotation is via dashboard / `proxy.env` rotate + restart. Full details: [Configuration reference](../reference/configuration) (search `MCP_PROXY_ADMIN_SECRET`) and [Runbook § Admin lockout](../operate/runbook#7-admin-lockout) for the recovery flow.
 
 Pick one of the three provisioning paths depending on whether your org already has a PKI.
 
