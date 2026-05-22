@@ -34,7 +34,7 @@ import Layout from '../layouts/Layout.astro';
           </p>
           <div class="hero-actions reveal" data-delay="3">
             <a href="#quickstart" class="btn btn-primary">Get the Mastio bundle</a>
-            <a href="/insurance" class="btn btn-ghost">Insurance scenario</a>
+            <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="btn btn-ghost">Read the code</a>
           </div>
           <div class="hero-meta reveal" data-delay="4">
             <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="hero-meta-link">
@@ -173,7 +173,7 @@ import Layout from '../layouts/Layout.astro';
               propagates in seconds. Addresses EU AI Act Art. 12 logging
               and DORA Art. 28 cryptographic identity per action.
             </p>
-            <a class="feature-link" href="/architecture#identity">Identity model →</a>
+            <a class="feature-link" href="https://github.com/cullis-security/cullis#cullis-mastio">Identity model →</a>
           </li>
           <li class="feature-item" data-feature="agents">
             <div class="feature-num">02</div>
@@ -186,7 +186,7 @@ import Layout from '../layouts/Layout.astro';
               EU AI Act Art. 14 human oversight and Annex III high-risk
               segregation of duties.
             </p>
-            <a class="feature-link" href="/architecture#registry">Policy model →</a>
+            <a class="feature-link" href="https://github.com/cullis-security/cullis#cullis-mastio">Policy model →</a>
           </li>
           <li class="feature-item" data-feature="audit">
             <div class="feature-num">03</div>
@@ -198,7 +198,7 @@ import Layout from '../layouts/Layout.astro';
               your IT team. Addresses EU AI Act Art. 12 + Art. 13
               transparency and EIOPA Aug 2025 record-keeping requirements.
             </p>
-            <a class="feature-link" href="/architecture#audit">Audit chain →</a>
+            <a class="feature-link" href="https://github.com/cullis-security/cullis#cullis-mastio">Audit chain →</a>
           </li>
         </ol>
 
@@ -242,28 +242,18 @@ import Layout from '../layouts/Layout.astro';
 
       <ul class="shapes reveal" data-delay="3">
         <li>
-          <span class="shape-name">Connector</span>
-          <span class="shape-where">laptop daemon · Claude Desktop, Cursor, Cline, LibreChat, Cherry Studio · macOS, Linux, Windows</span>
+          <span class="shape-name">Cullis Mastio</span>
+          <span class="shape-where">org gateway · agent CA, policy enforcement, audit chain, MCP reverse proxy, embedded AI gateway · self-hosted container</span>
         </li>
         <li>
-          <span class="shape-name">Cullis Chat</span>
-          <span class="shape-where">browser SPA · single power user or multi-user SSO deployment (Frontdesk)</span>
-        </li>
-        <li>
-          <span class="shape-name">SDK</span>
-          <span class="shape-where">backend services · in-process Python · MCP-compatible</span>
+          <span class="shape-name">Cullis SDK</span>
+          <span class="shape-where">Python client used by autonomous agents · mTLS + DPoP + chat_completion + MCP tool calls · backend services, in-process</span>
         </li>
         <li>
           <span class="shape-name">SPIRE / K8s</span>
           <span class="shape-where">Kubernetes workloads · existing identity fabric</span>
         </li>
       </ul>
-
-      <p class="day-2-note reveal" data-delay="4">
-        ↳ For cross-organization agent-to-agent routing, see
-        <a href="/architecture#federation">Cullis Court</a>
-        (Day-2 federation layer).
-      </p>
     </div>
   </section>
 
@@ -279,14 +269,15 @@ import Layout from '../layouts/Layout.astro';
         </div>
         <h2 class="reveal" data-delay="1">
           The pilots that don't graduate.<br />
-          <em>Three demos that do.</em>
+          <em>Three scenarios that do.</em>
         </h2>
         <p class="reveal" data-delay="2">
-          Three reference agents shipped in
-          <code>sandbox/agents-demo/</code>. Two map directly to
-          Anthropic Finance Agent templates announced 5 May 2026, one
-          is Cullis-unique. Stack heterogeneity (Claude + OpenAI) proves
-          the governance layer is LLM-agnostic.
+          Three production scenarios that show how Mastio governs the
+          autonomous-agent workflows EU finance and insurance teams are
+          trying to graduate. Two map directly to Anthropic Finance Agent
+          templates announced 5 May 2026, one is Cullis-unique. Stack
+          heterogeneity (Claude + OpenAI) proves the governance layer is
+          LLM-agnostic.
         </p>
       </div>
 
@@ -298,9 +289,9 @@ import Layout from '../layouts/Layout.astro';
             Entity file assembly, document review, AML escalation. The
             published Anthropic template plus Cullis primitives that
             satisfy EU AI Act Art. 14 (human oversight) and Art. 12
-            (logging). Demo flow: User-to-Agent in Frontdesk dropdown.
+            (logging). Per-agent cert binds every screening action to a
+            verifiable identity in the audit chain.
           </p>
-          <a class="use-case-link" href="https://github.com/cullis-security/cullis/tree/main/sandbox/agents-demo">See the code →</a>
         </article>
 
         <article class="use-case-card">
@@ -313,7 +304,6 @@ import Layout from '../layouts/Layout.astro';
             "Industrials" desk cannot read docs from the "Tech" desk.
             Addresses MAR + EU AI Act Art. 13.
           </p>
-          <a class="use-case-link" href="https://github.com/cullis-security/cullis/tree/main/sandbox/agents-demo">See the code →</a>
         </article>
 
         <article class="use-case-card">
@@ -322,24 +312,9 @@ import Layout from '../layouts/Layout.astro';
           <p>
             Cullis-unique. No Anthropic template. Runs on
             <strong>OpenAI GPT-5 via LiteLLM</strong> to prove
-            LLM-agnostic. Cross-organization A2A federation: bank →
-            external auditor → regulator. DORA Art. 28 cryptographic
-            identity per action.
+            LLM-agnostic. Per-agent cryptographic identity bound to
+            every reporting action satisfies DORA Art. 28.
           </p>
-          <a class="use-case-link" href="https://github.com/cullis-security/cullis/tree/main/sandbox/agents-demo">See the code →</a>
-        </article>
-
-        <article class="use-case-card use-case-card-highlight">
-          <div class="use-case-region">Vertical scenario · Insurance EU</div>
-          <h3>Claim handling end-to-end audit walkthrough</h3>
-          <p>
-            One claim, six agents, one audit chain. From intake to
-            regulator audit 18 months later. AI Act Annex III + IDD
-            Art. 17 + DORA Art. 28 mapped per step. Pilot offer
-            included: 90 days, EUR 15-25k, external pentest Letter of
-            Attestation.
-          </p>
-          <a class="use-case-link" href="/insurance">Read the scenario →</a>
         </article>
       </div>
     </div>
@@ -451,28 +426,25 @@ import Layout from '../layouts/Layout.astro';
         Quickstart
       </div>
       <h2 class="reveal" data-delay="1">
-        Three artefacts. <em>Pull, deploy, use.</em>
+        Two artefacts. <em>Pull, deploy, use.</em>
       </h2>
       <p class="reveal" data-delay="2">
-        Mastio bundle, Frontdesk bundle, Connector. No repo clone, no
-        sandbox. Self-contained tarballs that pull their images from
-        <code>ghcr.io</code> and configure themselves.
+        The Mastio bundle is a self-contained tarball that pulls its
+        image from <code>ghcr.io</code> and configures itself on first
+        boot. The SDK is on PyPI.
       </p>
       <pre class="reveal" data-delay="3"><code># 1. Mastio — org gateway + dashboard on :9443
 curl -L https://github.com/cullis-security/cullis/releases/download/mastio-v0.5.1/cullis-mastio-bundle.tar.gz | tar xz
 cd cullis-mastio-bundle &amp;&amp; ./deploy.sh</code></pre>
-      <pre class="reveal" data-delay="4"><code># 2. Frontdesk — multi-user chat on :8080 (optional)
-curl -L https://github.com/cullis-security/cullis/releases/download/frontdesk-bundle-v0.2.10/cullis-frontdesk-bundle.tar.gz | tar xz
-cd cullis-frontdesk-bundle &amp;&amp; ./deploy.sh</code></pre>
-      <pre class="reveal" data-delay="5"><code># 3. Connector — your IDE through Cullis
-pip install cullis-connector
-cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code></pre>
-      <p class="reveal" data-delay="6">
-        Full per-component install instructions, enrolment paths, and
-        production overrides on the <a href="/docs">docs</a>. The 3
-        demo agents (KYC Screener, Pitchbook Builder, DORA Reporter)
-        ship in <code>sandbox/agents-demo/</code> of the
-        <a href="https://github.com/cullis-security/cullis">repo</a>.
+      <pre class="reveal" data-delay="4"><code># 2. Python SDK for your autonomous agent
+pip install cullis-sdk</code></pre>
+      <p class="reveal" data-delay="5">
+        Mint an agent identity bundle from the Mastio dashboard, point
+        the SDK at the identity directory with
+        <code>CullisClient.from_identity_dir(...)</code>, and the first
+        <code>chat_completion</code> lands as an audit row. Full install
+        instructions, enrolment paths, and production overrides on
+        <a href="https://github.com/cullis-security/cullis">the repo</a>.
       </p>
     </div>
   </section>
@@ -491,14 +463,10 @@ cullis-connector dashboard       # http://127.0.0.1:7777 — 3-step wizard</code
       <p class="reveal" data-delay="2">
         Two to three design partners in EU regulated banking and
         insurance for H2 2026. Conservative scope, reversible, no SLA,
-        signed audit bundle of real production journeys as output. See
-        the <a href="/insurance">insurance scenario</a> for the
-        reference offer (90 days, EUR 15-25k, Letter of Attestation
-        from external pentest included).
+        signed audit bundle of real production journeys as output.
       </p>
       <div class="hero-actions reveal" data-delay="3">
         <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="btn btn-primary">GitHub</a>
-        <a href="/insurance" class="btn btn-ghost">Insurance scenario</a>
         <a href="mailto:hello@cullis.io?subject=Cullis%20pilot%20enquiry" class="btn btn-ghost">Pilot enquiry</a>
       </div>
     </div>

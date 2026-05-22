@@ -43,6 +43,6 @@ The architecture is complete. ADR-001 through ADR-006 are accepted and implement
 
 What does not ship today: an external security audit, an SLA, a production playbook that has been tested against a real incident. This is a research preview. If you want to build on top of it, great — we want your feedback. If you want to run real traffic on it, not yet.
 
-The code is on [GitHub](https://github.com/cullis-security/cullis). The demo runs in about a minute on a laptop. The architecture is documented at length — start with the [Architecture](/architecture) page, then read about the [deployment shapes](/deployment).
+The code is on [GitHub](https://github.com/cullis-security/cullis). The Mastio bundle runs in about a minute on a laptop. The architecture and deployment patterns are documented at length on the repo README. Post-history note: this entry was written before the 2026-05-21 public-surface cleanup, when the public surface still shipped four components (Connector, Frontdesk, Mastio, Court); the current public surface is Mastio + Python SDK, with the rest archived on the private companion repo.
 
 We are open to feedback, security reviews, and ideas. Find us at [hello@cullis.io](mailto:hello@cullis.io).
