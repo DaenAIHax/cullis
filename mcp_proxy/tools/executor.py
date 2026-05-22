@@ -5,6 +5,7 @@ context assembly, handler invocation, and audit logging.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 import time
 from typing import Any
@@ -513,11 +514,26 @@ async def run(
                 duration_ms,
                 request_id,
             )
+            # Resolve the per-call cap lazily — keeps the executor
+            # importable when ``ProxySettings`` cannot be constructed
+            # (test fixtures that monkeypatch only the bits they care
+            # about), at the cost of one dict lookup per success path.
+            try:
+                from mcp_proxy.config import get_settings as _get_settings
+                _max_bytes = _get_settings().audit_detail_max_bytes
+            except Exception:  # noqa: BLE001 — never let config crash audit
+                _max_bytes = 4096
+            success_detail = _build_success_detail(
+                parameters=request.parameters,
+                result=result,
+                max_bytes=_max_bytes,
+            )
             await log_audit(
                 agent_id=agent.agent_id,
                 action="tool_execute",
                 tool_name=tool_name,
                 status="success",
+                detail=success_detail,
                 request_id=request_id,
                 duration_ms=duration_ms,
             )
@@ -605,6 +621,101 @@ async def run(
                 execution_time_ms=duration_ms,
                 denied_reason_code=INTERNAL_ERROR,
             )
+
+
+def _safe_json_value(value: Any) -> Any:
+    """Return a JSON-serialisable surrogate for ``value`` or a repr fallback.
+
+    The audit chain row hash is computed over a canonical JSON encoding of
+    ``detail``, so any non-serialisable input (custom objects, binary
+    blobs, ``datetime``, exceptions) must collapse to a string here before
+    ``json.dumps`` runs in :func:`_build_success_detail`. We never raise:
+    audit on the success path is best-effort metadata, not a gate, and a
+    ``ValueError`` from ``json.dumps`` would otherwise propagate up through
+    ``log_audit`` and turn a successful tool call into a 500. Returning a
+    truncated ``repr(...)`` + ``_non_serializable`` flag preserves
+    business-readable signal without poisoning the chain.
+
+    Containers are walked one level so a single bad leaf doesn't nuke
+    the whole ``parameters`` / ``result_summary`` business signal:
+    ``{"recipient": "acme", "when": datetime}`` becomes
+    ``{"recipient": "acme", "when": {"_non_serializable": True, ...}}``
+    rather than the whole dict collapsing.
+    """
+    # Fast happy path: value is JSON-clean as-is.
+    try:
+        _json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(value, dict):
+        return {str(k): _safe_json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_json_value(v) for v in value]
+    # Leaf-level fallback: keep enough of the repr to identify the
+    # object (class, key fields) without letting a giant binary blob
+    # inflate the audit row.
+    return {
+        "_non_serializable": True,
+        "repr": repr(value)[:512],
+        "type": type(value).__name__,
+    }
+
+
+def _omit_marker(value: Any) -> dict[str, Any]:
+    """Sentinel payload used when ``result_summary`` must be dropped to
+    fit under ``max_bytes``. Keeps the type hint for forensic readers
+    so the operator knows what was elided."""
+    return {"_omitted": True, "type": type(value).__name__}
+
+
+def _build_success_detail(
+    *,
+    parameters: Any,
+    result: Any,
+    max_bytes: int,
+) -> str:
+    """Build the canonical JSON ``detail`` payload for a successful
+    ``tool_execute`` audit row.
+
+    Shape: ``{"parameters": <input>, "result_summary": <result>}``.
+    The encoding is ``json.dumps(..., sort_keys=True, separators=(",",":"))``
+    so the size check is deterministic and the result is a stable input
+    to the per-row hash chain.
+
+    Truncation policy (in order):
+
+      1. Replace non-JSON-serialisable values with the repr fallback
+         from :func:`_safe_json_value`.
+      2. If the payload still exceeds ``max_bytes``, drop
+         ``result_summary`` to ``{"_omitted": True, "type": ...}`` and
+         re-encode with a ``"detail_truncated": True`` flag.
+      3. If still over budget (oversize parameters alone), the helper
+         keeps the truncated marker and trusts ``log_audit``'s outer
+         16 KiB cap to refuse: this is a hard ceiling, not a soft
+         shaping rule, and we'd rather fail-deny than ship a row that
+         lies about its content.
+    """
+    safe_params = _safe_json_value(parameters)
+    safe_result = _safe_json_value(result)
+
+    payload: dict[str, Any] = {
+        "parameters": safe_params,
+        "result_summary": safe_result,
+    }
+    encoded = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= max_bytes:
+        return encoded
+
+    # Drop result first — parameters are usually the load-bearing signal
+    # for "what did the agent ask for", result is the noisier surface.
+    truncated_payload: dict[str, Any] = {
+        "parameters": safe_params,
+        "result_summary": _omit_marker(result),
+        "detail_truncated": True,
+    }
+    return _json.dumps(truncated_payload, sort_keys=True, separators=(",", ":"))
 
 
 def _elapsed_ms(t0: float) -> float:

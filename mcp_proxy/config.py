@@ -375,6 +375,21 @@ class ProxySettings(BaseSettings):
     audit_chain_flush_interval_s: float = 1.0
     audit_chain_disabled: bool = False
 
+    # Per-call cap on the success-path ``detail`` JSON the tool executor
+    # attaches to a ``tool_execute`` audit row (parameters + result
+    # summary). Lives well below ``AUDIT_DETAILS_MAX_BYTES`` (16 KiB hard
+    # cap, see ``mcp_proxy/db.py:368``) so a single noisy tool result
+    # cannot dominate the chain or amplify the per-row hash cost. The
+    # builder serialises ``{"parameters": ..., "result_summary": ...}``
+    # in canonical JSON and truncates with a ``detail_truncated: true``
+    # flag when over budget; non-JSON-serialisable values fall back to
+    # ``repr(...)`` with a ``_non_serializable`` flag. 4 KiB is enough
+    # to keep the business-readable shape (recipient, amounts, dates,
+    # short result blobs) without inviting LLM-shaped chatter into the
+    # append-only table. Operators tune via
+    # ``MCP_PROXY_AUDIT_DETAIL_MAX_BYTES``.
+    audit_detail_max_bytes: int = 4096
+
     # Audit F-A-404 — background flush retry exhaustion.
     # The size-triggered flush from ``append()`` raises
     # ``AuditChainExhausted`` so a caller under ``audit_fail_deny=True``
