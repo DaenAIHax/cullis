@@ -84,7 +84,7 @@ Pull the Mastio bundle, deploy it, enroll an agent identity, install the SDK, ru
 
 ```bash
 # 1. Mastio
-curl -L https://github.com/cullis-security/cullis/releases/download/mastio-v0.5.1/cullis-mastio-bundle.tar.gz | tar xz
+curl -L https://github.com/cullis-security/cullis/releases/download/mastio-v0.5.2/cullis-mastio-bundle.tar.gz | tar xz
 cd cullis-mastio-bundle && ./deploy.sh
 
 # 2. Open https://localhost:9443/proxy/login, accept the self-signed TLS warning,
@@ -124,7 +124,7 @@ Alpha. The Mastio runs end-to-end on a laptop and ships from a public release tr
 
 | Component | Latest | What it is |
 |---|---|---|
-| **Cullis Mastio** | [`mastio-v0.5.1`](https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.1) | Org gateway, agent CA, policy enforcement, audit chain, MCP reverse proxy, embedded AI gateway |
+| **Cullis Mastio** | [`mastio-v0.5.2`](https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.2) | Org gateway, agent CA, policy enforcement, audit chain, MCP reverse proxy, embedded AI gateway |
 | **Cullis SDK** | [`cullis-sdk 0.1.3`](https://pypi.org/project/cullis-sdk/) | Python client used by autonomous agents to talk to Mastio |
 
 Use Cullis in evaluation, integration, and internal deploys. Talk to us before putting it in front of regulated production traffic.
