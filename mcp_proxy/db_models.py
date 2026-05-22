@@ -125,12 +125,25 @@ class AuditLogEntry(Base):
     chain_seq = Column(Integer, nullable=True)
     prev_hash = Column(Text, nullable=True)
     row_hash = Column(Text, nullable=True)
+    # F-A-403 / migrations 0031, 0033, 0034, 0042 — fields originally
+    # introduced by alembic-only migrations. Declaring them here too
+    # lets ``metadata.create_all`` (used under
+    # ``PROXY_SKIP_MIGRATIONS=1`` in tests) build a schema that matches
+    # the production INSERT shape. Without the declarations the test
+    # harness either had to run the full alembic chain (slow) or fail
+    # at log_audit time with "table audit_log has no column named
+    # dpop_jkt".
+    hash_format = Column(Text, nullable=True)
+    dpop_jkt = Column(String(length=64), nullable=True)
+    on_behalf_of_user_id = Column(String(length=255), nullable=True)
 
     __table_args__ = (
         Index("idx_audit_log_agent_id", "agent_id"),
         Index("idx_audit_log_timestamp", "timestamp"),
         Index("idx_audit_log_request_id", "request_id"),
         Index("idx_audit_log_chain_seq", "chain_seq", unique=True),
+        Index("idx_audit_log_dpop_jkt", "dpop_jkt"),
+        Index("idx_audit_log_on_behalf_of_user", "on_behalf_of_user_id"),
     )
 
 

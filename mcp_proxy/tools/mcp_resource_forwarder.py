@@ -274,11 +274,48 @@ async def forward_to_mcp_resource(
             f"MCP resource RPC error: {err.get('message', 'unknown')}"
         )
 
+    rpc_result = data.get("result") if isinstance(data, dict) else data
+    # Mirror the executor success-path enrichment (PR feat/audit-detail-
+    # on-success-path): forward the agent's parameters + a result summary
+    # into ``local_audit.details`` so the dashboard ``/proxy/audit`` view
+    # shows business content for resource calls too, not just metadata.
+    # ``_build_success_detail`` already applies the per-call cap +
+    # truncation flag; we decode it back into a dict so it nests cleanly
+    # under ``audit_details`` instead of being a JSON string inside JSON.
+    from mcp_proxy.config import get_settings as _get_settings
+    from mcp_proxy.tools.executor import _build_success_detail
+    try:
+        _settings = _get_settings()
+        _max_bytes = _settings.audit_detail_max_bytes
+        _redaction_settings = {
+            "capture_parameters": _settings.audit_capture_tool_parameters,
+            "capture_result": _settings.audit_capture_tool_result,
+            "parameters_denylist": list(
+                _settings.audit_capture_tool_parameters_denylist,
+            ),
+            "result_denylist": list(
+                _settings.audit_capture_tool_result_denylist,
+            ),
+        }
+    except Exception:  # noqa: BLE001 — audit best-effort
+        _max_bytes = 4096
+        _redaction_settings = None
+    try:
+        success_payload = json.loads(_build_success_detail(
+            parameters=ctx.parameters,
+            result=rpc_result,
+            max_bytes=_max_bytes,
+            tool_name=tool_def.name,
+            redaction_settings=_redaction_settings,
+        ))
+    except Exception:  # noqa: BLE001 — never let the audit helper crash forward
+        success_payload = {}
+    enriched_details = {**audit_details, **success_payload}
     await append_local_audit(
         event_type="resource_call",
         result="ok",
         agent_id=ctx.agent_id,
         org_id=ctx.org_id,
-        details=audit_details,
+        details=enriched_details,
     )
-    return data.get("result") if isinstance(data, dict) else data
+    return rpc_result
