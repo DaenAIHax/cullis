@@ -5,200 +5,594 @@ import { getCollection } from 'astro:content';
 const all = await getCollection('docs');
 const sorted = all.sort((a, b) => a.data.order - b.data.order);
 
-// group by category
 const groups: Record<string, typeof sorted> = {};
 for (const doc of sorted) {
   if (!groups[doc.data.category]) groups[doc.data.category] = [];
   groups[doc.data.category].push(doc);
 }
-const categoryOrder = ['Quickstart', 'Install', 'Enroll', 'Operate', 'Reference'];
+const categoryOrder = ['Quickstart', 'Install', 'Enroll', 'Operate', 'Security', 'Reference'];
 const orderedCategories = Object.keys(groups).sort(
   (a, b) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)
 );
+
+const categoryIcons: Record<string, string> = {
+  Quickstart: 'M13 2L3 14h7l-1 8 10-12h-7l1-8z',
+  Install: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3',
+  Enroll: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4',
+  Operate: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  Security: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+  Reference: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20 M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
+};
+
+const commonPaths = [
+  {
+    title: 'Install Mastio on Docker',
+    description: 'Single-host self-hosted deploy. Two commands from tarball to a gateway with admin dashboard.',
+    href: '/docs/install/mastio-bundle',
+    eyebrow: 'Install · single host',
+  },
+  {
+    title: 'Install Mastio on Kubernetes',
+    description: 'Production deploy via Helm charts — ingress, BYOCA, dev vs. prod values.',
+    href: '/docs/install/mastio-kubernetes',
+    eyebrow: 'Install · multi-node',
+  },
+  {
+    title: 'Python SDK quickstart',
+    description: 'From pip install to a Mastio-authenticated agent calling LLMs + MCP tools.',
+    href: '/docs/quickstart/sdk',
+    eyebrow: 'Build · Python',
+  },
+  {
+    title: 'BYOCA enrollment',
+    description: 'Use your existing PKI to enroll agents. Mastio verifies chain, pins thumbprint.',
+    href: '/docs/enroll/byoca',
+    eyebrow: 'Enroll · existing PKI',
+  },
+  {
+    title: 'SPIRE enrollment',
+    description: 'Hand the workload-API SVID to the SDK; Mastio pins it as the agent identity.',
+    href: '/docs/enroll/spire',
+    eyebrow: 'Enroll · workload identity',
+  },
+  {
+    title: 'Production runbook',
+    description: 'Incident response, rotate keys, audit export, disaster recovery procedures.',
+    href: '/docs/operate/runbook',
+    eyebrow: 'Operate · on-call',
+  },
+];
 ---
 
-<Layout title="Docs — Cullis" description="Operational and integration guides for Cullis.">
-  <section class="page-head">
-    <div class="container">
-      <div class="head-grid">
-        <aside class="head-marginalia reveal">
-          <div class="scribble">CLLS-DOCS</div>
-          <div class="folio">§ <em>Documentation</em></div>
-        </aside>
-        <div>
-          <div class="eyebrow reveal" data-delay="1">
-            <span class="eyebrow-number">Guides</span>
-            {all.length} articles
+<Layout title="Docs — Cullis" description="Run a Cullis Mastio and authenticate your first agent." theme="light">
+  <section class="doc-shell">
+    <div class="container wide">
+      <aside class="doc-sidebar">
+        <a href="/docs" class="sidebar-home is-active-home">
+          <span class="sh-label">Docs</span>
+          <span class="sh-count">{all.length} articles</span>
+        </a>
+        <a href="/docs" class="overview-link is-active">Overview</a>
+        {orderedCategories.map((cat) => (
+          <div class="sidebar-group">
+            <div class="sidebar-cat">
+              <svg class="sidebar-cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d={categoryIcons[cat] || categoryIcons['Reference']} />
+              </svg>
+              <span>{cat}</span>
+            </div>
+            <ul>
+              {groups[cat].map((doc) => (
+                <li>
+                  <a href={`/docs/${doc.id}`}>{doc.data.title}</a>
+                </li>
+              ))}
+            </ul>
           </div>
-          <h1 class="reveal" data-delay="2">
-            Operational <em>docs</em>.
-          </h1>
-          <p class="lead reveal" data-delay="3">
-            Hands-on guides for operators deploying Cullis in real environments.
-            Quickstart paths, runbooks for the failures that wake you up,
-            SPIFFE onboarding for teams who already run SPIRE.
-          </p>
+        ))}
+      </aside>
+
+      <main class="doc-main">
+        <div class="doc-meta">
+          <span class="dm-cat">Get started</span>
         </div>
-      </div>
-    </div>
-  </section>
 
-  <hr class="divider" />
+        <h1 class="doc-title">Get started with Cullis</h1>
+        <p class="doc-description">
+          Run a self-hosted Mastio gateway and authenticate your first
+          autonomous agent. Two commands deploy the gateway, one
+          enrollment provisions an agent, and the SDK does the rest.
+        </p>
 
-  <section class="docs-grid-section">
-    <div class="container">
-      {orderedCategories.map((cat) => (
-        <div class="cat-block reveal">
-          <h2 class="cat-title">{cat}</h2>
-          <div class="cat-grid">
-            {groups[cat].map((doc) => (
-              <a href={`/docs/${doc.id}`} class="doc-card">
-                <div class="dc-meta">
-                  <span class="dc-cat">{doc.data.category}</span>
-                  {doc.data.updated && <span class="dc-date">upd. {doc.data.updated}</span>}
-                </div>
-                <h3>{doc.data.title}</h3>
-                {doc.data.description && <p>{doc.data.description}</p>}
-                <div class="dc-arrow">Read →</div>
+        <article class="prose">
+          <section class="step-feature">
+            <div class="sf-copy">
+              <h2>Deploy the Mastio</h2>
+              <p>
+                The Mastio is the org-scoped gateway that mints agent
+                certificates, enforces policy on every MCP tool call,
+                and writes an append-only audit chain. The bundle is
+                a self-contained <code>docker compose</code> stack —
+                no source tree required.
+              </p>
+              <div class="sf-actions">
+                <a href="/docs/install/mastio-bundle" class="btn-primary">
+                  Install on Docker
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                    <polyline points="12 5 19 12 12 19"/>
+                  </svg>
+                </a>
+                <a href="/docs/install/mastio-kubernetes" class="btn-secondary">
+                  Deploy on Kubernetes
+                </a>
+              </div>
+            </div>
+            <div class="sf-visual">
+              <pre class="code-preview"><code><span class="prompt">$</span> curl -L -o mastio.tar.gz \
+    https://cullis.io/download/latest
+<span class="prompt">$</span> tar xzf mastio.tar.gz
+<span class="prompt">$</span> cd cullis-mastio-bundle/
+<span class="prompt">$</span> ./deploy.sh
+
+<span class="comment"># Mints Org CA + admin account + nginx TLS</span>
+<span class="comment"># Open https://localhost:9443/proxy/login</span></code></pre>
+            </div>
+          </section>
+
+          <h2>Common paths</h2>
+          <p class="cp-lead">
+            Six entry points cover most operator + developer workflows.
+            Pick the one that matches what you are doing right now.
+          </p>
+
+          <div class="paths-grid">
+            {commonPaths.map((p) => (
+              <a href={p.href} class="path-card">
+                <span class="pc-eyebrow">{p.eyebrow}</span>
+                <h3>{p.title}</h3>
+                <p>{p.description}</p>
+                <span class="pc-arrow">Read
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                    <polyline points="12 5 19 12 12 19"/>
+                  </svg>
+                </span>
               </a>
             ))}
           </div>
-        </div>
-      ))}
+
+          <h2>How Cullis fits</h2>
+          <p>
+            Cullis sits between your autonomous agents and the LLMs,
+            MCP tools, and SaaS APIs they call. Every request is
+            authenticated with a cert + DPoP proof bound to the agent
+            identity, passed through a policy decision point, and
+            written to a tamper-evident audit chain.
+          </p>
+          <ul>
+            <li><strong>Mastio</strong> — org gateway. Cert mint, policy enforcement, audit chain, MCP reverse-proxy, embedded AI gateway (LiteLLM).</li>
+            <li><strong>Python SDK</strong> — agent client. Loads cert + DPoP key from disk, presents mTLS to Mastio, makes chat completions and MCP tool calls.</li>
+          </ul>
+        </article>
+      </main>
     </div>
   </section>
 </Layout>
 
 <style>
-  .page-head {
-    padding-top: clamp(7rem, 14vw, 10rem);
-    padding-bottom: clamp(3rem, 6vw, 5rem);
+  .doc-shell {
+    padding: clamp(6rem, 12vw, 9rem) 0 4rem;
   }
 
-  .head-grid {
+  .container.wide {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 var(--gutter);
     display: grid;
-    grid-template-columns: minmax(170px, 0.6fr) minmax(0, 3fr);
-    gap: clamp(1rem, 3vw, 3rem);
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    gap: clamp(2rem, 5vw, 5rem);
     align-items: start;
   }
 
-  .head-marginalia {
-    padding-right: 1rem;
+  /* Sidebar (mirrors DocLayout.astro) */
+  .doc-sidebar {
+    position: sticky;
+    top: 6rem;
+    padding: 1.5rem 0;
     border-right: 1px solid var(--border-subtle);
+    padding-right: 1.5rem;
+    max-height: calc(100vh - 8rem);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-medium) transparent;
   }
 
-  .page-head h1 {
-    font-size: clamp(2.5rem, 6vw, 5rem);
+  .sidebar-home {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem 0;
+    margin-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+    text-decoration: none;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+  }
+
+  .sh-label {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.6rem;
+    color: var(--text-primary);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .sh-count {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+
+  .overview-link {
+    display: block;
+    padding: 0.42rem 0.75rem;
+    margin: 0 0 1.5rem;
+    font-family: var(--font-body);
+    font-size: 0.92rem;
+    font-weight: 600;
+    text-decoration: none;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-primary);
+    background: rgba(8, 145, 178, 0.10);
+  }
+
+  .sidebar-group {
     margin-bottom: 1.5rem;
   }
 
-  .lead {
-    font-size: clamp(1.05rem, 1.5vw, 1.2rem);
-    line-height: 1.7;
-    max-width: 62ch;
-    color: var(--text-secondary);
-  }
-
-  .docs-grid-section {
-    padding: clamp(3rem, 7vw, 6rem) 0;
-  }
-
-  .cat-block {
-    margin-bottom: 4rem;
-  }
-
-  .cat-block:last-child { margin-bottom: 0; }
-
-  .cat-title {
-    font-family: var(--font-display);
-    font-size: 1.85rem;
-    font-weight: 400;
-    color: var(--text-primary);
-    margin: 0 0 1.75rem;
-    padding-bottom: 0.7rem;
-    border-bottom: 1px solid var(--border-medium);
-  }
-
-  .cat-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1rem;
-  }
-
-  .doc-card {
+  .sidebar-cat {
     display: flex;
-    flex-direction: column;
-    padding: 1.5rem 1.5rem 1.3rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.4rem 0.6rem;
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+  }
+
+  .sidebar-cat-icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    opacity: 0.85;
+  }
+
+  .sidebar-group ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .sidebar-group a {
+    display: block;
+    padding: 0.42rem 0.75rem 0.42rem 2rem;
+    margin: 1px 0;
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    color: var(--text-secondary);
     text-decoration: none;
-    transition: all 0.3s ease;
+    border: none;
+    border-radius: 6px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .sidebar-group a:hover {
+    color: var(--text-primary);
+    background: rgba(10, 37, 64, 0.05);
+  }
+
+  /* Main */
+  .doc-main {
+    min-width: 0;
+  }
+
+  .doc-meta {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+
+  .dm-cat {
+    color: var(--accent-cyan);
+    padding: 0.25rem 0.7rem;
+    border: 1px solid var(--accent-cyan-dim);
+    border-radius: 999px;
+  }
+
+  .doc-title {
+    font-family: var(--font-display);
+    font-size: clamp(2.2rem, 5vw, 3.6rem);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.028em;
+    color: var(--text-primary);
+    margin: 0 0 1rem;
+  }
+
+  .doc-description {
+    font-size: 1.12rem;
+    line-height: 1.65;
+    color: var(--text-secondary);
+    max-width: 62ch;
+    margin-bottom: 3rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .prose {
+    color: var(--text-secondary);
+    font-size: 1.02rem;
+    line-height: 1.75;
+  }
+
+  .prose :global(h2) {
+    font-family: var(--font-display);
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border-subtle);
+    line-height: 1.2;
+  }
+
+  .prose :global(p) {
+    margin-bottom: 1.2em;
+    max-width: 68ch;
+  }
+
+  .prose :global(strong) {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .prose :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    padding: 0.15em 0.4em;
+    background: rgba(10, 37, 64, 0.06);
+    border-radius: 4px;
+    color: var(--accent-cyan);
+  }
+
+  .prose :global(ul) {
+    margin: 1.25rem 0;
+    padding-left: 1.75rem;
+  }
+
+  .prose :global(li) {
+    margin-bottom: 0.5rem;
+    line-height: 1.7;
+  }
+
+  /* Step feature (Stripe-style "Create an account" block) */
+  .step-feature {
+    display: grid;
+    grid-template-columns: 1fr 1.05fr;
+    gap: clamp(2rem, 5vw, 4rem);
+    align-items: start;
+    margin: 1.5rem 0 4rem;
+    padding-bottom: 3rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .sf-copy h2 {
+    margin-top: 0 !important;
+    border-bottom: none !important;
+    padding-bottom: 0 !important;
+  }
+
+  .sf-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.7rem 1.15rem;
+    border-radius: 8px;
+    font-family: var(--font-body);
+    font-size: 0.92rem;
+    font-weight: 600;
+    text-decoration: none;
+    border: none;
+    transition: all 0.15s ease;
+  }
+
+  .btn-primary {
+    background: #0A2540;
+    color: #FFFFFF;
+    box-shadow: 0 1px 2px rgba(10, 37, 64, 0.08);
+  }
+
+  .btn-primary:hover {
+    background: #1E3A5F;
+    box-shadow:
+      0 0 0 3px rgba(0, 229, 199, 0.18),
+      0 6px 18px -6px rgba(10, 37, 64, 0.35),
+      0 0 32px -8px rgba(0, 229, 199, 0.45);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .btn-secondary {
+    background: #FFFFFF;
+    color: var(--text-primary);
+    border: 1px solid var(--border-medium);
+  }
+
+  .btn-secondary:hover {
+    border-color: rgba(8, 145, 178, 0.45);
+    background: rgba(8, 145, 178, 0.04);
+  }
+
+  .sf-visual {
     position: relative;
   }
 
-  .doc-card:hover {
-    border-color: var(--accent-cyan-dim);
-    transform: translateY(-3px);
-    box-shadow: 0 10px 30px rgba(0,0,0,0.3), 0 0 30px var(--accent-cyan-glow);
+  .code-preview {
+    background: #0A0F1A;
+    border: 1px solid rgba(0, 229, 199, 0.18);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.7;
+    color: #CBD5E1;
+    box-shadow:
+      0 1px 2px rgba(10, 37, 64, 0.08),
+      0 20px 40px -20px rgba(10, 37, 64, 0.4),
+      0 0 36px -12px rgba(0, 229, 199, 0.22);
+    overflow-x: auto;
   }
 
-  .dc-meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+  .code-preview .prompt {
+    color: #00E5C7;
+    user-select: none;
+    margin-right: 0.4em;
+  }
+
+  .code-preview .comment {
+    color: #64748B;
+    font-style: italic;
+  }
+
+  /* Common paths grid */
+  .cp-lead {
+    margin-top: -0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .paths-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 1rem;
-    margin-bottom: 1rem;
+    margin: 1.5rem 0 3rem;
+  }
+
+  .path-card {
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem 1.5rem 1.25rem;
+    background: #FFFFFF;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    text-decoration: none;
+    transition: all 0.18s ease;
+    position: relative;
+    box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04);
+  }
+
+  .path-card:hover {
+    border-color: rgba(8, 145, 178, 0.35);
+    transform: translateY(-2px);
+    box-shadow:
+      0 1px 2px rgba(10, 37, 64, 0.06),
+      0 12px 28px -12px rgba(10, 37, 64, 0.18),
+      0 0 0 1px rgba(0, 229, 199, 0.15);
+  }
+
+  .pc-eyebrow {
     font-family: var(--font-mono);
     font-size: 0.66rem;
     letter-spacing: 0.15em;
     text-transform: uppercase;
-  }
-
-  .dc-cat {
     color: var(--accent-cyan);
-    padding: 0.25rem 0.6rem;
-    border: 1px solid var(--accent-cyan-dim);
-    border-radius: 2px;
+    margin-bottom: 0.85rem;
   }
 
-  .dc-date {
-    color: var(--text-tertiary);
-  }
-
-  .doc-card h3 {
+  .path-card h3 {
     font-family: var(--font-display);
-    font-size: 1.3rem;
-    font-weight: 400;
+    font-size: 1.18rem;
+    font-weight: 700;
+    letter-spacing: -0.016em;
     color: var(--text-primary);
-    margin: 0 0 0.6rem;
+    margin: 0 0 0.55rem;
     line-height: 1.25;
   }
 
-  .doc-card p {
-    font-size: 0.92rem;
-    line-height: 1.55;
+  .path-card p {
+    font-size: 0.9rem !important;
+    line-height: 1.55 !important;
     color: var(--text-secondary);
-    margin: 0 0 1rem;
+    margin: 0 0 1rem !important;
     flex-grow: 1;
+    max-width: none !important;
   }
 
-  .dc-arrow {
+  .pc-arrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--accent-cyan);
-    margin-top: 0.5rem;
+    margin-top: auto;
+  }
+
+  .pc-arrow svg {
+    width: 12px;
+    height: 12px;
+    transition: transform 0.15s ease;
+  }
+
+  .path-card:hover .pc-arrow svg {
+    transform: translateX(3px);
   }
 
   @media (max-width: 900px) {
-    .head-grid { grid-template-columns: 1fr; }
-    .head-marginalia {
-      padding-right: 0;
-      padding-bottom: 1rem;
+    .container.wide {
+      grid-template-columns: 1fr;
+    }
+    .doc-sidebar {
+      position: static;
       border-right: none;
       border-bottom: 1px solid var(--border-subtle);
+      padding-right: 0;
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+      max-height: none;
     }
-    .cat-grid { grid-template-columns: 1fr; }
+    .step-feature {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

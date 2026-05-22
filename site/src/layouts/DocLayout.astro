@@ -25,9 +25,19 @@ const categoryOrder = ['Quickstart', 'Install', 'Enroll', 'Operate', 'Security',
 const orderedCategories = Object.keys(groups).sort(
   (a, b) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)
 );
+
+// Icon paths per category (stroke-based, minimal)
+const categoryIcons: Record<string, string> = {
+  Quickstart: 'M13 2L3 14h7l-1 8 10-12h-7l1-8z',
+  Install: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3',
+  Enroll: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4',
+  Operate: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  Security: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+  Reference: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20 M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z',
+};
 ---
 
-<Layout title={`${title} — Cullis docs`} description={description}>
+<Layout title={`${title} — Cullis docs`} description={description} theme="light">
   <section class="doc-shell">
     <div class="container wide">
       <aside class="doc-sidebar">
@@ -37,7 +47,12 @@ const orderedCategories = Object.keys(groups).sort(
         </a>
         {orderedCategories.map((cat) => (
           <div class="sidebar-group">
-            <div class="sidebar-cat">{cat}</div>
+            <div class="sidebar-cat">
+              <svg class="sidebar-cat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d={categoryIcons[cat] || categoryIcons['Reference']} />
+              </svg>
+              <span>{cat}</span>
+            </div>
             <ul>
               {groups[cat].map((doc) => (
                 <li>
@@ -53,8 +68,15 @@ const orderedCategories = Object.keys(groups).sort(
 
       <main class="doc-main">
         <div class="doc-meta">
-          <span class="dm-cat">{category}</span>
+          <a href="/docs" class="dm-cat">{category}</a>
           {updated && <span class="dm-updated">updated {updated}</span>}
+          <button type="button" class="dm-copy" data-copy-page aria-label="Copy page URL">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <span>Copy page</span>
+          </button>
         </div>
 
         <h1 class="doc-title">{title}</h1>
@@ -113,10 +135,11 @@ const orderedCategories = Object.keys(groups).sort(
 
   .sh-label {
     font-family: var(--font-display);
-    font-style: italic;
+    font-weight: 700;
     font-size: 1.6rem;
     color: var(--text-primary);
     line-height: 1;
+    letter-spacing: -0.02em;
   }
 
   .sh-count {
@@ -128,21 +151,34 @@ const orderedCategories = Object.keys(groups).sort(
   }
 
   .sidebar-group {
-    margin-bottom: 1.75rem;
+    margin-bottom: 1.5rem;
   }
 
   .sidebar-cat {
-    font-family: var(--font-mono);
-    font-size: 0.68rem;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--accent-cyan);
-    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.4rem 0.6rem;
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+  }
+
+  .sidebar-cat-icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    opacity: 0.85;
   }
 
   .sidebar-group ul {
     list-style: none;
     padding: 0;
+    margin: 0;
   }
 
   .sidebar-group li {
@@ -151,24 +187,26 @@ const orderedCategories = Object.keys(groups).sort(
 
   .sidebar-group a {
     display: block;
-    padding: 0.4rem 0 0.4rem 0.75rem;
+    padding: 0.42rem 0.75rem 0.42rem 2rem;
+    margin: 1px 0;
     font-family: var(--font-body);
-    font-size: 0.92rem;
+    font-size: 0.88rem;
     color: var(--text-secondary);
     text-decoration: none;
     border: none;
-    border-left: 2px solid transparent;
-    transition: all 0.2s ease;
+    border-radius: 6px;
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
   .sidebar-group a:hover {
     color: var(--text-primary);
-    border-left-color: var(--border-medium);
+    background: rgba(10, 37, 64, 0.05);
   }
 
   .sidebar-group a.is-active {
-    color: var(--accent-cyan);
-    border-left-color: var(--accent-cyan);
+    color: var(--text-primary);
+    background: rgba(8, 145, 178, 0.10);
+    font-weight: 600;
   }
 
   /* Main */
@@ -179,11 +217,11 @@ const orderedCategories = Object.keys(groups).sort(
   .doc-meta {
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: 1rem;
     margin-bottom: 1.5rem;
     font-family: var(--font-mono);
     font-size: 0.7rem;
-    letter-spacing: 0.15em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--text-tertiary);
   }
@@ -192,15 +230,58 @@ const orderedCategories = Object.keys(groups).sort(
     color: var(--accent-cyan);
     padding: 0.25rem 0.7rem;
     border: 1px solid var(--accent-cyan-dim);
-    border-radius: 2px;
+    border-radius: 999px;
+    text-decoration: none;
+    transition: background 0.15s ease;
+  }
+
+  .dm-cat:hover {
+    background: rgba(8, 145, 178, 0.08);
+  }
+
+  .dm-copy {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #FFFFFF;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 0.4rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04);
+  }
+
+  .dm-copy svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .dm-copy:hover {
+    color: var(--text-primary);
+    border-color: rgba(8, 145, 178, 0.35);
+    box-shadow:
+      0 1px 2px rgba(10, 37, 64, 0.06),
+      0 0 0 1px rgba(0, 229, 199, 0.12);
+  }
+
+  .dm-copy.copied {
+    color: var(--accent-cyan);
+    border-color: rgba(8, 145, 178, 0.5);
   }
 
   .doc-title {
     font-family: var(--font-display);
     font-size: clamp(2.2rem, 5vw, 3.6rem);
-    font-weight: 400;
+    font-weight: 700;
     line-height: 1.1;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.028em;
     color: var(--text-primary);
     margin: 0 0 1rem;
   }
@@ -225,7 +306,8 @@ const orderedCategories = Object.keys(groups).sort(
   .prose :global(h1) {
     font-family: var(--font-display);
     font-size: 2.2rem;
-    font-weight: 400;
+    font-weight: 700;
+    letter-spacing: -0.024em;
     color: var(--text-primary);
     margin: 3rem 0 1.25rem;
     line-height: 1.15;
@@ -234,7 +316,8 @@ const orderedCategories = Object.keys(groups).sort(
   .prose :global(h2) {
     font-family: var(--font-display);
     font-size: 1.7rem;
-    font-weight: 400;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     color: var(--text-primary);
     margin: 3rem 0 1rem;
     padding-bottom: 0.4rem;
@@ -245,7 +328,8 @@ const orderedCategories = Object.keys(groups).sort(
   .prose :global(h3) {
     font-family: var(--font-display);
     font-size: 1.35rem;
-    font-weight: 400;
+    font-weight: 700;
+    letter-spacing: -0.018em;
     color: var(--text-primary);
     margin: 2rem 0 0.75rem;
     line-height: 1.3;
@@ -290,18 +374,19 @@ const orderedCategories = Object.keys(groups).sort(
     font-family: var(--font-mono);
     font-size: 0.85em;
     padding: 0.15em 0.4em;
-    background: rgba(255,255,255,0.06);
-    border-radius: 2px;
+    background: rgba(10, 37, 64, 0.06);
+    border-radius: 4px;
     color: var(--accent-cyan);
   }
 
   .prose :global(pre) {
     font-family: var(--font-mono);
-    background: var(--bg-card);
+    background: var(--bg-elevated);
     color: var(--text-primary);
     padding: 1.25rem 1.5rem;
     border: 1px solid var(--border-subtle);
     border-left: 3px solid var(--accent-cyan);
+    border-radius: 6px;
     overflow-x: auto;
     font-size: 0.84rem;
     line-height: 1.65;
@@ -328,10 +413,10 @@ const orderedCategories = Object.keys(groups).sort(
 
   .prose :global(blockquote) {
     margin: 1.75rem 0;
-    padding: 0.5rem 1.5rem;
+    padding: 0.6rem 1.5rem;
     border-left: 3px solid var(--accent-cyan);
-    background: var(--bg-card);
-    font-style: italic;
+    background: var(--bg-elevated);
+    border-radius: 0 6px 6px 0;
     color: var(--text-secondary);
   }
 
@@ -347,14 +432,14 @@ const orderedCategories = Object.keys(groups).sort(
   .prose :global(th) {
     font-family: var(--font-mono);
     font-size: 0.7rem;
-    font-weight: 400;
+    font-weight: 600;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--accent-cyan);
     text-align: left;
     padding: 0.85rem 1rem;
     border-bottom: 1px solid var(--border-medium);
-    background: var(--bg-surface);
+    background: var(--bg-elevated);
   }
 
   .prose :global(td) {
@@ -413,3 +498,24 @@ const orderedCategories = Object.keys(groups).sort(
     }
   }
 </style>
+
+<script>
+  // Copy page URL to clipboard
+  document.querySelectorAll('[data-copy-page]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        const label = btn.querySelector('span');
+        const original = label?.textContent ?? 'Copy page';
+        btn.classList.add('copied');
+        if (label) label.textContent = 'Copied';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          if (label) label.textContent = original;
+        }, 1500);
+      } catch (e) {
+        console.warn('Clipboard write failed', e);
+      }
+    });
+  });
+</script>

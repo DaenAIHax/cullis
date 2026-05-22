@@ -40,6 +40,9 @@ const isActive = (href: string) => {
     align-items: center;
     justify-content: space-between;
     gap: 2rem;
+    max-width: 100%;
+    padding-left: clamp(1.25rem, 3vw, 2.5rem);
+    padding-right: clamp(1.25rem, 3vw, 2.5rem);
   }
 
   .brand {
@@ -127,5 +130,46 @@ const isActive = (href: string) => {
   }
   nav.scrolled .wordmark {
     font-size: 1.08rem !important;
+  }
+
+  /* ====================================================
+   * LIGHT THEME NAV
+   * White semi-transparent backdrop, navy ink, cyan hover.
+   * Stripe / Vault / Vanta pattern.
+   * ==================================================== */
+  html[data-theme="light"] nav {
+    background: rgba(255, 255, 255, 0.78) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    border-bottom: 1px solid transparent !important;
+  }
+
+  html[data-theme="light"] nav.scrolled {
+    background: rgba(255, 255, 255, 0.92) !important;
+    backdrop-filter: blur(24px) !important;
+    -webkit-backdrop-filter: blur(24px) !important;
+    border-bottom-color: rgba(10, 37, 64, 0.08) !important;
+  }
+
+  html[data-theme="light"] nav .brand,
+  html[data-theme="light"] nav .wordmark {
+    color: #0A2540 !important;
+  }
+
+  html[data-theme="light"] nav .brand img {
+    filter: none !important;
+  }
+
+  html[data-theme="light"] nav .nav-links a {
+    color: #425466 !important;
+  }
+
+  html[data-theme="light"] nav .nav-links a:hover,
+  html[data-theme="light"] nav .nav-links a.is-active {
+    color: #0891B2 !important;
+  }
+
+  html[data-theme="light"] nav .nav-links a::after {
+    background: #0891B2 !important;
   }
 </style>
