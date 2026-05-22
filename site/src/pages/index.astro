@@ -42,6 +42,7 @@ import Layout from '../layouts/Layout.astro';
           <img src="/screenshots/mastio-overview.png" alt="Mastio overview dashboard, showing agent identity registry and live audit chain" loading="eager" />
         </div>
         <div class="screen-caption">Mastio control plane · one container per organisation</div>
+        <p class="screen-disclaimer">Illustrative screenshots from the Cullis demo stack. Agent identities, tool calls, and audit events shown are reproducible from the public repo, not a customer deployment.</p>
       </div>
     </div>
   </section>
@@ -158,6 +159,7 @@ import Layout from '../layouts/Layout.astro';
           <img src="/screenshots/mastio-agents.png" alt="Mastio policy management" data-frame-img="agents" />
           <img src="/screenshots/mastio-audit-log.png" alt="Mastio audit log" data-frame-img="audit" />
         </div>
+        <p class="screen-disclaimer">Captured from the local Cullis demo stack. Reproducible from the public repo, not a customer deployment.</p>
       </div>
 
     </div>
@@ -676,6 +678,18 @@ result = client.call_mcp_tool("sanctions_lookup", &#123;"full_name": "Acme Holdi
     color: var(--text-tertiary);
     text-align: center;
     margin-top: 1.4rem;
+  }
+
+  .screen-disclaimer {
+    font-family: var(--font-body);
+    font-size: 0.78rem;
+    line-height: 1.55;
+    color: var(--text-tertiary);
+    text-align: center;
+    margin: 0.75rem auto 0;
+    max-width: 58ch;
+    font-style: italic;
+    opacity: 0.85;
   }
 
   /* ====================================================
