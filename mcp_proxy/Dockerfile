@@ -28,7 +28,6 @@ WORKDIR /src
 COPY tailwind.config.js ./
 COPY mcp_proxy/dashboard/static_src/ ./mcp_proxy/dashboard/static_src/
 COPY mcp_proxy/dashboard/templates/ ./mcp_proxy/dashboard/templates/
-COPY app/dashboard/templates/ ./app/dashboard/templates/
 RUN mkdir -p /out \
  && tailwindcss \
       -c ./tailwind.config.js \
