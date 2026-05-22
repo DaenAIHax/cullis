@@ -192,10 +192,17 @@ async def forward_to_mcp_resource(
         },
     }
 
+    # ``mcp_request_id`` carries the server-minted invocation id so the
+    # dashboard ``_group_audit_events`` helper can join this
+    # traffic-stream ``resource_call`` row with the matching
+    # admin-stream ``tool_execute`` + ``policy.*`` rows that fan out
+    # from the same tool invocation. The executor mints it once at
+    # ``run()`` entry and propagates via ``ctx.request_id``.
     audit_details = {
         "resource_id": tool_def.resource_id,
         "endpoint_url": endpoint,
         "tool": tool_def.name,
+        "mcp_request_id": ctx.request_id,
     }
 
     transport = WhitelistedTransport(allowed_domains=tool_def.allowed_domains)

@@ -9,14 +9,18 @@
         <div class="min-w-0">
             <h2 class="text-lg font-semibold text-white uppercase tracking-wider">Audit Log</h2>
             <p class="text-xs text-gray-600 mt-0.5">
-                Unified stream — admin events + local runtime chain
+                {% if view_mode == 'grouped' %}
+                Grouped by tool call — every card collapses the policy decision, executor row, and egress for one action
+                {% else %}
+                Raw event stream — one row per audit-log entry
+                {% endif %}
             </p>
         </div>
 
         <!-- Counter chip: Total · Admin · Traffic -->
         <div class="flex items-center gap-0 flex-shrink-0 border border-gray-800/60 rounded-md overflow-hidden bg-surface-900/60 backdrop-blur-sm">
             <div class="px-3 py-1.5 flex items-center gap-2">
-                <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">Total</span>
+                <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">{% if view_mode == 'grouped' %}Tool calls{% else %}Events{% endif %}</span>
                 <span class="text-sm font-mono text-white">{{ total }}</span>
             </div>
             <div class="w-px h-5 bg-gray-800/80 self-center"></div>
@@ -31,6 +35,30 @@
             </div>
         </div>
     </div>
+
+    <!-- View toggle (Grouped vs Raw) + Verify chain integrity button -->
+    {% set _filter_qs %}{% if source_filter %}&source={{ source_filter }}{% endif %}{% if agent_filter %}&agent={{ agent_filter }}{% endif %}{% if action_filter %}&action={{ action_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% endset %}
+    <div class="flex items-center justify-between gap-2 mb-4 flex-wrap">
+        <div class="flex items-center gap-2">
+            <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">View</span>
+            <div class="inline-flex border border-gray-800/60 rounded-md overflow-hidden bg-surface-900/60">
+                <a href="/proxy/audit?view=grouped{{ _filter_qs }}" class="px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider transition-colors {% if view_mode == 'grouped' %}bg-accent-400/15 text-accent-400{% else %}text-gray-500 hover:text-gray-300 hover:bg-gray-800/40{% endif %}">Grouped</a>
+                <a href="/proxy/audit?view=raw{{ _filter_qs }}" class="px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider transition-colors {% if view_mode == 'raw' %}bg-accent-400/15 text-accent-400{% else %}text-gray-500 hover:text-gray-300 hover:bg-gray-800/40{% endif %}">Raw</a>
+            </div>
+            <span class="text-[10px] text-gray-700 ml-2 hidden md:inline">
+                {% if view_mode == 'grouped' %}cards collapse 1 tool call = 3 rows; switch to Raw for the per-event table.{% else %}1 row = 1 audit entry; switch to Grouped for the CISO-readable view.{% endif %}
+            </span>
+        </div>
+        <button type="button" id="verify-chain-btn"
+                data-csrf="{{ csrf_token }}"
+                class="inline-flex items-center gap-2 px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider border border-accent-400/40 text-accent-400 bg-accent-400/5 rounded-md hover:bg-accent-400/15 transition-colors disabled:opacity-50 disabled:cursor-wait">
+            <svg id="verify-chain-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            <span id="verify-chain-label">Verify chain integrity</span>
+        </button>
+    </div>
+
+    <!-- Verify result banner — populated by JS after click -->
+    <div id="verify-chain-banner" class="mb-5" hidden></div>
 
     <!-- Filter bar -->
     <form method="get" action="/proxy/audit" class="flex flex-wrap items-center gap-3 mb-5">
@@ -62,10 +90,114 @@
             Filter
         </button>
         {% if agent_filter or action_filter or status_filter or source_filter %}
-        <a href="/proxy/audit" class="px-3 py-2 text-xs text-gray-600 hover:text-gray-400 transition-colors">Clear</a>
+        <a href="/proxy/audit?view={{ view_mode }}" class="px-3 py-2 text-xs text-gray-600 hover:text-gray-400 transition-colors">Clear</a>
         {% endif %}
+        <input type="hidden" name="view" value="{{ view_mode }}">
     </form>
 
+    {% if view_mode == 'grouped' %}
+    <!-- Grouped card view — one card per tool call -->
+    <div class="space-y-2">
+        {% for card in cards %}
+        {% set _status_class = 'emerald' if card.status in ('success','ok','allow') else ('red' if card.status in ('denied','error') else 'yellow') %}
+        <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-hidden backdrop-blur-sm">
+            <!-- Card header (clickable) -->
+            <button type="button" data-card-toggle="{{ loop.index0 }}"
+                    class="w-full px-5 py-4 flex items-center gap-4 hover:bg-gray-800/30 transition-colors text-left"
+                    aria-expanded="false" aria-controls="card-expand-{{ loop.index0 }}">
+                <span class="w-2 h-2 rounded-full flex-shrink-0 bg-{{ _status_class }}-500"></span>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-sm text-gray-100 font-medium truncate">{{ card.title }}</span>
+                        {% if card.kind == 'tool_call' %}
+                        <span class="text-[10px] text-gray-600 font-mono">·</span>
+                        <span class="text-[11px] text-gray-500 font-mono">{{ card.events_count }} chained events</span>
+                        {% endif %}
+                    </div>
+                    {% if card.subtitle %}
+                    <div class="text-[11px] text-gray-500 font-mono mt-0.5 truncate">{{ card.subtitle }}</div>
+                    {% endif %}
+                </div>
+                <div class="hidden md:flex flex-col items-end gap-0.5 flex-shrink-0 mr-1">
+                    <div class="text-[11px] text-gray-400 font-mono truncate max-w-[200px]">{{ card.agent_id or '—' }}</div>
+                    <div class="text-[10px] text-gray-600 font-mono">{{ card.timestamp[:19] if card.timestamp else '—' }}</div>
+                </div>
+                {% if card.duration_ms is not none %}
+                <span class="hidden md:inline text-[10px] text-gray-500 font-mono whitespace-nowrap flex-shrink-0">{{ '%.0f' | format(card.duration_ms) }} ms</span>
+                {% endif %}
+                {% if card.status in ('success','ok','allow') %}
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 uppercase tracking-wider flex-shrink-0">OK</span>
+                {% elif card.status == 'denied' %}
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400 uppercase tracking-wider flex-shrink-0">Denied</span>
+                {% elif card.status == 'error' %}
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400 uppercase tracking-wider flex-shrink-0">Error</span>
+                {% else %}
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-500/10 text-yellow-400 uppercase tracking-wider flex-shrink-0">{{ card.status or '—' }}</span>
+                {% endif %}
+                <svg class="card-chevron w-3.5 h-3.5 text-gray-600 transition-transform duration-150 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </button>
+
+            <!-- Expanded chained events -->
+            <div class="card-expand border-t border-gray-800/40" id="card-expand-{{ loop.index0 }}" hidden aria-hidden="true">
+                {% for ev in card.events %}
+                {% set _ev_outer = loop %}
+                <details class="border-b border-gray-800/30 last:border-b-0 group">
+                    <summary class="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-gray-800/20 select-none">
+                        <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 {% if ev.status in ('success','ok','allow') %}bg-emerald-500{% elif ev.status in ('denied','error') %}bg-red-500{% else %}bg-yellow-500{% endif %}"></span>
+                        {% if ev.source == 'admin' %}
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-500/10 text-blue-400 uppercase tracking-wider border border-blue-500/20 flex-shrink-0">Admin</span>
+                        {% else %}
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-accent-400/10 text-accent-400 uppercase tracking-wider border border-accent-400/20 flex-shrink-0">Traffic</span>
+                        {% endif %}
+                        <span class="text-[11px] text-gray-300 font-mono">{{ ev.event or '—' }}</span>
+                        <span class="text-[10px] text-gray-700 font-mono ml-auto flex-shrink-0">{{ ev.timestamp[11:23] if ev.timestamp else '' }}</span>
+                        {% if ev.chain_seq is not none %}
+                        <span class="text-[10px] text-gray-600 font-mono flex-shrink-0">chain #{{ ev.chain_seq }}</span>
+                        {% endif %}
+                        <svg class="w-3 h-3 text-gray-700 transition-transform duration-150 group-open:rotate-90 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </summary>
+                    <div class="px-5 pb-4 pt-1 bg-surface-950/40 border-t border-gray-800/20 grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div class="lg:col-span-2">
+                            {% if ev.detail_pretty %}
+                            <pre class="text-[11px] leading-relaxed font-mono text-gray-300 bg-surface-950 border border-gray-800/60 rounded p-3 max-h-[360px] overflow-y-auto whitespace-pre-wrap break-words">{{ ev.detail_pretty }}</pre>
+                            {% else %}
+                            <p class="text-xs text-gray-600 italic">No detail attached to this event.</p>
+                            {% endif %}
+                        </div>
+                        <div class="text-[11px] font-mono space-y-2">
+                            {% if ev.entry_hash %}
+                            <div>
+                                <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-0.5">Entry Hash</p>
+                                <code class="text-accent-400 break-all block">{{ ev.entry_hash[:32] }}…</code>
+                            </div>
+                            {% endif %}
+                            {% if ev.status %}
+                            <div>
+                                <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-0.5">Status</p>
+                                <span class="{% if ev.status in ('success','ok','allow') %}text-emerald-400{% elif ev.status in ('denied','error') %}text-red-400{% else %}text-yellow-400{% endif %}">{{ ev.status }}</span>
+                            </div>
+                            {% endif %}
+                            {% if ev.duration_ms is not none %}
+                            <div>
+                                <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-0.5">Duration</p>
+                                <span class="text-gray-300">{{ '%.1f' | format(ev.duration_ms) }} ms</span>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </details>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+        {% if not cards %}
+        <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-16 text-center">
+            <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+            <p class="text-sm text-gray-600">No audit entries{% if agent_filter or action_filter or status_filter or source_filter %} matching filters{% endif %}</p>
+        </div>
+        {% endif %}
+    </div>
+    {% else %}
     <!-- Audit table -->
     <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-hidden backdrop-blur-sm">
         <table class="w-full">
@@ -133,7 +265,7 @@
                                     {% endif %}
                                 </div>
                                 {% if entry.detail_pretty %}
-                                <pre id="audit-detail-{{ loop.index0 }}" class="text-[11px] leading-relaxed font-mono text-gray-300 bg-surface-950 border border-gray-800/60 rounded p-3 overflow-x-auto whitespace-pre">{{ entry.detail_pretty }}</pre>
+                                <pre id="audit-detail-{{ loop.index0 }}" class="text-[11px] leading-relaxed font-mono text-gray-300 bg-surface-950 border border-gray-800/60 rounded p-3 max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words">{{ entry.detail_pretty }}</pre>
                                 {% else %}
                                 <p class="text-xs text-gray-600 italic">No detail attached to this event.</p>
                                 {% endif %}
@@ -149,10 +281,9 @@
                                     <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Agent</p>
                                     <p class="text-[11px] font-mono text-gray-300 break-all">{{ entry.agent_id or '—' }}</p>
                                 </div>
-                                {% if entry.source == 'admin' %}
-                                {% if entry.request_id %}
+                                {% if entry.source == 'admin' and entry.request_id %}
                                 <div>
-                                    <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Request ID</p>
+                                    <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">MCP Request ID</p>
                                     <div class="flex items-center gap-1.5">
                                         <code class="flex-1 min-w-0 text-[11px] font-mono text-accent-400 truncate">{{ entry.request_id }}</code>
                                         <button type="button" onclick="copyToClipboard('{{ entry.request_id }}')"
@@ -162,6 +293,7 @@
                                     </div>
                                 </div>
                                 {% endif %}
+                                {% if entry.source == 'admin' %}
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Tool</p>
@@ -172,13 +304,14 @@
                                         <p class="text-[11px] font-mono text-gray-300">{% if entry.duration_ms is not none %}{{ '%.1f' | format(entry.duration_ms) }} ms{% else %}—{% endif %}</p>
                                     </div>
                                 </div>
-                                {% else %}
-                                {% if entry.target %}
+                                {% endif %}
+                                {% if entry.source == 'traffic' and entry.target %}
                                 <div>
                                     <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Recipient</p>
                                     <p class="text-[11px] font-mono text-gray-300 break-all">{{ entry.target }}</p>
                                 </div>
                                 {% endif %}
+                                {% if entry.org_id or entry.chain_seq is not none %}
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Org</p>
@@ -189,6 +322,7 @@
                                         <p class="text-[11px] font-mono text-gray-300">#{{ entry.chain_seq if entry.chain_seq is not none else '—' }}</p>
                                     </div>
                                 </div>
+                                {% endif %}
                                 {% if entry.session_id %}
                                 <div>
                                     <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Session</p>
@@ -213,7 +347,6 @@
                                     </div>
                                 </div>
                                 {% endif %}
-                                {% endif %}
                                 <div>
                                     <p class="text-[9px] font-heading uppercase tracking-[0.2em] text-gray-600 mb-1">Status</p>
                                     <p class="text-[11px] font-mono {% if entry.status == 'success' %}text-emerald-400{% elif entry.status in ('denied','error') %}text-red-400{% else %}text-yellow-400{% endif %}">{{ entry.status or '—' }}</p>
@@ -234,6 +367,7 @@
             </tbody>
         </table>
     </div>
+    {% endif %}
 
     <!-- Pagination -->
     {% if total_pages > 1 %}
@@ -242,7 +376,7 @@
             Page {{ page }} of {{ total_pages }}
         </p>
         <div class="flex items-center gap-2">
-            {% set _qs %}{% if source_filter %}&source={{ source_filter }}{% endif %}{% if agent_filter %}&agent={{ agent_filter }}{% endif %}{% if action_filter %}&action={{ action_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% endset %}
+            {% set _qs %}&view={{ view_mode }}{% if source_filter %}&source={{ source_filter }}{% endif %}{% if agent_filter %}&agent={{ agent_filter }}{% endif %}{% if action_filter %}&action={{ action_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% endset %}
             {% if page > 1 %}
             <a href="/proxy/audit?page={{ page - 1 }}{{ _qs }}"
                class="px-3 py-1.5 text-xs font-medium border border-gray-700 text-gray-400 rounded hover:bg-gray-800 hover:text-gray-300 transition-colors">
@@ -307,6 +441,121 @@
             }
         });
     });
+
+    // Verify chain integrity button — POST /proxy/audit/verify + render banner.
+    var verifyBtn = document.getElementById('verify-chain-btn');
+    var verifyBanner = document.getElementById('verify-chain-banner');
+    var verifyLabel = document.getElementById('verify-chain-label');
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function renderVerifyBanner(data) {
+        if (!verifyBanner) return;
+        if (data && data.ok) {
+            verifyBanner.innerHTML =
+                '<div class="border border-emerald-500/40 bg-emerald-500/10 rounded-lg p-4 flex items-start gap-3">' +
+                  '<svg class="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' +
+                  '<div class="flex-1 min-w-0">' +
+                    '<p class="text-sm font-semibold text-emerald-400 uppercase tracking-wider">Chain verified</p>' +
+                    '<p class="text-[12px] text-gray-300 mt-1 font-mono">' +
+                      escapeHtml(data.entries) + ' entries · ' +
+                      escapeHtml(data.agents) + ' agent' + (data.agents === 1 ? '' : 's') + ' · ' +
+                      escapeHtml(data.orgs) + ' org' + (data.orgs === 1 ? '' : 's') + ' · ' +
+                      escapeHtml(data.legacy_chain_rows) + ' legacy · ' +
+                      escapeHtml(data.per_org_chain_rows) + ' per-org chain rows' +
+                    '</p>' +
+                    '<p class="text-[11px] text-gray-500 mt-1.5 leading-relaxed">' +
+                      'Every entry_hash matches the SHA-256 of its canonical row. No previous_hash → next entry_hash break detected. Bundle intact end-to-end.' +
+                    '</p>' +
+                  '</div>' +
+                '</div>';
+        } else if (data && data.failure) {
+            var f = data.failure;
+            var rows = [];
+            rows.push(['scope', f.scope]);
+            if (f.org_id) rows.push(['org', f.org_id]);
+            if (f.chain_seq != null) rows.push(['chain_seq', f.chain_seq]);
+            rows.push(['id', f.id]);
+            if (f.timestamp) rows.push(['timestamp', f.timestamp]);
+            if (f.event_type) rows.push(['event_type', f.event_type]);
+            if (f.agent_id) rows.push(['agent_id', f.agent_id]);
+            if (f.expected_hash) rows.push(['expected hash', f.expected_hash]);
+            if (f.observed_hash) rows.push(['observed hash', f.observed_hash]);
+            if (f.declared_prev) rows.push(['declared prev', f.declared_prev]);
+            if (f.expected_prev) rows.push(['expected prev', f.expected_prev]);
+            var detailHtml = rows.map(function(p){
+                return '<div class="flex gap-3"><span class="text-[10px] text-gray-600 uppercase tracking-wider w-32 flex-shrink-0">' + escapeHtml(p[0]) + '</span><code class="text-[11px] text-red-300 break-all">' + escapeHtml(p[1]) + '</code></div>';
+            }).join('');
+            var kindLabel = f.kind === 'break'
+                ? "The row's previous_hash does not point at the prior row's entry_hash. A row was deleted, reordered, or the linkage was rewritten."
+                : "The row's content does not produce the entry_hash it carries. A field on this row was altered after the chain was written.";
+            verifyBanner.innerHTML =
+                '<div class="border border-red-500/40 bg-red-500/10 rounded-lg p-4 flex items-start gap-3">' +
+                  '<svg class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>' +
+                  '<div class="flex-1 min-w-0">' +
+                    '<p class="text-sm font-semibold text-red-400 uppercase tracking-wider">Chain tamper detected</p>' +
+                    '<p class="text-[12px] text-gray-300 mt-1 leading-relaxed">' + escapeHtml(kindLabel) + '</p>' +
+                    '<div class="mt-3 space-y-1.5 font-mono">' + detailHtml + '</div>' +
+                  '</div>' +
+                '</div>';
+        } else {
+            verifyBanner.innerHTML =
+                '<div class="border border-yellow-500/40 bg-yellow-500/10 rounded-lg p-3 text-[12px] text-yellow-300">' +
+                  'Unexpected response: ' + escapeHtml(JSON.stringify(data || {})) +
+                '</div>';
+        }
+        verifyBanner.removeAttribute('hidden');
+    }
+    if (verifyBtn) {
+        verifyBtn.addEventListener('click', function () {
+            verifyBtn.disabled = true;
+            verifyLabel.textContent = 'Verifying...';
+            verifyBanner.setAttribute('hidden', '');
+            var body = 'csrf_token=' + encodeURIComponent(verifyBtn.dataset.csrf || '');
+            fetch('/proxy/audit/verify', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body,
+            })
+            .then(function (r) { return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+            .then(function (resp) { renderVerifyBanner(resp.body); })
+            .catch(function (e) {
+                verifyBanner.innerHTML =
+                    '<div class="border border-red-500/40 bg-red-500/10 rounded-lg p-3 text-[12px] text-red-300">' +
+                    'Verify request failed: ' + escapeHtml(e && e.message ? e.message : String(e)) +
+                    '</div>';
+                verifyBanner.removeAttribute('hidden');
+            })
+            .finally(function () {
+                verifyBtn.disabled = false;
+                verifyLabel.textContent = 'Verify chain integrity';
+            });
+        });
+    }
+
+    // Grouped-view: toggle the card-level expand block.
+    document.querySelectorAll('[data-card-toggle]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var idx = btn.dataset.cardToggle;
+            var panel = document.getElementById('card-expand-' + idx);
+            if (!panel) return;
+            var isOpen = btn.getAttribute('aria-expanded') === 'true';
+            btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+            if (isOpen) {
+                panel.setAttribute('hidden', '');
+                panel.setAttribute('aria-hidden', 'true');
+            } else {
+                panel.removeAttribute('hidden');
+                panel.setAttribute('aria-hidden', 'false');
+            }
+        });
+    });
 })();
 </script>
+<style>
+    [data-card-toggle][aria-expanded="true"] .card-chevron { transform: rotate(90deg); color: rgb(0 229 199 / 0.8); }
+</style>
 {% endblock %}

@@ -95,7 +95,22 @@ async def run(
     del db  # kept in signature for backwards compatibility
     t0 = time.monotonic()
     tool_name = request.tool
-    request_id = request.request_id
+    # ``request.request_id`` carries the caller-supplied MCP JSON-RPC
+    # ``id`` field. The Python SDK pins it to ``"1"`` for every POST
+    # (each tools/call is a fresh JSON-RPC envelope), which makes it
+    # useless as a trace key for the dashboard — the dashboard needs
+    # to group the policy decision + tool_execute + resource_call
+    # rows that fan out from a single invocation. We therefore mint
+    # a server-side invocation id at ``run()`` entry and propagate it
+    # as ``request_id`` everywhere: into the audit_log column, into
+    # ``ToolContext.request_id`` (which the MCP resource forwarder
+    # records under ``local_audit.details.mcp_request_id``), and into
+    # the ``ToolExecuteResponse.request_id`` returned to the caller.
+    # The original MCP id is discarded; nothing downstream relies on
+    # the literal ``"1"``. See dashboard ``_group_audit_events`` for
+    # how the join key flows through.
+    import uuid as _uuid_run
+    request_id = f"inv-{_uuid_run.uuid4().hex[:12]}"
 
     # 1. Lookup
     tool_def = tool_registry.get(tool_name)

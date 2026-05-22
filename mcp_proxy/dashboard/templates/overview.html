@@ -122,19 +122,19 @@
             </div>
             <div class="topo-arrow">───▶</div>
             <a href="/proxy/backends" class="topo-node hover:border-accent-400/40 transition-colors block">
-                <div class="topo-label">Backends</div>
+                <div class="topo-label">Tools</div>
                 <div class="topo-count">{{ backend_enabled }}</div>
                 <div class="topo-sub">{{ backend_total }} attached</div>
             </a>
         </div>
         <p class="mt-4 text-[11px] text-gray-500 leading-relaxed">
-            Agents enrolled in this org reach backends (MCP servers) through
+            Agents enrolled in this org reach tools (MCP servers) through
             the Mastio reverse-proxy. Each hop is signed with SPIFFE identity;
             access is gated by explicit <a href="/proxy/backends" class="text-accent-400 hover:underline">bindings</a>.
         </p>
     </div>
 
-    <!-- Two-column: Agents | Backends -->
+    <!-- Two-column: Agents | Tools -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
         <!-- AGENTS section -->
@@ -184,11 +184,11 @@
             {% endif %}
         </div>
 
-        <!-- BACKENDS section -->
+        <!-- TOOLS section -->
         <div class="p-6 bg-surface-900/60 border border-gray-800/60 rounded-lg">
             <div class="flex items-center justify-between mb-4">
                 <h3 class="text-sm font-semibold text-white uppercase tracking-[0.18em]"
-                    style="font-family: 'Chakra Petch', sans-serif;">Backends</h3>
+                    style="font-family: 'Chakra Petch', sans-serif;">Tools</h3>
                 <a href="/proxy/backends" class="text-[10px] text-accent-400 hover:text-accent-300 uppercase tracking-wider">Manage &rarr;</a>
             </div>
 
@@ -224,7 +224,7 @@
             </ul>
             {% else %}
             <p class="text-xs text-gray-600">
-                No backends attached.
+                No tools attached.
                 <a href="/proxy/backends" class="text-accent-400 hover:underline">Attach an MCP server</a>
                 so your agents can reach it.
             </p>

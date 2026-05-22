@@ -161,13 +161,69 @@ def load_bundle(path: str) -> tuple[list[dict], list[dict]]:
     return entries, anchors
 
 
-def verify_chains(entries: list[dict]) -> tuple[int, int]:
-    """Verify all chains in a single bundle. Returns (legacy_n, per_org_n).
-    Exits with code 2 on any tamper."""
+def _print_tamper_detail(
+    *,
+    kind: str,
+    e: dict,
+    computed: str | None = None,
+    declared_prev: str | None = None,
+    expected_prev: str | None = None,
+) -> None:
+    """Print a CISO-readable explanation of a chain failure.
+
+    Two failure modes:
+      * ``MISMATCH`` — the row's content does not produce the
+        ``entry_hash`` it carries. Someone altered a field after
+        the row was written. Show computed vs declared hash so the
+        auditor can pin the row.
+      * ``BREAK`` — the row's ``previous_hash`` does not point at
+        the prior row's ``entry_hash``. Either a row was deleted, or
+        the linkage was tampered. Show declared vs expected prev.
+    """
+    print("")
+    print("✗ CHAIN TAMPER DETECTED")
+    print("")
+    where = (
+        f"  org={e.get('org_id', '?')}"
+        f" · chain_seq={e.get('chain_seq', '-')}"
+        f" · id={e['id']}"
+    )
+    print(where)
+    print(f"  timestamp={e.get('timestamp', '-')}")
+    print(f"  event_type={e.get('event_type', '-')}")
+    print(f"  agent_id={e.get('agent_id', '-')}")
+    print("")
+    if kind == "MISMATCH":
+        print("  The row's content does not produce the entry_hash it carries.")
+        print("  A field on this row was altered after the chain was written.")
+        print("")
+        print(f"    expected entry_hash (computed from row): {computed}")
+        print(f"    observed entry_hash (recorded on row):   {e['entry_hash']}")
+    else:  # BREAK
+        print("  The row's previous_hash does not point at the prior row's entry_hash.")
+        print("  A row was deleted, reordered, or the linkage was rewritten.")
+        print("")
+        print(f"    declared previous_hash: {declared_prev}")
+        print(f"    expected previous_hash: {expected_prev}")
+    print("")
+    print(f"  Rows after seq={e.get('chain_seq', '?')} cannot be trusted.")
+    print("")
+
+
+def verify_chains(entries: list[dict]) -> tuple[int, int, int]:
+    """Verify all chains in a single bundle.
+
+    Returns (legacy_n, per_org_n, agent_count). Exits 2 on any
+    tamper. The agent count is surfaced so the PASS output can
+    say "X entries · Y agents" without the caller re-scanning.
+    """
     # Legacy
     prev: str | None = None
     legacy_n = 0
+    agents_seen: set[str] = set()
     for e in entries:
+        if e.get("agent_id"):
+            agents_seen.add(e["agent_id"])
         if e.get("chain_seq") is not None:
             continue
         if e.get("entry_hash") is None:
@@ -175,10 +231,14 @@ def verify_chains(entries: list[dict]) -> tuple[int, int]:
         expected = canonical(e, prev)
         computed = hashlib.sha256(expected.encode("utf-8")).hexdigest()
         if computed != e["entry_hash"]:
-            print(f"CHAIN MISMATCH legacy id={e['id']}")
+            _print_tamper_detail(kind="MISMATCH", e=e, computed=computed)
             sys.exit(2)
         if e.get("previous_hash") != prev:
-            print(f"CHAIN BREAK legacy id={e['id']}")
+            _print_tamper_detail(
+                kind="BREAK", e=e,
+                declared_prev=e.get("previous_hash"),
+                expected_prev=prev,
+            )
             sys.exit(2)
         prev = e["entry_hash"]
         legacy_n += 1
@@ -202,15 +262,19 @@ def verify_chains(entries: list[dict]) -> tuple[int, int]:
             expected = canonical(e, expected_prev)
             computed = hashlib.sha256(expected.encode("utf-8")).hexdigest()
             if computed != e["entry_hash"]:
-                print(f"CHAIN MISMATCH org={org} seq={e['chain_seq']} id={e['id']}")
+                _print_tamper_detail(kind="MISMATCH", e=e, computed=computed)
                 sys.exit(2)
             if e.get("previous_hash") != expected_prev:
-                print(f"CHAIN BREAK org={org} seq={e['chain_seq']} id={e['id']}")
+                _print_tamper_detail(
+                    kind="BREAK", e=e,
+                    declared_prev=e.get("previous_hash"),
+                    expected_prev=expected_prev,
+                )
                 sys.exit(2)
             expected_prev = e["entry_hash"]
             per_org_n += 1
 
-    return (legacy_n, per_org_n)
+    return (legacy_n, per_org_n, len(agents_seen))
 
 
 def verify_anchors(entries: list[dict], anchors: list[dict]) -> int:
@@ -299,24 +363,47 @@ def main() -> int:
 
     bundles: list[tuple[str, list[dict]]] = []
     total_legacy = total_per_org = total_anchors = 0
+    total_entries = 0
+    total_orgs: set[str] = set()
+    total_agents: set[str] = set()
     for path in args.bundle:
         entries, anchors = load_bundle(path)
-        legacy_n, per_org_n = verify_chains(entries)
+        legacy_n, per_org_n, _agent_n = verify_chains(entries)
         anchor_n = verify_anchors(entries, anchors)
         total_legacy += legacy_n
         total_per_org += per_org_n
         total_anchors += anchor_n
+        total_entries += len(entries)
+        for e in entries:
+            if e.get("org_id"):
+                total_orgs.add(e["org_id"])
+            if e.get("agent_id"):
+                total_agents.add(e["agent_id"])
         bundles.append((path, entries))
-        print(f"OK {path}: legacy={legacy_n} per_org={per_org_n} anchors={anchor_n}")
 
     cross_n = cross_reconcile(bundles)
-    if cross_n:
-        print(f"OK cross-reconcile: {cross_n} linked row(s) consistent across bundles")
 
+    # CISO-readable PASS summary. The line breaks below are deliberate
+    # so the auditor's terminal output reads like a verdict, not a CSV.
+    print("")
+    print("✓ CHAIN VERIFIED")
+    print("")
     print(
-        f"VERIFY PASS — legacy={total_legacy} per_org={total_per_org} "
-        f"anchors={total_anchors} cross={cross_n}"
+        f"  {total_entries} entries · "
+        f"{len(total_agents)} agent{'s' if len(total_agents) != 1 else ''} · "
+        f"{len(total_orgs)} org{'s' if len(total_orgs) != 1 else ''} · "
+        f"{total_legacy} legacy · {total_per_org} per-org · "
+        f"{total_anchors} TSA anchor{'s' if total_anchors != 1 else ''}"
     )
+    if cross_n:
+        print(f"  {cross_n} cross-org peer row{'s' if cross_n != 1 else ''} reconciled")
+    print("")
+    print("  Every entry_hash matches the SHA-256 of its canonical row.")
+    print("  No previous_hash → next entry_hash break detected.")
+    print("")
+    print("  Bundle is intact end-to-end. No row was added, altered, or")
+    print("  removed after the original audit chain was written.")
+    print("")
     return 0
 
 
