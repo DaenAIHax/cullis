@@ -285,14 +285,28 @@ async def forward_to_mcp_resource(
     from mcp_proxy.config import get_settings as _get_settings
     from mcp_proxy.tools.executor import _build_success_detail
     try:
-        _max_bytes = _get_settings().audit_detail_max_bytes
+        _settings = _get_settings()
+        _max_bytes = _settings.audit_detail_max_bytes
+        _redaction_settings = {
+            "capture_parameters": _settings.audit_capture_tool_parameters,
+            "capture_result": _settings.audit_capture_tool_result,
+            "parameters_denylist": list(
+                _settings.audit_capture_tool_parameters_denylist,
+            ),
+            "result_denylist": list(
+                _settings.audit_capture_tool_result_denylist,
+            ),
+        }
     except Exception:  # noqa: BLE001 — audit best-effort
         _max_bytes = 4096
+        _redaction_settings = None
     try:
         success_payload = json.loads(_build_success_detail(
             parameters=ctx.parameters,
             result=rpc_result,
             max_bytes=_max_bytes,
+            tool_name=tool_def.name,
+            redaction_settings=_redaction_settings,
         ))
     except Exception:  # noqa: BLE001 — never let the audit helper crash forward
         success_payload = {}

@@ -7,9 +7,10 @@ validate_config() enforces production-safety invariants at startup.
 import logging
 import os
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _log = logging.getLogger("mcp_proxy.startup")
 
@@ -390,6 +391,32 @@ class ProxySettings(BaseSettings):
     # ``MCP_PROXY_AUDIT_DETAIL_MAX_BYTES``.
     audit_detail_max_bytes: int = 4096
 
+    # Tool audit capture knobs — opt-in redaction for regulated deployments
+    # (GDPR PII / MNPI). Default keeps current open-core behaviour: parameters
+    # AND result are captured into the audit chain on every successful tool
+    # call. Operators handling regulated data flip the master switch off or
+    # populate the per-tool denylist (fnmatch glob patterns, e.g.
+    # ``payments.*`` or ``trading.transfer``) so the matching tools land a
+    # redacted marker instead of the real value in the append-only chain.
+    # Redaction surrogates carry ``_redacted: true`` + ``reason`` so a
+    # forensic reader still sees that something was elided.
+    # Env wiring:
+    #   * ``MCP_PROXY_AUDIT_CAPTURE_TOOL_PARAMETERS`` (bool, default true)
+    #   * ``MCP_PROXY_AUDIT_CAPTURE_TOOL_PARAMETERS_DENYLIST`` (comma-sep)
+    #   * ``MCP_PROXY_AUDIT_CAPTURE_TOOL_RESULT`` (bool, default true)
+    #   * ``MCP_PROXY_AUDIT_CAPTURE_TOOL_RESULT_DENYLIST`` (comma-sep)
+    audit_capture_tool_parameters: bool = True
+    # ``NoDecode`` disables pydantic-settings' JSON pre-decoding for these
+    # list fields so our ``_split_comma_separated_list`` validator
+    # receives the raw env string (e.g. ``"payments.*,trading.*"``) and
+    # can split on commas. Without it pydantic-settings tries to parse
+    # the value as JSON before the validator runs and raises
+    # ``SettingsError`` on any non-JSON input — which is every operator-
+    # written env value.
+    audit_capture_tool_parameters_denylist: Annotated[list[str], NoDecode] = []
+    audit_capture_tool_result: bool = True
+    audit_capture_tool_result_denylist: Annotated[list[str], NoDecode] = []
+
     # Audit F-A-404 — background flush retry exhaustion.
     # The size-triggered flush from ``append()`` raises
     # ``AuditChainExhausted`` so a caller under ``audit_fail_deny=True``
@@ -726,6 +753,32 @@ class ProxySettings(BaseSettings):
         # maps "" → None) so the standalone auto-flip keeps firing.
         if isinstance(v, str) and v.strip() == "":
             return False
+        return v
+
+    # Operator-facing env vars for the redaction denylists are easier to
+    # write as a comma-separated string (``payments.*,trading.transfer``)
+    # than as a JSON array. Pydantic-settings defaults to JSON for
+    # ``list[str]`` fields; this normaliser accepts both shapes — JSON
+    # array passes through unchanged, comma-separated string splits on
+    # commas with whitespace stripped, empty string yields an empty list.
+    @field_validator(
+        "audit_capture_tool_parameters_denylist",
+        "audit_capture_tool_result_denylist",
+        mode="before",
+    )
+    @classmethod
+    def _split_comma_separated_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            stripped = v.strip()
+            if not stripped:
+                return []
+            # Permit JSON array shape (operators copying from broker
+            # config) without surprising them.
+            if stripped.startswith("["):
+                return v
+            return [item.strip() for item in stripped.split(",") if item.strip()]
         return v
 
     @model_validator(mode="after")

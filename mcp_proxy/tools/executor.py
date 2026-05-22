@@ -514,19 +514,34 @@ async def run(
                 duration_ms,
                 request_id,
             )
-            # Resolve the per-call cap lazily — keeps the executor
-            # importable when ``ProxySettings`` cannot be constructed
-            # (test fixtures that monkeypatch only the bits they care
-            # about), at the cost of one dict lookup per success path.
+            # Resolve the per-call cap + redaction settings lazily — keeps
+            # the executor importable when ``ProxySettings`` cannot be
+            # constructed (test fixtures that monkeypatch only the bits
+            # they care about), at the cost of one settings fetch per
+            # success path.
             try:
                 from mcp_proxy.config import get_settings as _get_settings
-                _max_bytes = _get_settings().audit_detail_max_bytes
+                _settings = _get_settings()
+                _max_bytes = _settings.audit_detail_max_bytes
+                _redaction_settings = {
+                    "capture_parameters": _settings.audit_capture_tool_parameters,
+                    "capture_result": _settings.audit_capture_tool_result,
+                    "parameters_denylist": list(
+                        _settings.audit_capture_tool_parameters_denylist,
+                    ),
+                    "result_denylist": list(
+                        _settings.audit_capture_tool_result_denylist,
+                    ),
+                }
             except Exception:  # noqa: BLE001 — never let config crash audit
                 _max_bytes = 4096
+                _redaction_settings = None
             success_detail = _build_success_detail(
                 parameters=request.parameters,
                 result=result,
                 max_bytes=_max_bytes,
+                tool_name=tool_name,
+                redaction_settings=_redaction_settings,
             )
             await log_audit(
                 agent_id=agent.agent_id,
@@ -623,7 +638,7 @@ async def run(
             )
 
 
-def _safe_json_value(value: Any) -> Any:
+def _safe_json_value(value: Any, _seen: set[int] | None = None) -> Any:
     """Return a JSON-serialisable surrogate for ``value`` or a repr fallback.
 
     The audit chain row hash is computed over a canonical JSON encoding of
@@ -641,18 +656,50 @@ def _safe_json_value(value: Any) -> Any:
     ``{"recipient": "acme", "when": datetime}`` becomes
     ``{"recipient": "acme", "when": {"_non_serializable": True, ...}}``
     rather than the whole dict collapsing.
+
+    Cycle detection (P0 #2 fix). A handler that returns a SQLAlchemy ORM
+    object with ``relationship(backref=...)`` or any user code that
+    constructs ``d = {}; d['self'] = d`` would otherwise drive the
+    recursive walk into a ``RecursionError`` that propagates through
+    ``log_audit`` and 500s a successful tool call. The ``_seen`` set
+    tracks ``id(value)`` across the walk; a repeated visit returns a
+    typed circular-reference marker.
     """
-    # Fast happy path: value is JSON-clean as-is.
+    if _seen is None:
+        _seen = set()
+
+    # Fast happy path: value is JSON-clean as-is. ``json.dumps`` itself
+    # detects circular references (raises ``ValueError``) so the cheap
+    # check before recursing is still correct for non-container leaves.
     try:
         _json.dumps(value)
-        return value
+        # ``json.dumps`` accepted it, but for containers we still want to
+        # recurse so a nested non-serialisable leaf gets the marker
+        # treatment rather than relying on dumps to find it again at the
+        # outer call site. Plain values short-circuit here.
+        if not isinstance(value, (dict, list, tuple)):
+            return value
     except (TypeError, ValueError):
         pass
 
-    if isinstance(value, dict):
-        return {str(k): _safe_json_value(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_safe_json_value(v) for v in value]
+    if isinstance(value, (dict, list, tuple)):
+        value_id = id(value)
+        if value_id in _seen:
+            return {
+                "_omitted": True,
+                "type": type(value).__name__,
+                "reason": "circular_reference",
+            }
+        _seen.add(value_id)
+        try:
+            if isinstance(value, dict):
+                return {str(k): _safe_json_value(v, _seen) for k, v in value.items()}
+            return [_safe_json_value(v, _seen) for v in value]
+        finally:
+            # Pop on the way back up so siblings sharing the same id (rare
+            # but legitimate, e.g. a shared sub-dict) aren't false-positive
+            # flagged as circular.
+            _seen.discard(value_id)
     # Leaf-level fallback: keep enough of the repr to identify the
     # object (class, key fields) without letting a giant binary blob
     # inflate the audit row.
@@ -663,6 +710,23 @@ def _safe_json_value(value: Any) -> Any:
     }
 
 
+def _safe_json_value_top(value: Any) -> Any:
+    """Top-level entry point with belt-and-suspenders ``RecursionError``
+    guard. The ``_safe_json_value`` walker carries cycle detection, but a
+    pathological non-cyclic depth (>1000 nested dicts) would still trip
+    Python's recursion limit. Turn any such crash into the same omit
+    marker so a successful tool call never 500s on audit-side
+    serialisation."""
+    try:
+        return _safe_json_value(value)
+    except RecursionError:
+        return {
+            "_omitted": True,
+            "type": type(value).__name__,
+            "reason": "circular_reference",
+        }
+
+
 def _omit_marker(value: Any) -> dict[str, Any]:
     """Sentinel payload used when ``result_summary`` must be dropped to
     fit under ``max_bytes``. Keeps the type hint for forensic readers
@@ -670,11 +734,43 @@ def _omit_marker(value: Any) -> dict[str, Any]:
     return {"_omitted": True, "type": type(value).__name__}
 
 
+def _parameters_omit_marker(value: Any, encoded_size: int) -> dict[str, Any]:
+    """Sentinel payload used when ``parameters`` themselves must be
+    dropped because they alone exceed ``max_bytes`` after the result
+    has already been omitted (P0 #1 oversize-parameters fix).
+
+    Forensic readers need at least the top-level shape of the original
+    parameters so the audit row stays actionable — without it the only
+    surviving signal would be the tool name, which loses the "what did
+    the agent ask for" trail. ``size_bytes`` carries the original
+    encoded length so a CISO can flag "agent shipped 100 KiB of input
+    to ``payments.transfer``" without recovering the secret values.
+    """
+    marker: dict[str, Any] = {
+        "_omitted": True,
+        "type": type(value).__name__,
+        "size_bytes": encoded_size,
+    }
+    if isinstance(value, dict):
+        # Top-level keys are usually structural (recipient, amount,
+        # memo) and not secret in themselves; preserve them as a
+        # forensic anchor. If a deployment treats the parameter keys
+        # themselves as PII it should redact via the denylist instead
+        # (see ``audit_redaction``).
+        try:
+            marker["top_level_keys"] = sorted(str(k) for k in value.keys())
+        except Exception:  # noqa: BLE001 — never let the marker raise
+            marker["top_level_keys"] = []
+    return marker
+
+
 def _build_success_detail(
     *,
     parameters: Any,
     result: Any,
     max_bytes: int,
+    tool_name: str | None = None,
+    redaction_settings: dict[str, Any] | None = None,
 ) -> str:
     """Build the canonical JSON ``detail`` payload for a successful
     ``tool_execute`` audit row.
@@ -684,21 +780,87 @@ def _build_success_detail(
     so the size check is deterministic and the result is a stable input
     to the per-row hash chain.
 
-    Truncation policy (in order):
+    Default behaviour captures both ``parameters`` and ``result_summary``
+    on every successful tool call. For regulated environments handling
+    PII / MNPI / deal-sensitive data, pass ``redaction_settings`` with
+    ``capture_parameters`` / ``capture_result`` toggles and matching
+    denylists (fnmatch glob patterns, e.g. ``payments.*``); see
+    :mod:`mcp_proxy.tools.audit_redaction`. The matching side is
+    replaced with a ``{"_redacted": True, "reason": ...}`` marker
+    before the size + truncation pipeline runs.
+
+    Truncation policy (in order, P0 #1 fix):
 
       1. Replace non-JSON-serialisable values with the repr fallback
-         from :func:`_safe_json_value`.
-      2. If the payload still exceeds ``max_bytes``, drop
+         from :func:`_safe_json_value`; circular references collapse to
+         the typed marker.
+      2. Apply redaction (when configured) — redacted markers are tiny
+         and consume budget proportionally.
+      3. If the payload still exceeds ``max_bytes``, drop
          ``result_summary`` to ``{"_omitted": True, "type": ...}`` and
          re-encode with a ``"detail_truncated": True`` flag.
-      3. If still over budget (oversize parameters alone), the helper
-         keeps the truncated marker and trusts ``log_audit``'s outer
-         16 KiB cap to refuse: this is a hard ceiling, not a soft
-         shaping rule, and we'd rather fail-deny than ship a row that
-         lies about its content.
+      4. If still over budget (oversize ``parameters`` alone — possible
+         because ``MAX_TOOL_PARAMETERS_BYTES`` is 128 KiB, well above
+         the 4 KiB / 16 KiB audit caps), drop ``parameters`` to a
+         structural marker that keeps the top-level keys + encoded
+         size for forensic anchoring. This guards against the failure
+         mode "tool handler committed side effects, audit row refused
+         by ``_enforce_audit_detail_size``, request becomes a 500
+         under ``audit_fail_deny=True``, agent retries, double-spend".
+      5. If even that is over budget (patological case — top-level keys
+         alone overflow 4 KiB), collapse both sides to bare markers
+         and trust the outer ``AUDIT_DETAILS_MAX_BYTES`` (16 KiB) cap
+         in :func:`mcp_proxy.db._enforce_audit_detail_size` to refuse;
+         the helper deliberately leaves that final cliff to the
+         boundary so the operator sees a structured error rather than
+         a row that lies about its content.
     """
-    safe_params = _safe_json_value(parameters)
-    safe_result = _safe_json_value(result)
+    from mcp_proxy.tools.audit_redaction import (
+        REASON_CAPTURE_DISABLED,
+        REASON_TOOL_DENYLIST,
+        redacted_marker,
+        should_redact_parameters,
+        should_redact_result,
+    )
+
+    safe_params: Any = _safe_json_value_top(parameters)
+    safe_result: Any = _safe_json_value_top(result)
+
+    if redaction_settings is not None:
+        capture_params_enabled = bool(
+            redaction_settings.get("capture_parameters", True),
+        )
+        capture_result_enabled = bool(
+            redaction_settings.get("capture_result", True),
+        )
+        params_denylist = list(
+            redaction_settings.get("parameters_denylist", []) or [],
+        )
+        result_denylist = list(
+            redaction_settings.get("result_denylist", []) or [],
+        )
+        if should_redact_parameters(
+            tool_name=tool_name,
+            capture_enabled=capture_params_enabled,
+            denylist=params_denylist,
+        ):
+            reason = (
+                REASON_CAPTURE_DISABLED
+                if not capture_params_enabled
+                else REASON_TOOL_DENYLIST
+            )
+            safe_params = redacted_marker(reason=reason)
+        if should_redact_result(
+            tool_name=tool_name,
+            capture_enabled=capture_result_enabled,
+            denylist=result_denylist,
+        ):
+            reason = (
+                REASON_CAPTURE_DISABLED
+                if not capture_result_enabled
+                else REASON_TOOL_DENYLIST
+            )
+            safe_result = redacted_marker(reason=reason)
 
     payload: dict[str, Any] = {
         "parameters": safe_params,
@@ -708,14 +870,50 @@ def _build_success_detail(
     if len(encoded.encode("utf-8")) <= max_bytes:
         return encoded
 
-    # Drop result first — parameters are usually the load-bearing signal
-    # for "what did the agent ask for", result is the noisier surface.
+    # Step 3 — drop result first. Parameters are usually the load-bearing
+    # signal for "what did the agent ask for", result is the noisier
+    # surface (logs, file dumps, embedding vectors).
     truncated_payload: dict[str, Any] = {
         "parameters": safe_params,
         "result_summary": _omit_marker(result),
         "detail_truncated": True,
     }
-    return _json.dumps(truncated_payload, sort_keys=True, separators=(",", ":"))
+    encoded = _json.dumps(truncated_payload, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= max_bytes:
+        return encoded
+
+    # Step 4 — parameters alone overflow. Measure the original encoded
+    # size so the forensic marker carries that signal. ``json.dumps`` on
+    # the safe-walked structure cannot raise here (already serialisable).
+    params_encoded_size = len(
+        _json.dumps(safe_params, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8",
+        ),
+    )
+    truncated_payload = {
+        "parameters": _parameters_omit_marker(parameters, params_encoded_size),
+        "result_summary": _omit_marker(result),
+        "detail_truncated": True,
+    }
+    encoded = _json.dumps(truncated_payload, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= max_bytes:
+        return encoded
+
+    # Step 5 — pathological: even the structural markers + top_level_keys
+    # overflow. Strip the keys hint and ship bare markers. The outer
+    # ``AUDIT_DETAILS_MAX_BYTES`` boundary still bounds this at 16 KiB,
+    # so the worst case here is "two markers without key lists", which
+    # is always tiny.
+    bare_payload: dict[str, Any] = {
+        "parameters": {
+            "_omitted": True,
+            "type": type(parameters).__name__,
+            "size_bytes": params_encoded_size,
+        },
+        "result_summary": _omit_marker(result),
+        "detail_truncated": True,
+    }
+    return _json.dumps(bare_payload, sort_keys=True, separators=(",", ":"))
 
 
 def _elapsed_ms(t0: float) -> float:
