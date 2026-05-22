@@ -6,7 +6,7 @@ import Layout from '../layouts/Layout.astro';
 
   <!-- 01 HERO -->
   <section class="hero">
-    <div class="container wide">
+    <div class="container narrow">
       <div class="hero-eyebrow-row reveal">
         <div class="eyebrow">
           <span class="pulse-dot"></span>
@@ -14,48 +14,41 @@ import Layout from '../layouts/Layout.astro';
         </div>
       </div>
 
-      <div class="hero-top">
-        <div class="hero-text">
-          <h1 class="hero-title reveal" data-delay="1">
-            From pilot to production.<br />
-            <em>The layer that unblocks it.</em>
-          </h1>
-        </div>
-        <div class="hero-aside">
-          <p class="hero-lead reveal" data-delay="2">
-            EU regulated banks and insurers want to deploy AI agents.
-            What they do not have is a way to prove to a regulator who
-            decided what, when, with which input, eighteen months
-            later. Cullis Mastio ships the primitives Anthropic,
-            OpenAI, AWS Bedrock, and Azure Foundry do not: cryptographic
-            per-agent identity, tamper-evident hash-chained audit,
-            capability gates, cross-org federation. Self-hosted,
-            <strong>LLM-agnostic</strong>, FSL-1.1+Apache-2.0.
-          </p>
-          <div class="hero-actions reveal" data-delay="3">
-            <a href="#quickstart" class="btn btn-primary">Get the Mastio bundle</a>
-            <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="btn btn-ghost">Read the code</a>
-          </div>
-          <div class="hero-meta reveal" data-delay="4">
-            <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="hero-meta-link">
-              <span class="hero-meta-icon" aria-hidden="true">[ ]</span>
-              <span class="hero-meta-text">
-                <span class="hero-meta-label">Open source</span>
-                <span class="hero-meta-detail">FSL-1.1 · Apache-2.0</span>
-              </span>
-            </a>
-            <a href="/docs" class="hero-meta-link">
-              <span class="hero-meta-icon" aria-hidden="true">{ }</span>
-              <span class="hero-meta-text">
-                <span class="hero-meta-label">Read the docs</span>
-                <span class="hero-meta-detail">Quickstart · ADR · API</span>
-              </span>
-            </a>
-          </div>
-        </div>
+      <h1 class="hero-title reveal" data-delay="1">
+        Cullis is the <em>governance layer</em> for autonomous AI agents in regulated environments.
+      </h1>
+
+      <p class="hero-lead reveal" data-delay="2">
+        Per-agent cryptographic identity. Policy enforced before the LLM
+        call lands. Hash-chained, externally verifiable audit. Self-hosted,
+        LLM-agnostic, <strong>FSL-1.1+Apache-2.0</strong>.
+      </p>
+
+      <div class="hero-actions reveal" data-delay="3">
+        <a href="#quickstart" class="btn btn-primary">Get the Mastio bundle</a>
+        <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="btn btn-ghost">Read the code</a>
       </div>
 
-      <div class="hero-figure reveal" data-delay="4">
+      <div class="hero-meta reveal" data-delay="4">
+        <a href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener" class="hero-meta-link">
+          <span class="hero-meta-icon" aria-hidden="true">[ ]</span>
+          <span class="hero-meta-text">
+            <span class="hero-meta-label">Open source</span>
+            <span class="hero-meta-detail">FSL-1.1 · Apache-2.0</span>
+          </span>
+        </a>
+        <a href="/docs" class="hero-meta-link">
+          <span class="hero-meta-icon" aria-hidden="true">{ }</span>
+          <span class="hero-meta-text">
+            <span class="hero-meta-label">Read the docs</span>
+            <span class="hero-meta-detail">Quickstart · ADR · API</span>
+          </span>
+        </a>
+      </div>
+    </div>
+
+    <div class="container wide">
+      <div class="hero-figure reveal" data-delay="5">
         <div class="frame-stack">
           <div class="frame-glow"></div>
           <div class="product-frame product-frame-hero">
@@ -85,54 +78,50 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 02 WHY PILOTS DON'T GRADUATE -->
-  <section class="stuck-section">
-    <div class="container wide">
-      <div class="stuck-head">
-        <div class="eyebrow reveal">
-          <span class="eyebrow-number">02</span>
-          The graduation gap
-        </div>
-        <h2 class="reveal" data-delay="1">
-          Pilots work. <em>Production audits don't pass.</em>
-        </h2>
-        <p class="reveal" data-delay="2">
-          Anthropic published 10 Finance Agent templates on 5 May 2026.
-          Every major EU bank and insurer is piloting them. The EU AI
-          Act Annex III enforcement cliff hits on <strong>2 August 2026</strong>
-          for high-risk systems. The vendor harnesses do not ship the
-          governance primitives that close the audit-trail gap. The
-          tier-1 institutions are reinventing the layer themselves.
-        </p>
+  <!-- 02 WHAT CULLIS DOES -->
+  <section class="prose-section">
+    <div class="container narrow">
+      <div class="eyebrow reveal">
+        <span class="eyebrow-number">02</span>
+        What Cullis does
       </div>
+      <h2 class="reveal" data-delay="1">
+        Identity, authorization, audit. <em>For the agent, by the agent.</em>
+      </h2>
+      <p class="reveal" data-delay="2">
+        Cullis sits underneath any agent stack (Claude Agent SDK,
+        OpenAI Agents SDK, custom loops) and provides the three
+        primitives a regulated deployment is missing.
+      </p>
 
-      <div class="quotes-head reveal" data-delay="3">
-        <h3>What the named EU institutions are publicly building</h3>
-        <p>
-          Three reference points, all 2026, all public, all primary
-          sources. Each one is a tier-1 institution describing an
-          internal "governance layer" that the vendor stack does not
-          provide.
-        </p>
-      </div>
-
-      <ul class="quote-list reveal" data-delay="4">
+      <ul class="capability-pills reveal" data-delay="3">
         <li>
-          <span class="quote-firm">Allianz × Anthropic</span>
-          <span class="quote-line">January 2026 global partnership identifies its third workstream as <em>"Driving Transparency and Compliance with AI"</em>, committing to "log every decision, rationale, and data source to address insurance-specific risks". Without that substrate, Project Nemo cannot scale beyond food-spoilage claims. <a href="https://www.allianz.com/en/mediacenter/news/media-releases/260109-allianz-and-anthropic-forge-global-partnership.html" target="_blank" rel="noopener">[primary source]</a></span>
+          <span class="pill-key">01</span>
+          <div>
+            <strong>Per-agent cryptographic identity</strong>
+            <span>x509 + DPoP + mTLS, bound to the human or workload that authorized the agent. Not a shared API key.</span>
+          </div>
         </li>
         <li>
-          <span class="quote-firm">Société Générale</span>
-          <span class="quote-line">Named their agent <em>"Lineage AI"</em>. Its job is data traceability for financial and compliance reports. The name itself is the admission: vendor logs do not give regulators traceable lineage. <a href="https://secretsdedata.substack.com/p/ia-agentique-chez-sg-plateforme-et" target="_blank" rel="noopener">[secondary source]</a></span>
+          <span class="pill-key">02</span>
+          <div>
+            <strong>Policy enforced before the call</strong>
+            <span>PDP fires before the LLM API or MCP tool. OPA-compatible or webhook backend. Fail-safe on timeout.</span>
+          </div>
         </li>
         <li>
-          <span class="quote-firm">Lloyds (Envoy)</span>
-          <span class="quote-line">The internal agent platform ships with a <em>"compliance and safety harness combined with a board-bot bias-checking agent"</em>. The harness is alongside the agents, not inside them. <a href="https://www.resultsense.com/news/2026-05-04-lloyds-envoy-ai-agent-platform" target="_blank" rel="noopener">[secondary source]</a></span>
+          <span class="pill-key">03</span>
+          <div>
+            <strong>Tamper-evident audit chain</strong>
+            <span>Hash-chained append-only log, optional RFC 3161 anchoring. Verifiable by an external auditor without trusting your IT team.</span>
+          </div>
         </li>
       </ul>
 
-      <p class="quotes-tag reveal" data-delay="5">
-        Three tier-1 institutions reinventing the same layer. <strong>Cullis is that layer, productized.</strong>
+      <p class="reveal" data-delay="4">
+        LLM-agnostic by design. The embedded gateway routes to
+        Anthropic, OpenAI, Gemini, or Ollama via LiteLLM, and an
+        alternative AI gateway can be wired in as a sidecar.
       </p>
     </div>
   </section>
@@ -193,10 +182,11 @@ import Layout from '../layouts/Layout.astro';
             <h3>Tamper-evident audit chain</h3>
             <p>
               Every event (auth, enroll, message, tool call, LLM token)
-              hashed and chained. RFC 3161 TSA anchoring. Your auditor
-              verifies the chain externally without trusting Cullis or
-              your IT team. Addresses EU AI Act Art. 12 + Art. 13
-              transparency and EIOPA Aug 2025 record-keeping requirements.
+              hashed and chained. Optional RFC 3161 TSA anchoring when
+              a timestamp authority is configured. Your auditor verifies
+              the chain externally without trusting Cullis or your IT
+              team. Addresses EU AI Act Art. 12 + Art. 13 transparency
+              and EIOPA Aug 2025 record-keeping requirements.
             </p>
             <a class="feature-link" href="https://github.com/cullis-security/cullis#cullis-mastio">Audit chain →</a>
           </li>
@@ -322,107 +312,11 @@ import Layout from '../layouts/Layout.astro';
 
   <hr class="divider" />
 
-  <!-- 06 COMPLIANCE MAPPING -->
-  <section class="compliance-mapping">
-    <div class="container wide">
-      <div class="compliance-head">
-        <div class="eyebrow reveal">
-          <span class="eyebrow-number">06</span>
-          Compliance mapping
-        </div>
-        <h2 class="reveal" data-delay="1">
-          The control map.<br />
-          <em>Every framework, every clause.</em>
-        </h2>
-        <p class="reveal" data-delay="2">
-          Compliance teams need to map Cullis capabilities to specific
-          clauses in their framework. We have done the mapping for you.
-        </p>
-      </div>
-
-      <div class="compliance-table-wrap reveal" data-delay="3">
-        <table class="compliance-table">
-          <thead>
-            <tr>
-              <th>Framework</th>
-              <th>Article / clause</th>
-              <th>Cullis capability</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><strong>EU AI Act</strong></td>
-              <td>Art. 12 (logging), 13 (transparency), 14 (human oversight)</td>
-              <td>Tamper-evident audit chain, per-decision reasoning capture, ADR-020 4-quadrant identity</td>
-            </tr>
-            <tr>
-              <td><strong>EU AI Act Annex III</strong></td>
-              <td>High-risk classification (credit, insurance pricing, recruitment)</td>
-              <td>Per-agent identity + per-decision audit + 4-eye approval capability</td>
-            </tr>
-            <tr>
-              <td><strong>DORA</strong></td>
-              <td>Art. 28 (third-party ICT)</td>
-              <td>mTLS + DPoP cryptographic identity per action, self-hosted deployer model</td>
-            </tr>
-            <tr>
-              <td><strong>EIOPA</strong></td>
-              <td>Aug 2025 Opinion 8-axis governance</td>
-              <td>Mastio dashboard + audit export + policy decision logging across fairness, data, record, transparency, oversight, accuracy, robustness, cyber</td>
-            </tr>
-            <tr>
-              <td><strong>IDD</strong></td>
-              <td>Art. 17 (fair treatment), Art. 20, 30</td>
-              <td>Per-claim audit chain, exportable signed bundle for customer complaint reconstruction</td>
-            </tr>
-            <tr>
-              <td><strong>EU GMP Annex 22</strong></td>
-              <td>AI/ML in pharma manufacturing</td>
-              <td>Per-agent identity + immutable change log + signed releases for validated lifecycle</td>
-            </tr>
-            <tr>
-              <td><strong>NIST AI RMF</strong></td>
-              <td>MEASURE 2.7, GOVERN 1.7</td>
-              <td>Standardized audit log export, per-agent identity, role separation</td>
-            </tr>
-            <tr>
-              <td><strong>Colorado AI Act</strong></td>
-              <td>Consumer disclosure for high-risk AI (June 2026)</td>
-              <td>Decision logging with reason, per-decision provenance</td>
-            </tr>
-            <tr>
-              <td><strong>ISO 42001</strong></td>
-              <td>AI Management System controls</td>
-              <td>Operational governance, lifecycle controls, audit evidence</td>
-            </tr>
-            <tr>
-              <td><strong>HIPAA</strong></td>
-              <td>164.312(b) audit controls</td>
-              <td>Append-only audit chain, integrity controls, external verification</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <p class="compliance-note reveal" data-delay="4">
-        Capability mapping reflects Cullis Mastio current release.
-        Specific compliance assessment for a regulated deployment
-        remains the responsibility of the deploying organization.
-      </p>
-
-      <div class="compliance-cta reveal" data-delay="5">
-        <a href="https://mazzolad.com/writing" target="_blank" rel="noopener" class="btn btn-ghost">Read the research on mazzolad.com →</a>
-      </div>
-    </div>
-  </section>
-
-  <hr class="divider" />
-
-  <!-- 07 QUICKSTART -->
+  <!-- 06 QUICKSTART -->
   <section class="prose-section" id="quickstart">
     <div class="container narrow">
       <div class="eyebrow reveal">
-        <span class="eyebrow-number">07</span>
+        <span class="eyebrow-number">06</span>
         Quickstart
       </div>
       <h2 class="reveal" data-delay="1">
@@ -439,24 +333,43 @@ cd cullis-mastio-bundle &amp;&amp; ./deploy.sh</code></pre>
       <pre class="reveal" data-delay="4"><code># 2. Python SDK for your autonomous agent
 pip install cullis-sdk</code></pre>
       <p class="reveal" data-delay="5">
-        Mint an agent identity bundle from the Mastio dashboard, point
-        the SDK at the identity directory with
-        <code>CullisClient.from_identity_dir(...)</code>, and the first
-        <code>chat_completion</code> lands as an audit row. Full install
-        instructions, enrolment paths, and production overrides on
-        <a href="https://github.com/cullis-security/cullis">the repo</a>.
+        Mint an agent identity bundle from the Mastio dashboard, then
+        wire it into the SDK. Six lines and the first
+        <code>chat_completion</code> lands as an audit row.
+      </p>
+      <pre class="reveal" data-delay="6"><code>from cullis_sdk import CullisClient
+
+client = CullisClient.from_identity_dir(
+    "https://mastio.example.com:9443",
+    cert_path="./identity/agent.crt",
+    key_path="./identity/agent.key",
+    dpop_key_path="./identity/dpop.jwk",
+)
+
+response = client.chat_completion(&#123;
+    "model": "claude-sonnet-4-6",
+    "messages": [&#123;"role": "user", "content": "Screen the latest applicant batch."&#125;],
+&#125;)
+
+for tool in client.list_mcp_tools():
+    print(tool["name"])
+
+result = client.call_mcp_tool("sanctions_lookup", &#123;"full_name": "Acme Holding Ltd"&#125;)</code></pre>
+      <p class="reveal" data-delay="7">
+        Full install instructions, enrolment paths, and production
+        overrides on <a href="https://github.com/cullis-security/cullis">the repo</a>.
       </p>
     </div>
   </section>
 
   <hr class="divider" />
 
-  <!-- 08 CLOSING -->
+  <!-- 07 CLOSING -->
   <section class="closing">
     <div class="container narrow">
       <div class="closing-rule"></div>
       <div class="eyebrow reveal">
-        <span class="eyebrow-number">08</span>
+        <span class="eyebrow-number">07</span>
         Pilot conversation
       </div>
       <h2 class="reveal" data-delay="1">Read the code. <em>Then schedule a 30-minute call.</em></h2>
@@ -519,31 +432,44 @@ pip install cullis-sdk</code></pre>
      HERO
   ==================================================== */
   .hero {
+    position: relative;
     padding-top: clamp(6rem, 12vw, 9rem);
     padding-bottom: clamp(3rem, 6vw, 5rem);
-    overflow: visible;
+    overflow: hidden;
+    text-align: center;
   }
 
-  .hero-eyebrow-row { margin-bottom: 2rem; }
+  /* Stage spotlight — rising teal/cyan glow from below, with a thin
+     bright stage-floor reflection at the very bottom. Sits behind the
+     hero content but above the page grid (which is body::before). */
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 38% 6% at 50% 96%, rgba(0, 229, 199, 0.55) 0%, transparent 70%),
+      radial-gradient(ellipse 65% 85% at 50% 95%, rgba(0, 229, 199, 0.20) 0%, rgba(61, 122, 237, 0.10) 35%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .hero > * { position: relative; z-index: 1; }
+
+  .hero-eyebrow-row { margin-bottom: 2rem; display: flex; justify-content: center; }
   .hero-eyebrow-row .eyebrow { margin-bottom: 0; }
 
-  .hero-top {
-    display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
-    gap: clamp(2rem, 5vw, 5rem);
-    align-items: start;
-    margin-bottom: clamp(3rem, 6vw, 5rem);
-  }
-
-  .hero-text { min-width: 0; }
-  .hero-aside { min-width: 0; padding-top: clamp(0.5rem, 1.5vw, 1.2rem); }
+  .hero-actions, .hero-meta { justify-content: center; }
+  .hero-lead { margin-left: auto; margin-right: auto; }
 
   .hero-title {
-    font-size: clamp(3rem, 8vw, 7rem);
-    line-height: 1.0;
+    font-size: clamp(2.4rem, 5.8vw, 4.6rem);
+    line-height: 1.08;
     margin: 0;
     font-weight: 400;
-    letter-spacing: -0.025em;
+    letter-spacing: -0.02em;
+    max-width: 22ch;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   .hero-lead {
@@ -1251,6 +1177,49 @@ pip install cullis-sdk</code></pre>
     margin-bottom: 1.5em;
   }
 
+  .capability-pills {
+    list-style: none;
+    padding: 0;
+    margin: 2rem 0 2.5rem 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .capability-pills li {
+    display: grid;
+    grid-template-columns: 2.5rem 1fr;
+    gap: 1.25rem;
+    padding: 1.4rem 1.5rem;
+    border: 1px solid var(--border-subtle);
+    background: rgba(15, 17, 23, 0.5);
+    align-items: start;
+  }
+  .capability-pills .pill-key {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--accent-cyan);
+    letter-spacing: 0.12em;
+    padding-top: 0.2rem;
+  }
+  .capability-pills strong {
+    display: block;
+    color: var(--text-primary);
+    font-weight: 500;
+    font-size: 1.08rem;
+    margin-bottom: 0.35rem;
+  }
+  .capability-pills span {
+    color: var(--text-secondary);
+    line-height: 1.6;
+    font-size: 0.97rem;
+  }
+  @media (min-width: 720px) {
+    .capability-pills {
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+    }
+  }
+
   /* ====================================================
      CLOSING
   ==================================================== */
@@ -1317,4 +1286,5 @@ pip install cullis-sdk</code></pre>
       font-size: 0.85rem;
     }
   }
+
 </style>

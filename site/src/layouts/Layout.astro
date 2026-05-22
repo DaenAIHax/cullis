@@ -6,21 +6,23 @@ import '../styles/global.css';
 interface Props {
   title: string;
   description?: string;
+  theme?: 'dark' | 'light';
 }
 
 const {
   title,
-  description = 'Zero-trust identity and audit for AI agents. Start air-gapped. Scale to cross-company federation without redeploy.'
+  description = 'Zero-trust identity and audit for AI agents. Start air-gapped. Scale to cross-company federation without redeploy.',
+  theme = 'dark'
 } = Astro.props;
 ---
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme={theme}>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="generator" content={Astro.generator} />
-  <meta name="theme-color" content="#f5efdf" />
+  <meta name="theme-color" content={theme === 'light' ? '#FFFFFF' : '#050508'} />
   <title>{title}</title>
   <meta name="description" content={description} />
   <link rel="icon" type="image/svg+xml" href="/cullis-mark.svg" />
