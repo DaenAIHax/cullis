@@ -28,7 +28,9 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 **Identity.** Each agent receives an x509 leaf certificate signed by an organization-owned CA, bound to a SPIFFE SAN, pinned by thumbprint. The certificate is the credential. The Mastio rejects any token presented without the matching client certificate (mTLS RFC 8705 §3) and verifies a DPoP proof (RFC 9449) on every authenticated request, refusing plain Bearer tokens outright.
 
-**Policy.** A policy decision point evaluates each request before the LLM or MCP tool is reached. Default-deny for new sessions, default-allow for messages with optional restrictions. An OPA bundle or a webhook backend is supported, both fail safe on timeout. Capability gates apply per agent and per typed principal (user, workload, agent), so a human user can never invoke an agent-only tool by accident.
+**Policy.** A policy decision point evaluates each request before the LLM or MCP tool is reached. Two layers: the operator can author **Rego policies in the dashboard** and the Mastio compiles them via the bundled `opa build` (OPA v1.16.2, SHA-pinned in the image) and evaluates the WebAssembly bundle in-process via `opa-wasmtime` on every decision — p50 ~0.2 ms / 4 600 ops/s single-thread after the first evaluate (`scripts/bench-rego-eval.py` is reproducible). A legacy allowlist (`blocked_agents`, `allowed_orgs`, capability gates per typed principal) backs up the Rego layer for deployments that haven't adopted it. Default-deny for new sessions, default-allow for messages, fail-safe on timeout.
+
+**Policy bridge.** The same Rego decisions are reachable over the **OPA Data API** (`/v1/data/cullis/policy/{session, tool_call}`) and the **CloudEvents HTTP binding** (`/v1/integrations/cloudevents`) so any external data plane that already speaks those two protocols can use Cullis as its control plane without writing glue. HMAC-SHA256 guarded, rotates independently from the broker PDP plane.
 
 **Audit.** Every accepted action lands as a row in an append-only audit log, hash-chained per organization, optionally anchored to RFC 3161 TSA on a configurable cadence. The chain replays deterministically: an external auditor can verify it offline without holding any Cullis credentials.
 
@@ -97,7 +99,9 @@ pip install cullis-sdk
 
 Then point your agent at the identity dir using the code example above. The first request lands as an audit row visible in the dashboard under `Audit`.
 
-The default backend is SQLite — fine for the quickstart, the demo VM, and the first one or two agents. Pilots above ~50 concurrent agents should switch to Postgres with `./deploy.sh --db postgres` (or point `PROXY_DB_URL` in `proxy.env` at a managed instance). The full runbook lives at [cullis.io/docs/operate/postgres-pilot](https://cullis.io/docs/operate/postgres-pilot).
+**Policies.** Open the dashboard's `Policies → Rego` tab and paste a Rego rule, or stay on the legacy `Built-in Rules` + `Tool Rules` tabs for simple allowlists. The Mastio compiles Rego on Save (~25 ms) and evaluates the WebAssembly bundle in-process on every decision (~0.2 ms p50). Two worked examples in [cullis.io/docs/operate/rego-policies](https://cullis.io/docs/operate/rego-policies).
+
+**Backend.** SQLite is fine for the quickstart, the demo VM, and the first one or two agents. Pilots above ~50 concurrent agents should switch to Postgres with `./deploy.sh --db postgres` (or point `PROXY_DB_URL` in `proxy.env` at a managed instance). The full runbook lives at [cullis.io/docs/operate/postgres-pilot](https://cullis.io/docs/operate/postgres-pilot).
 
 The Mastio bundle README in `packaging/mastio-bundle/` covers custom hostnames, Postgres and Vault production overrides, oauth2-proxy integration, and the upgrade procedure.
 
@@ -126,8 +130,8 @@ Alpha. The Mastio runs end-to-end on a laptop and ships from a public release tr
 
 | Component | Latest | What it is |
 |---|---|---|
-| **Cullis Mastio** | [`mastio-v0.5.2`](https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.2) | Org gateway, agent CA, policy enforcement, audit chain, MCP reverse proxy, embedded AI gateway |
-| **Cullis SDK** | [`cullis-sdk 0.1.3`](https://pypi.org/project/cullis-sdk/) | Python client used by autonomous agents to talk to Mastio |
+| **Cullis Mastio** | [`mastio-v0.5.2`](https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.2) | Org gateway, agent CA, Rego + allowlist policy engine, audit chain, MCP reverse proxy, embedded AI gateway, OPA Data API + CloudEvents bridge for external data planes |
+| **Cullis SDK** | [`cullis-sdk 0.1.3`](https://pypi.org/project/cullis-sdk/) | Python client used by autonomous agents to talk to Mastio. Supports `from_identity_dir` (plain file) and `from_systemd_credentials` (Linux production tmpfs delivery) |
 
 Use Cullis in evaluation, integration, and internal deploys. Talk to us before putting it in front of regulated production traffic.
 
