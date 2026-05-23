@@ -222,6 +222,16 @@ class ProxySettings(BaseSettings):
     # the broker via ``POLICY_WEBHOOK_HMAC_SECRET`` to enable.
     pdp_webhook_hmac_secret: str = ""
 
+    # Shared secret for the ``/v1/data/cullis/...`` OPA-compatible data API
+    # + ``/v1/integrations/cloudevents`` sink (the policy-bridge surface
+    # used by any external gateway that speaks OPA + CloudEvents). Kept
+    # distinct from ``pdp_webhook_hmac_secret`` so the operator can
+    # rotate the integration secret without touching the broker PDP
+    # plane. Same semantics: when set, every inbound request must carry
+    # ``X-Cullis-Integration-Signature: <hex(hmac-sha256(body))>``;
+    # when unset, the endpoints accept unsigned calls (warn at boot).
+    integrations_hmac_secret: str = ""
+
     # SSRF escape hatch — PR #2 audit 2026-05-20.
     # When False (the production default) outbound URL helpers
     # (mcp_proxy/utils/url_safety.assert_safe_outbound_url) refuse any

@@ -12,6 +12,49 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+### Mastio — policy bridge (OPA Data API + CloudEvents sink)
+
+- **New `/v1/data/cullis/policy/{path}` endpoint** — OPA Data API
+  compatible binding. Any external agent infrastructure component
+  that already consumes the OPA Data API contract can use Cullis as
+  its external policy decision point. Two paths wired today:
+  `session` (mirror of `/pdp/policy`) and `tool_call` (mirror of
+  `/v1/policy/tool-call`). Unknown paths return `{"result": null}`
+  per OPA convention so the caller's `default` posture wins. Reuses
+  the existing `policy_rules` config from the Policies dashboard —
+  the operator writes a policy once and both planes honour it.
+
+- **New `/v1/integrations/cloudevents` sink** — CloudEvents HTTP
+  binding (binary mode + structured mode) consumer. Every event
+  becomes one row on the append-only hash-chained `audit_log` via
+  `db.log_audit`. Mapping documented under
+  [Integrations → policy bridge](https://cullis.io/docs/integrations/policy-bridge).
+  The customer that runs an external data plane gets one
+  cryptographically verifiable audit trail covering both planes
+  without writing glue code. External-emitter rows are namespaced
+  with an `external:` prefix on `agent_id` so dashboard queries can
+  isolate them from native Cullis agents.
+
+- **HMAC guard `MCP_PROXY_INTEGRATIONS_HMAC_SECRET`** — independent
+  rotation from the broker PDP plane (`pdp_webhook_hmac_secret`).
+  Same posture as the existing PDP webhook: when unset, endpoints
+  accept unsigned calls (eases rollout); when set, missing or
+  mismatched signatures return 401 with no body so an unauthenticated
+  caller cannot probe `policy_rules` content via differential timing.
+
+- **18 new unit tests** in `test/unit/test_policy_bridge.py` cover
+  OPA session / tool_call decisions (allow / deny via blocked_agents,
+  allowed_orgs, capabilities, blocked_tools, allowed_tools), unknown
+  OPA path → null, malformed body → 400, CloudEvents binary +
+  structured modes, missing required attributes → 400, HMAC unsigned
+  / signed / mismatched / matching.
+
+- **Docs**: new
+  [Integrations → policy bridge](https://cullis.io/docs/integrations/policy-bridge)
+  page with the architecture diagram, the external-side config knobs
+  to set, the smoke commands, and the CloudEvent → audit_log column
+  mapping reference.
+
 ### SDK — `from_systemd_credentials` factory (Tier 2 agent key storage)
 
 - **New `CullisClient.from_systemd_credentials()` factory** for the
