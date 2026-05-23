@@ -2040,6 +2040,15 @@ app.include_router(admin_workloads_router)
 from mcp_proxy.admin.enroll import router as admin_enroll_router
 app.include_router(admin_enroll_router)
 
+# External agent-gateway integration — exposes Cullis policy + audit as
+# OPA Data API + CloudEvents sink so customers who already run
+# agentgateway (agentgateway.dev) or any other OPA-compatible data plane
+# can use Cullis as the policy / audit control plane without writing
+# glue. See ``docs/integrations/agentgateway.md`` for the deployment
+# pattern. HMAC guard via ``MCP_PROXY_INTEGRATIONS_HMAC_SECRET``.
+from mcp_proxy.integrations.agentgateway import router as agentgateway_router
+app.include_router(agentgateway_router)
+
 # ADR-017 Phase 4 — multi-provider AI gateway credentials managed
 # from the dashboard. Anthropic / OpenAI / Gemini / Bedrock / Vertex
 # / Ollama plug into the embedded LiteLLM at runtime.
