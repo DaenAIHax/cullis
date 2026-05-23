@@ -3,26 +3,24 @@
 # Cullis — MCP Proxy deployment (org-level gateway + built-in PDP)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Deploys the MCP Proxy for one organization.
+# Deploys the Cullis Mastio (the org-level MCP proxy) standalone on a
+# private docker network. The Mastio derives its Org CA at first boot
+# and works zero-config.
 #
-# Default = standalone Mastio on its own private docker network. The
-# Mastio derives its Org CA at first boot and works zero-config; allaccio
-# al Court is post-setup via the dashboard. The --shared-broker override
-# is only for bringing up the Mastio alongside a Court already running
-# on the same docker host (CI fixtures, single-host dev).
+# For the customer-facing one-shot deploy script (bundled docker-compose,
+# nginx TLS sidecar, env templates), use packaging/mastio-bundle/deploy.sh.
+# This script is the lower-level dev entrypoint used when working against
+# the source tree directly.
 #
 # Modes (combinable):
 #   (default)         standalone Mastio, private docker network
-#   --shared-broker   join the broker's docker network (Court must be up)
 #   --prod            fail-fast on insecure defaults + prod overlay
 #   --down            stop + remove containers
 #   --rebuild         rebuild images and restart
 #
 # Examples:
 #   ./deploy_proxy.sh                       # standalone (default)
-#   ./deploy_proxy.sh --shared-broker       # join Court on same host
 #   ./deploy_proxy.sh --prod                # standalone, prod safety
-#   ./deploy_proxy.sh --prod --shared-broker
 #   ./deploy_proxy.sh --down
 #
 set -euo pipefail
@@ -30,10 +28,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Distinct compose project name isolates the proxy stack from the broker
-# (deploy_broker.sh → cullis-broker). Otherwise fresh clones named `cullis`
-# would share docker volumes across stacks and a fresh user would hit
-# opaque volume/password collisions (shake-out P0-03).
+# Distinct compose project name isolates the proxy stack so fresh
+# clones named `cullis` do not share docker volumes across stacks
+# and a fresh user does not hit opaque volume/password collisions.
 export COMPOSE_PROJECT_NAME="cullis-proxy"
 
 GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'
@@ -62,15 +59,11 @@ print_help() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Deploys the MCP Proxy for one organization. Default = standalone Mastio
-(zero broker dependency). Combine with --down / --rebuild for lifecycle
-management, --shared-broker only when a Court is up on the same host.
+Deploys the Cullis Mastio (org-level MCP proxy). Default = standalone
+Mastio on a private docker network.
 
 Options:
   (no flags)                  Standalone Mastio, private docker network
-                              (default — no broker required at boot)
-  --shared-broker             Join the broker's docker network. Requires
-                              the Court compose project to be up.
   --prod                      Production: fail-fast on insecure defaults,
                               requires proxy.env pre-provisioned.
   --down                      Stop and remove containers.
@@ -79,40 +72,26 @@ Options:
 
 Examples:
   ./deploy_proxy.sh                              # standalone (default)
-  ./deploy_proxy.sh --shared-broker              # join Court on same host
   ./deploy_proxy.sh --prod                       # standalone, prod safety
-  ./deploy_proxy.sh --prod --shared-broker       # federated prod
   ./deploy_proxy.sh --down                       # stop + remove containers
-
-Legacy --standalone (no-op) is accepted with a deprecation warning so
-older runbooks keep running.
 EOF
 }
 
 ACTION="up"
 MODE="development"
-SHARED_BROKER=0
 for arg in "$@"; do
     case "$arg" in
         --down)          ACTION="down" ;;
         --rebuild)       ACTION="rebuild" ;;
         --prod)          MODE="production" ;;
-        --shared-broker) SHARED_BROKER=1 ;;
-        --standalone)
-            warn "--standalone is the new default — flag is a no-op. Drop it from your scripts."
-            ;;
         --help|-h)       print_help; exit 0 ;;
         *) die "Unknown argument: $arg (use --help)" ;;
     esac
 done
 
 # ── Compose file stacking ───────────────────────────────────────────────────
-# Default = standalone (private proxy_net + MCP_PROXY_STANDALONE=true
-# in the base compose). The shared-broker override layers on broker_net
-# + MCP_PROXY_STANDALONE=false.
-# Base compose is already in $COMPOSE; here we add only the overlays.
+# Base compose is already in $COMPOSE; here we add only the prod overlay.
 COMPOSE_FILES=""
-[[ $SHARED_BROKER -eq 1 ]]   && COMPOSE_FILES="$COMPOSE_FILES -f deploy/compose/docker-compose.proxy.shared-broker.yml"
 [[ "$MODE" == "production" ]] && COMPOSE_FILES="$COMPOSE_FILES -f deploy/compose/docker-compose.proxy.prod.yml"
 
 # ── Down early-exit ─────────────────────────────────────────────────────────
@@ -178,21 +157,12 @@ if [[ "$MODE" == "production" ]]; then
 fi
 
 # ── Build + Start ───────────────────────────────────────────────────────────
-step "Deploying Cullis MCP Proxy (${MODE}, $([ $SHARED_BROKER -eq 1 ] && echo shared-broker || echo standalone))"
+step "Deploying Cullis MCP Proxy (${MODE}, standalone)"
 
 if [[ "$ACTION" == "rebuild" ]]; then
     echo -e "  ${GRAY}$COMPOSE $COMPOSE_FILES --env-file deploy/proxy/proxy.env build --no-cache${RESET}"
     $COMPOSE $COMPOSE_FILES --env-file deploy/proxy/proxy.env build --no-cache
     ok "Images rebuilt"
-fi
-
-# --shared-broker assumes the broker compose project is up so its docker
-# network is reachable. Bail with a useful error if it isn't, instead of
-# letting compose emit "network cullis-broker_default not found".
-if [[ $SHARED_BROKER -eq 1 ]]; then
-    if ! docker network inspect cullis-broker_default >/dev/null 2>&1; then
-        die "--shared-broker requires the broker compose to be up. Either run ./deploy_broker.sh --dev first, or drop --shared-broker for the standalone default."
-    fi
 fi
 
 echo -e "  ${GRAY}$COMPOSE $COMPOSE_FILES --env-file deploy/proxy/proxy.env up --build -d${RESET}"

@@ -81,7 +81,7 @@ If `/readyz` returns `503`, jump to [Troubleshoot](#troubleshoot).
 
 ## Enable chat (Anthropic API key)
 
-The Mastio includes an embedded AI gateway that powers the chat completion endpoint used by Cullis Chat and Frontdesk. Without a provider key, chat returns HTTP `503 provider_key_missing` — registry / MCP / audit keep working regardless.
+The Mastio includes an embedded AI gateway that powers the `/v1/llm/chat` endpoint your agents call via the SDK. Without a provider key, chat returns HTTP `503 provider_key_missing` — registry / MCP / audit keep working regardless.
 
 Open `proxy.env` and set:
 
