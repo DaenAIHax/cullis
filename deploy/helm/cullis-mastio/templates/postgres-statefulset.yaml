@@ -1,7 +1,9 @@
 {{- if .Values.postgres.internal }}
-# NOTE: the current proxy image does NOT read from Postgres — see
-# mcp_proxy/db.py (aiosqlite only). This StatefulSet is provided as a
-# forward-compatible stub and is disabled by default.
+# Postgres backend for the Cullis Mastio proxy — fully supported runtime
+# binding via asyncpg (mcp_proxy/db.py). Disabled by default; flip
+# ``postgres.internal: true`` to deploy this StatefulSet alongside the
+# proxy, or set ``postgres.externalUrl`` to point at a managed instance
+# instead (preferred for production).
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

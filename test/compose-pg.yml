@@ -1,0 +1,32 @@
+# Ephemeral Postgres 16 service for the cross-dialect Mastio test suite.
+#
+# Usage:
+#   docker compose -f test/compose-pg.yml up -d
+#   export CULLIS_TEST_PG_URL=postgresql+asyncpg://cullis:cullis@127.0.0.1:5544/cullis_test
+#   pytest test/ -m postgres -n auto
+#   docker compose -f test/compose-pg.yml down -v
+#
+# The port 5544 is non-standard on purpose so it does NOT collide with a
+# customer Postgres bound to 5432 on the same host (libvirt VM mastio-demo,
+# dogfood Frontdesk VM, etc.). The volume is named so a `down -v` truly
+# wipes state between test runs and keeps the WAL from drifting across
+# repeated runs.
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: cullis-test-postgres
+    environment:
+      POSTGRES_USER: cullis
+      POSTGRES_PASSWORD: cullis
+      POSTGRES_DB: cullis_test
+      # tmpfs-style data dir for speed; loss on `down` is the intent.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "127.0.0.1:5544:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cullis -d cullis_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data

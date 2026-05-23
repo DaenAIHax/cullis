@@ -1,0 +1,71 @@
+# =============================================================================
+# Cullis MCP Proxy — Postgres 16 backend overlay
+# =============================================================================
+#
+# Opt-in production-grade Postgres backing for the Mastio. Layer this on
+# top of the base compose file::
+#
+#   docker compose \
+#     -f deploy/compose/docker-compose.proxy.yml \
+#     -f deploy/compose/docker-compose.proxy.postgres.yml \
+#     up -d --wait
+#
+# Or via the bundle::
+#
+#   cd packaging/mastio-bundle
+#   ./deploy.sh --db postgres
+#
+# The base compose file leaves MCP_PROXY_DATABASE_URL defaulting to
+# SQLite; this overlay sets PROXY_DB_URL (the canonical env name, ADR-001
+# Phase 1.3) to asyncpg pointing at the in-network postgres service.
+# Both env vars are honoured by mcp_proxy.config, with PROXY_DB_URL
+# winning when both are present.
+#
+# Why a separate service in the same compose project (not an external
+# Postgres URL):
+#   - The default mastio-bundle ships a single-host install; bundling
+#     Postgres next to the Mastio matches that posture and keeps the
+#     operator's mental model on one ``compose ps`` view.
+#   - For multi-host or cloud Postgres, drop this overlay and instead
+#     set PROXY_DB_URL=postgresql+asyncpg://<managed-host>... directly
+#     in proxy.env. The base compose file picks it up unchanged.
+# =============================================================================
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cullis-mastio-postgres
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-cullis_mastio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required when running with the Postgres overlay — set it in proxy.env}
+      POSTGRES_DB:       ${POSTGRES_DB:-cullis_mastio}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - mastio_postgres_data:/var/lib/postgresql/data
+    networks:
+      - proxy_net
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-cullis_mastio} -d ${POSTGRES_DB:-cullis_mastio}
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  mcp-proxy:
+    environment:
+      # asyncpg URL — wins over the SQLite default in the base file.
+      PROXY_DB_URL: postgresql+asyncpg://${POSTGRES_USER:-cullis_mastio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cullis_mastio}
+      # Mirror to the legacy env name so older proxy images (pre-Phase-1.3)
+      # in mixed-version rollouts still pick up the value.
+      MCP_PROXY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cullis_mastio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cullis_mastio}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  mastio_postgres_data:
+    driver: local

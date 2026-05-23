@@ -31,7 +31,8 @@ For a Kubernetes deployment, see [Mastio on Kubernetes](mastio-kubernetes) inste
 **Out of scope** (covered elsewhere)
 
 - Multi-node production deployment — see [Mastio on Kubernetes](mastio-kubernetes)
-- External Postgres / Redis / Vault — supported via `proxy.env`, see [Configuration reference](../reference/configuration)
+- Postgres backend for pilots above ~50 concurrent agents — see [Postgres for production pilots](../operate/postgres-pilot)
+- External Redis / Vault — supported via `proxy.env`, see [Configuration reference](../reference/configuration)
 
 ## 1. Download the bundle
 

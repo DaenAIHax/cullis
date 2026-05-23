@@ -12,6 +12,45 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+### Mastio — production-ready Postgres binding (F0.2)
+
+- **Bundle ships `--db postgres` flag** for `deploy.sh`. Brings up a
+  bundled Postgres 16 container alongside the Mastio via
+  `docker-compose.postgres.yml` overlay; the Mastio reads
+  `PROXY_DB_URL` (asyncpg) pointing at it. Default backend stays
+  SQLite for the quickstart / demo VM path.
+
+- **Integration test suite `test/integration/test_alembic_full_chain_postgres.py`**
+  (gated by `@pytest.mark.postgres` + `CULLIS_TEST_PG_URL`) pins the
+  asyncpg binding contract end-to-end: full 43-migration walk against
+  a fresh Postgres, append-only `BEFORE UPDATE/DELETE` trigger on
+  `audit_log`, `UNIQUE(chain_seq)` surfacing as
+  `sqlalchemy.exc.IntegrityError` (the multi-worker retry path
+  depends on this), advisory-lock observability via `pg_locks`. Run
+  via `./test/run-pg-nightly.sh` which boots the ephemeral
+  `test/compose-pg.yml` service, exports the URL, and tears it down.
+
+- **Soak baseline script `scripts/load-soak-pg.sh`**. Replica of the
+  A.1b Run 3 SQLite soak profile (ramp 0 → 5000 VU over 30 minutes
+  on `/health`) but against the Postgres backend, with a Markdown
+  report under `imp/load-test-run4-postgres-<timestamp>.md` showing
+  p50/p95/p99 ingress, audit row count, `pg_stat_activity`, error
+  rate, and the Run 3 SQLite baseline side-by-side as the decision
+  gate.
+
+- **Helm chart `postgres-statefulset.yaml`** comment refreshed —
+  removed the obsolete caveat that the proxy image did not read from
+  Postgres. The chart has been fully wired for the asyncpg binding
+  since ADR-001 Phase 1.3; the new note clarifies how to switch
+  between `postgres.internal: true` (bundled StatefulSet) and
+  `postgres.externalUrl` (managed cloud).
+
+- **New cullis.io page `operate/postgres-pilot`** covers both the
+  bundled overlay and managed cloud Postgres, the required database
+  privileges, how to verify the binding with the integration suite,
+  and the operator-side troubleshooting matrix (`POSTGRES_PASSWORD`
+  missing, orphan SQLite guard, stuck Alembic advisory lock).
+
 ## [Connector v0.5.2] — CRITICAL chat-history cross-user leak — 2026-05-20
 
 ### Security

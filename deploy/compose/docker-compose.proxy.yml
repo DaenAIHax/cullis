@@ -40,7 +40,14 @@ services:
       # Persistent signing key — without this, admin sessions are invalid
       # after every proxy restart (per-process random fallback).
       MCP_PROXY_DASHBOARD_SIGNING_KEY: ${MCP_PROXY_DASHBOARD_SIGNING_KEY:-}
-      MCP_PROXY_DATABASE_URL:      sqlite+aiosqlite:////data/mcp_proxy.db
+      # Defaults to file-backed SQLite on the mcp_proxy_data volume; the
+      # docker-compose.proxy.postgres.yml override flips this to an
+      # asyncpg URL pointing at the bundled Postgres 16 service. Both
+      # PROXY_DB_URL (canonical) and MCP_PROXY_DATABASE_URL (legacy
+      # alias) are read by mcp_proxy.config.get_database_url; precedence
+      # follows the runtime (PROXY_DB_URL wins).
+      MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
+      PROXY_DB_URL:                ${PROXY_DB_URL:-}
       # Broker uplink — empty by default in standalone. The shared-broker
       # override fills these with the in-compose service name; production
       # federated deploys set them via proxy.env.

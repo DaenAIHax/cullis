@@ -97,6 +97,8 @@ pip install cullis-sdk
 
 Then point your agent at the identity dir using the code example above. The first request lands as an audit row visible in the dashboard under `Audit`.
 
+The default backend is SQLite — fine for the quickstart, the demo VM, and the first one or two agents. Pilots above ~50 concurrent agents should switch to Postgres with `./deploy.sh --db postgres` (or point `PROXY_DB_URL` in `proxy.env` at a managed instance). The full runbook lives at [cullis.io/docs/operate/postgres-pilot](https://cullis.io/docs/operate/postgres-pilot).
+
 The Mastio bundle README in `packaging/mastio-bundle/` covers custom hostnames, Postgres and Vault production overrides, oauth2-proxy integration, and the upgrade procedure.
 
 ---
