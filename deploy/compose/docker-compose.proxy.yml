@@ -48,6 +48,10 @@ services:
       # follows the runtime (PROXY_DB_URL wins).
       MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
       PROXY_DB_URL:                ${PROXY_DB_URL:-}
+      # See packaging/mastio-bundle/docker-compose.yml for the rationale.
+      # Empty by default; set in proxy.env to enable the HMAC guard on
+      # /v1/data/cullis/policy and /v1/integrations/cloudevents.
+      MCP_PROXY_INTEGRATIONS_HMAC_SECRET: ${MCP_PROXY_INTEGRATIONS_HMAC_SECRET:-}
       # Broker uplink — empty by default in standalone. The shared-broker
       # override fills these with the in-compose service name; production
       # federated deploys set them via proxy.env.

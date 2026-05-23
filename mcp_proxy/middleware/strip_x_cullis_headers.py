@@ -62,6 +62,17 @@ _ALLOWLIST: frozenset[bytes] = frozenset({
     b"x-cullis-session-token",
     b"x-cullis-on-behalf-of-user",
     b"x-cullis-device-attestation",
+    # Integration-side HMAC signature for the agentgateway bridge
+    # endpoints (mcp_proxy/integrations/agentgateway.py). The header
+    # is OPERATOR-controlled (its value is an HMAC-SHA256 over the
+    # raw body, keyed on MCP_PROXY_INTEGRATIONS_HMAC_SECRET) and the
+    # endpoint that reads it is the same one that GENERATES the
+    # ``expected`` digest — there is no trust-header confusion attack
+    # because a wrong signature returns 401 with no body. Allowlisting
+    # is required because otherwise this middleware strips the header
+    # before it reaches ``_verify_signature`` and every signed call
+    # looks unsigned to the gate.
+    b"x-cullis-integration-signature",
 })
 
 

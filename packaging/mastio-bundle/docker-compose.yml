@@ -104,6 +104,16 @@ services:
       # MCP_PROXY_DATABASE_URL stays as a backward-compat alias.
       MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
       PROXY_DB_URL:                ${PROXY_DB_URL:-}
+      # Shared secret for the agentgateway-integration endpoints
+      # (/v1/data/cullis/policy and /v1/integrations/cloudevents).
+      # Empty by default — the endpoints accept unsigned calls during
+      # the rollout window. Set to a strong random in proxy.env to
+      # require X-Cullis-Integration-Signature on every call. Without
+      # this passthrough the env never reaches the proxy container and
+      # the operator's proxy.env value is silently ignored — a
+      # dogfood-found gap (2026-05-23) that the customer would have hit
+      # the moment they tried to turn the signature requirement on.
+      MCP_PROXY_INTEGRATIONS_HMAC_SECRET: ${MCP_PROXY_INTEGRATIONS_HMAC_SECRET:-}
       MCP_PROXY_BROKER_URL:        ${MCP_PROXY_BROKER_URL:-}
       MCP_PROXY_BROKER_JWKS_URL:   ${MCP_PROXY_BROKER_JWKS_URL:-}
       MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}
