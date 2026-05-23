@@ -33,3 +33,10 @@ litellm>=1.50.0
 # installs from requirements-proxy.txt rather than the cullis-agent-sdk
 # extra, so the dep must be pinned here too.
 webauthn>=2.0,<3.0
+# Embedded Rego policy engine — evaluate operator-authored WASM
+# bundles in-process on every PDP decision. The ``opa`` binary that
+# compiles Rego to WASM is shipped separately in the Mastio image
+# (see Dockerfile); this Python package only needs the wasmtime
+# runtime to evaluate the compiled bundles.
+opa-wasmtime>=0.1.1
+wasmtime>=44.0.0

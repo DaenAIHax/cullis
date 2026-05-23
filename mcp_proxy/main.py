@@ -1740,6 +1740,31 @@ async def pdp_policy(request: Request):
     else:
         rules = {}
 
+    # Two-layer policy: try the operator's Rego first (compiled WASM
+    # bundle stored under ``policy_rules.rego_wasm_base64``); fall
+    # through to the legacy allowlist below if Rego is not configured
+    # or its eval fails (the helper logs the failure).
+    from mcp_proxy.policy import try_rego_decision
+    rego_decision = try_rego_decision(
+        rules,
+        {
+            "initiator_agent_id": initiator,
+            "target_agent_id": target,
+            "initiator_org_id": body.get("initiator_org_id", ""),
+            "target_org_id": body.get("target_org_id", ""),
+            "session_context": context,
+            "capabilities": body.get("capabilities", []),
+        },
+        surface="session",
+    )
+    if rego_decision is not None:
+        _log.info(
+            "PDP[rego] %s: %s -> %s (ctx=%s) %s",
+            rego_decision.get("decision", "").upper(),
+            initiator, target, context, rego_decision.get("reason", ""),
+        )
+        return JSONResponse(rego_decision)
+
     # Evaluate rules (empty = allow all)
     decision = "allow"
     reason = ""

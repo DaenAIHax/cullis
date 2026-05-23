@@ -12,6 +12,56 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+### Mastio — embedded Rego policy engine (operator beyond allowlists)
+
+- **New `mcp_proxy/policy/rego_engine.py` module**: compile a Rego
+  source via the bundled `opa build -t wasm` CLI, persist the WASM
+  bundle, evaluate it in-process via `opa-wasmtime` on every PDP
+  decision. No sidecar OPA daemon, no extra container. Sub-millisecond
+  eval per decision after the first instantiation (per opa-wasmtime
+  benchmarks).
+
+- **Two-layer policy on `/pdp/policy` + `/v1/data/cullis/policy/*`**:
+  the operator's Rego (when configured) evaluates first; the legacy
+  allowlist (`blocked_agents`, `allowed_orgs`, `capabilities`,
+  `tool_rules`) stays active as the fallback for deployments that
+  haven't adopted Rego AND as the safety net when Rego runtime eval
+  fails (logged at warning, never silently denies). `/v1/policy/tool-call`
+  (Connector legacy ambassador path) is intentionally out of scope —
+  it carries federation logic that needs a separate coordination pass.
+
+- **Storage**: two new fields inside the existing
+  `proxy_config.policy_rules` JSON document — `rego` (operator-authored
+  source, kept for the dashboard editor) and `rego_wasm_base64` (the
+  compiled WASM bundle, base64-encoded). Backward-compatible: no
+  schema migration; existing `policy_rules` documents without these
+  fields stay on the allowlist path.
+
+- **Operator UX**: `MCP_PROXY_OPA_BINARY` env pins the OPA binary
+  location (defaults to PATH search + `/usr/local/bin/opa`). Compile
+  timeout 10 seconds with explicit error message on the Save flow.
+  `RegoCompileError` surfaces the `opa build` stderr verbatim so the
+  dashboard renders the exact line + column the operator typed wrong.
+
+- **Failure semantics**: `RegoCompileError` blocks Save (operator
+  must fix); `RegoEvalError` at runtime → fall through to the legacy
+  allowlist + warning log (operator's broken Rego does not brick
+  every previously-allowed call). Future work to add a strict mode
+  that fails-closed on runtime error tracked separately.
+
+- **23 new unit tests**: `test/unit/test_rego_engine.py` (15 cases —
+  compile success / failure / timeout / bundle extraction / WASM eval
+  / decision normalisation) + `test/unit/test_policy_helper.py`
+  (8 cases — `try_rego_decision` contract: no Rego / malformed
+  base64 / runtime error / passthrough on both surfaces).
+
+- **Docs**: new
+  [Operate → Rego policies](https://cullis.io/docs/operate/rego-policies)
+  page with two complete example policies (org-allowlist + capability
+  gate for `session`, per-agent tool whitelist for `tool_call`), the
+  authoring workflow against the dashboard Policies page, and the
+  constraints (which OPA built-ins do not work in the WASM target).
+
 ### Mastio — policy bridge (OPA Data API + CloudEvents sink)
 
 - **New `/v1/data/cullis/policy/{path}` endpoint** — OPA Data API
