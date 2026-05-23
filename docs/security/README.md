@@ -46,8 +46,8 @@ overhead).
   warning, Phase 2 WebAuthn).
 - [`docs/architecture/byoca-current-state.md`](../architecture/byoca-current-state.md):
   Bring Your Own CA implementation status and gap.
-- ADRs: public ADRs in [`docs/adrs/`](../adrs/), internal ADRs in
-  `imp/adrs/` (gitignored, commercial-sensitive).
+- ADRs: internal, in `imp/adrs/` (gitignored). Curated architecture
+  notes live under [`docs/architecture/`](../architecture/).
 
 ## Review cadence
 

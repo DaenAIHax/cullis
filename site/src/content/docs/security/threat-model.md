@@ -543,4 +543,3 @@ The threats this model does **not** mitigate:
 - `operate/rotate-keys.md` (agent cert + Org CA rotation)
 - `operate/audit-export.md` (chain viewer + verify + offline export)
 - `operate/vault-org-ca.md` (KMS migration to Vault)
-- ADR-013, ADR-017, ADR-029, ADR-030, ADR-031 (`docs/adrs/`)

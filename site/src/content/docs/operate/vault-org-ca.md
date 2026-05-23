@@ -272,7 +272,6 @@ audited per request.
 
 ## Related
 
-- [ADR-031: Vault as Org CA private key store](https://github.com/cullis-security/cullis/blob/main/docs/adrs/adr-031-vault-org-ca-kms-provider.md)
 - [Vault auto-unseal](vault-auto-unseal) — pair Vault with cloud KMS unseal for zero-touch boot
 - [Rotate keys](rotate-keys) — Org CA rotation procedures, with or without Vault
 - [Disaster recovery](disaster-recovery) — what changes in backup procedure once the Org CA lives in Vault
