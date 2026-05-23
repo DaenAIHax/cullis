@@ -36,6 +36,33 @@ RUN mkdir -p /out \
       --minify
 
 # -----------------------------------------------------------------------------
+# Stage 1b: OPA CLI download (Rego → WASM compile at policy Save time).
+# Pinned to v1.16.2; SHA-256 of both Linux arches verified before trust
+# (see scripts/opa-sha256.txt). Operator can override at runtime via
+# MCP_PROXY_OPA_BINARY if they want a different version on the host.
+# -----------------------------------------------------------------------------
+FROM debian:bookworm-slim AS opa-build
+ARG OPA_VERSION=v1.16.2
+ARG TARGETARCH=amd64
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY scripts/opa-sha256.txt /tmp/opa-sha256.txt
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) OPA_ARCH=amd64 ;; \
+      arm64) OPA_ARCH=arm64 ;; \
+      *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    cd /usr/local/bin; \
+    curl -sSLf "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_${OPA_ARCH}_static" \
+      -o "opa_linux_${OPA_ARCH}_static"; \
+    grep " opa_linux_${OPA_ARCH}_static$" /tmp/opa-sha256.txt | sha256sum -c -; \
+    mv "opa_linux_${OPA_ARCH}_static" opa; \
+    chmod +x opa; \
+    rm -f /tmp/opa-sha256.txt
+
+# -----------------------------------------------------------------------------
 # Stage 2: Python runtime
 # -----------------------------------------------------------------------------
 FROM python:3.11-slim
@@ -45,6 +72,12 @@ WORKDIR /app
 # Install dependencies
 COPY mcp_proxy/requirements-proxy.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+
+# OPA CLI for Rego → WASM compile (mcp_proxy.policy.rego_engine).
+# The runtime opa-wasmtime package evaluates the compiled WASM; the
+# binary itself only runs when the operator saves a new Rego policy
+# in the dashboard.
+COPY --from=opa-build /usr/local/bin/opa /usr/local/bin/opa
 
 # Copy proxy code + SDK
 COPY mcp_proxy/ ./mcp_proxy/

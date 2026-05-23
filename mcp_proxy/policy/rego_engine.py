@@ -112,18 +112,28 @@ def _resolve_opa_binary() -> str:
     )
 
 
-def compile_rego(source: str, *, package: str = "cullis.policy") -> CompiledPolicy:
+_DEFAULT_ENTRYPOINTS = ("cullis/policy/session", "cullis/policy/tool_call")
+
+
+def compile_rego(
+    source: str,
+    *,
+    entrypoints: tuple[str, ...] = _DEFAULT_ENTRYPOINTS,
+) -> CompiledPolicy:
     """Compile a Rego source string into a WASM bundle.
 
     Args:
         source: the Rego document the operator authored.
-        package: the package path the Rego is expected to declare.
-            ``opa build -e <entrypoint>`` requires an explicit
-            entrypoint per rule; the caller picks the surface (e.g.
-            ``cullis.policy.session``, ``cullis.policy.tool_call``).
-            We compile with the package root as the entrypoint so a
-            single bundle can serve multiple surfaces; the WASM eval
-            then drills into the path the caller asks for.
+        entrypoints: slash-separated rule paths the WASM bundle must
+            expose for evaluation. OPA v1.x requires each entrypoint
+            to point at a concrete rule (the pre-v1 contract of
+            "package root + drill at runtime" no longer holds). The
+            defaults cover Cullis' two surfaces — ``cullis/policy/session``
+            and ``cullis/policy/tool_call`` — so an operator's single
+            Rego file with rules under both names compiles in one
+            shot. The compile fails-closed if a declared entrypoint
+            doesn't exist in the source (the operator sees the
+            ``opa build`` diagnostic verbatim).
 
     Returns:
         A :class:`CompiledPolicy` carrying the raw WASM bytes (the
@@ -140,15 +150,15 @@ def compile_rego(source: str, *, package: str = "cullis.policy") -> CompiledPoli
         src_path = Path(workdir) / "policy.rego"
         src_path.write_text(source)
         bundle_path = Path(workdir) / "bundle.tar.gz"
+        # Build the argv: one ``-e <entrypoint>`` per declared rule
+        # plus the standard ``-t wasm`` target + ``-o`` output path.
+        argv: list[str] = [opa, "build", "-t", "wasm"]
+        for ep in entrypoints:
+            argv.extend(("-e", ep))
+        argv.extend(("-o", str(bundle_path), str(src_path)))
         try:
             result = subprocess.run(
-                [
-                    opa, "build",
-                    "-t", "wasm",
-                    "-e", package,
-                    "-o", str(bundle_path),
-                    str(src_path),
-                ],
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=_COMPILE_TIMEOUT_SECONDS,
@@ -251,12 +261,29 @@ class RegoEngine:
                 "policy. Install ``opa-wasmtime`` in the Mastio image.",
             ) from exc
 
+        # opa-wasmtime's OPAPolicy accepts a filesystem path, not raw
+        # bytes; the WASM bundle lives in memory (loaded from
+        # ``policy_rules.rego_wasm_base64``), so write it to a tmpfile
+        # for the duration of the eval. The file is unlinked on context
+        # exit; opa-wasmtime reads + instantiates synchronously, so
+        # there is no race.
+        with tempfile.NamedTemporaryFile(
+            prefix="cullis-rego-", suffix=".wasm", delete=False,
+        ) as tmp:
+            tmp.write(self._policy.wasm)
+            tmp_path = tmp.name
         try:
-            opa_policy = OPAPolicy(self._policy.wasm)
-        except Exception as exc:
-            raise RegoEvalError(
-                f"OPAPolicy instantiation failed: {exc}",
-            ) from exc
+            try:
+                opa_policy = OPAPolicy(tmp_path)
+            except Exception as exc:
+                raise RegoEvalError(
+                    f"OPAPolicy instantiation failed: {exc}",
+                ) from exc
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
         try:
             # opa-wasmtime's evaluate accepts a dict; it JSON-serialises
