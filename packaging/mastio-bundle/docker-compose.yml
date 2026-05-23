@@ -114,6 +114,15 @@ services:
       # dogfood-found gap (2026-05-23) that the customer would have hit
       # the moment they tried to turn the signature requirement on.
       MCP_PROXY_INTEGRATIONS_HMAC_SECRET: ${MCP_PROXY_INTEGRATIONS_HMAC_SECRET:-}
+      # Audit chain TSA anchoring (mcp_proxy/lifespan/audit_anchor_watcher.py).
+      # Default ON; anchors the chain head to DigiCert public TSA
+      # hourly. Set MCP_PROXY_AUDIT_ANCHOR_ENABLED=false for air-
+      # gapped deployments. Operators on regulated infrastructure
+      # can point at a qualified TSP via TSA_URL.
+      MCP_PROXY_AUDIT_ANCHOR_ENABLED: ${MCP_PROXY_AUDIT_ANCHOR_ENABLED:-true}
+      MCP_PROXY_AUDIT_ANCHOR_TSA_URL: ${MCP_PROXY_AUDIT_ANCHOR_TSA_URL:-http://timestamp.digicert.com}
+      MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS:-3600}
+      MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS:-10}
       MCP_PROXY_BROKER_URL:        ${MCP_PROXY_BROKER_URL:-}
       MCP_PROXY_BROKER_JWKS_URL:   ${MCP_PROXY_BROKER_JWKS_URL:-}
       MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}

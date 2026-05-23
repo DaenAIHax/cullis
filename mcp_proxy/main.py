@@ -455,6 +455,53 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # Audit chain TSA anchoring — periodically asks a public RFC 3161
+    # TSA to sign the chain head's row_hash. The anchor row survives
+    # in ``audit_chain_anchors`` and rides every audit export so the
+    # standalone verifier proves the chain head existed at the TSA's
+    # GenTime regardless of operator collusion with the Cullis vendor.
+    # Leader-elected; non-leaders skip silently.
+    if getattr(settings, "audit_anchor_enabled", True):
+        try:
+            from mcp_proxy.lifespan import get_leader as _anchor_get_leader
+            from mcp_proxy.lifespan.audit_anchor_watcher import (
+                audit_anchor_watcher_loop,
+            )
+            anchor_leader = _anchor_get_leader("audit_anchor_watcher")
+            if await anchor_leader.acquire():
+                anchor_stop = asyncio.Event()
+                _anchor_org_id = getattr(agent_mgr, "_org_id", None) or ""
+                anchor_task = asyncio.create_task(
+                    audit_anchor_watcher_loop(
+                        org_id=_anchor_org_id,
+                        stop_event=anchor_stop,
+                        tsa_url=settings.audit_anchor_tsa_url,
+                        tick_seconds=settings.audit_anchor_interval_seconds,
+                        tsa_timeout_seconds=settings.audit_anchor_tsa_timeout_seconds,
+                    ),
+                    name="audit_anchor_watcher",
+                )
+                app.state.audit_anchor_watcher_task = anchor_task
+                app.state.audit_anchor_watcher_stop = anchor_stop
+                app.state.audit_anchor_watcher_leader = anchor_leader
+                _log.info(
+                    "audit_anchor_watcher: leader acquired, loop spawned "
+                    "(tsa=%s, tick=%ds)",
+                    settings.audit_anchor_tsa_url,
+                    settings.audit_anchor_interval_seconds,
+                )
+            else:
+                _log.info(
+                    "audit_anchor_watcher: another worker holds the leader "
+                    "lock, skipping",
+                )
+        except Exception as exc:
+            _log.warning(
+                "audit_anchor_watcher startup failed: %s — audit chain "
+                "will not be externally anchored until next restart",
+                exc,
+            )
+
     # Wave 2 fix 7+8 — agent cert + DPoP jkt rotation grace period
     # cleanup. Hourly leader-elected sweep clears expired previous_*
     # columns on internal_agents so the trust surface collapses back

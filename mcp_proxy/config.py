@@ -232,6 +232,22 @@ class ProxySettings(BaseSettings):
     # when unset, the endpoints accept unsigned calls (warn at boot).
     integrations_hmac_secret: str = ""
 
+    # RFC 3161 audit-chain anchoring (lifespan ``audit_anchor_watcher``).
+    # When enabled, the Mastio periodically POSTs the current chain
+    # head's ``row_hash`` to a public TSA, persists the signed
+    # TimeStampToken in ``audit_chain_anchors``, and rides it along on
+    # every audit NDJSON export so the offline verifier can prove the
+    # chain head existed at the TSA's GenTime regardless of operator
+    # or vendor collusion. Default ON because the audit-integrity
+    # claim of Cullis is what differentiates it from a stock allowlist
+    # gateway — the operator can disable anchoring with
+    # ``MCP_PROXY_AUDIT_ANCHOR_ENABLED=false`` for air-gapped
+    # deployments that cannot reach a public TSA.
+    audit_anchor_enabled: bool = True
+    audit_anchor_tsa_url: str = "http://timestamp.digicert.com"
+    audit_anchor_interval_seconds: int = 3600
+    audit_anchor_tsa_timeout_seconds: float = 10.0
+
     # SSRF escape hatch — PR #2 audit 2026-05-20.
     # When False (the production default) outbound URL helpers
     # (mcp_proxy/utils/url_safety.assert_safe_outbound_url) refuse any
