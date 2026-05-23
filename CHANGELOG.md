@@ -12,6 +12,35 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+### Mastio — Rego engine perf: OPAPolicy instance cache + bench tool
+
+- **Process-wide `OPAPolicy` instance cache** keyed on
+  `compiled.sha256`. First evaluate per WASM bundle pays the
+  wasmtime instantiation cost (~15-25ms on dev hardware); every
+  subsequent decision on the same bundle reuses the cached
+  instance. Cache trims at 32 entries (operator policies rotate at
+  human pace, FIFO trim is enough).
+
+  Measured impact on a representative 58-line Rego (default-deny
+  tool_call + per-agent allowlist + cross-org session gate):
+
+  | metric                  | pre-cache | post-cache | delta |
+  |-------------------------|-----------|------------|-------|
+  | `evaluate` p50          | 16.23 ms  | **0.21 ms** | **-77×** |
+  | `evaluate` p99          | 19.93 ms  | **0.29 ms** | **-68×** |
+  | `evaluate` throughput   | 60 op/s   | **4 650 op/s** | **+77×** |
+  | `evaluate_decision` p99 | 19.47 ms  | **0.30 ms** | **-65×** |
+
+- **New `scripts/bench-rego-eval.py`** — reproducible bench the
+  operator (or anyone evaluating Cullis vs alternatives) can run
+  from a clean checkout. Compile time, per-decision latency
+  percentiles, throughput. Writes a Markdown report under `imp/` for
+  retention.
+
+- **Two new unit tests** in `test_rego_engine.py`: cache reuse on
+  same SHA, distinct instances on different SHAs. Autouse fixture
+  resets the cache between tests.
+
 ### Mastio — embedded Rego policy engine (operator beyond allowlists)
 
 - **New `mcp_proxy/policy/rego_engine.py` module**: compile a Rego

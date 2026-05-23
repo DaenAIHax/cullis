@@ -26,9 +26,25 @@ from mcp_proxy.policy.rego_engine import (
     RegoCompileError,
     RegoEngine,
     RegoEvalError,
+    _reset_instance_cache,
     compile_rego,
     evaluate_decision,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_instance_cache():
+    """Reset the process-wide OPAPolicy cache between tests.
+
+    Without this, tests that monkeypatch ``opa_wasmtime.OPAPolicy``
+    to a fake class race: the first test populates the cache keyed
+    on the fixture WASM bytes' SHA-256, and every subsequent test
+    reading the same fixture WASM gets the first test's fake
+    instance back instead of its own monkeypatched one.
+    """
+    _reset_instance_cache()
+    yield
+    _reset_instance_cache()
 
 
 # ── tar.gz fixture helpers ────────────────────────────────────────────────
@@ -266,3 +282,71 @@ def test_decision_dict_with_unknown_value_raises(monkeypatch):
     _patch_opa_policy(monkeypatch, result={"decision": "maybe"})
     with pytest.raises(RegoEvalError, match="unexpected shape"):
         evaluate_decision(policy, {})
+
+
+# ── instance cache (perf path) ────────────────────────────────────────────
+
+
+def test_instance_cache_reuses_for_same_wasm(monkeypatch):
+    """Second evaluate on the same bundle MUST NOT re-instantiate OPAPolicy.
+
+    Without cache the engine would rebuild the wasmtime instance on
+    every decision (~15-25ms overhead per call). The cache key is the
+    bundle SHA-256, so identical bytes share the instance.
+    """
+    policy = CompiledPolicy.from_wasm(b"\x00asm\x01\x00\x00\x00cache-test")
+
+    instantiations = 0
+
+    class _CountingOPA:
+        def __init__(self, wasm_path):
+            nonlocal instantiations
+            instantiations += 1
+        def evaluate(self, doc, entrypoint):
+            return [{"result": {"decision": "allow"}}]
+
+    import sys
+    from types import SimpleNamespace
+    fake_module = SimpleNamespace(OPAPolicy=_CountingOPA)
+    monkeypatch.setitem(sys.modules, "opa_wasmtime", fake_module)
+
+    engine = RegoEngine(policy)
+    for _ in range(5):
+        engine.evaluate({"x": 1})
+
+    assert instantiations == 1, (
+        f"OPAPolicy should be instantiated once per bundle, "
+        f"got {instantiations} for 5 evaluates"
+    )
+
+
+def test_instance_cache_distinct_for_different_wasm(monkeypatch):
+    """Different WASM bytes → different SHA → different cached instance."""
+    p1 = CompiledPolicy.from_wasm(b"\x00asm\x01\x00\x00\x00first")
+    p2 = CompiledPolicy.from_wasm(b"\x00asm\x01\x00\x00\x00second")
+    assert p1.sha256 != p2.sha256  # sanity
+
+    instantiations = 0
+
+    class _CountingOPA:
+        def __init__(self, wasm_path):
+            nonlocal instantiations
+            instantiations += 1
+        def evaluate(self, doc, entrypoint):
+            return [{"result": {"decision": "allow"}}]
+
+    import sys
+    from types import SimpleNamespace
+    fake_module = SimpleNamespace(OPAPolicy=_CountingOPA)
+    monkeypatch.setitem(sys.modules, "opa_wasmtime", fake_module)
+
+    RegoEngine(p1).evaluate({})
+    RegoEngine(p2).evaluate({})
+    # Repeats: still no new instantiation.
+    RegoEngine(p1).evaluate({})
+    RegoEngine(p2).evaluate({})
+
+    assert instantiations == 2, (
+        f"distinct WASM bundles should each instantiate once; "
+        f"got {instantiations}"
+    )
