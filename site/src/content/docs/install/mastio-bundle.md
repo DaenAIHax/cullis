@@ -32,7 +32,6 @@ For a Kubernetes deployment, see [Mastio on Kubernetes](mastio-kubernetes) inste
 
 - Multi-node production deployment — see [Mastio on Kubernetes](mastio-kubernetes)
 - External Postgres / Redis / Vault — supported via `proxy.env`, see [Configuration reference](../reference/configuration)
-- Federated mode (Mastio joining an existing Court network) — pass `--shared-broker` to `deploy.sh`; the surrounding workflow lives in the enterprise runbook
 
 ## 1. Download the bundle
 
@@ -140,7 +139,6 @@ echo 'MCP_PROXY_REDIS_URL=redis://your-redis-host:6379/0' >> proxy.env
 | Command | Effect |
 |---|---|
 | `./deploy.sh` | Standalone Mastio, private docker network. Default. |
-| `./deploy.sh --shared-broker` | Federated. Joins an existing Court's docker network. |
 | `./deploy.sh --prod` | Production safety: fails fast on insecure defaults. Requires `proxy.env` pre-provisioned. |
 | `./deploy.sh --pull` | Force re-pull the image before starting. |
 | `./deploy.sh --down` | Stop and remove containers. Bind dirs (`./data`, `./nginx-certs`, `./certs`) are preserved. |

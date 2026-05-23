@@ -32,7 +32,7 @@ If your agents already hold a SPIRE SVID, use [SPIRE enrollment](spire) instead.
    - Returns the plaintext API key **exactly once** — it's stored only as a bcrypt hash server-side
 3. **Persist** — you write the API key, DPoP JWK, and `agent.json` somewhere the agent can read at runtime
 
-Runtime auth is then identical to every other enrollment method: API key + DPoP proof, sent to the Mastio, never to the Court.
+Runtime auth is then identical to every other enrollment method: API key + DPoP proof, sent to the Mastio.
 
 ## 1. Enroll via the SDK
 
@@ -63,7 +63,7 @@ The SDK returns the `AgentEnrollResponse` object so you can read the API key int
 
 ### Capabilities
 
-The `capabilities` list is the set of tool-call scopes the agent is allowed to request. The Mastio enforces capability checks at session open time; the Court enforces them at cross-org message send. Common scopes:
+The `capabilities` list is the set of tool-call scopes the agent is allowed to request. The Mastio enforces capability checks at session open time and on every MCP tool invocation. Common scopes:
 
 - `oneshot.message` — send A2A messages without opening a session (ADR-008)
 - `session.open` — initiate stateful sessions with other agents
@@ -129,7 +129,7 @@ client = CullisClient.from_api_key_file(
 client.send_oneshot("globex::fulfillment-bot", {"order_id": "A123"})
 ```
 
-No cert on the wire at runtime. No direct call to the Court. The DPoP proof binds every request to the keypair the Mastio pinned during enrollment — stolen API keys alone can't impersonate the agent.
+No cert on the wire at runtime. The DPoP proof binds every request to the keypair the Mastio pinned during enrollment — stolen API keys alone can't impersonate the agent.
 
 ## 4. Re-enroll after Org CA rotation
 
@@ -189,4 +189,4 @@ The `update_existing=True` flag is the contract: without it the Mastio refuses t
 - [Enrollment API reference](../reference/enrollment-api) — full request / response schemas
 - [Rotate keys § 3](../operate/rotate-keys#3-rotate-the-org-ca) — when Org CA rotation forces BYOCA re-enrollment
 - [SPIRE enrollment](spire) — if your agents already run under SPIRE
-- [Migration from direct login](../reference/migration-from-direct-login) — if you have legacy agents on the direct-to-Court path
+- [SPIRE enrollment](spire) — the alternative for SPIRE-attested workloads

@@ -1,126 +1,115 @@
 # Contributing to Cullis
 
-Thank you for your interest in contributing to Cullis! This guide will help you get started.
+Thank you for your interest in contributing to Cullis. This guide is for contributors to the public repo (`cullis-security/cullis`), which hosts **Cullis Mastio** (org gateway) and the **Python SDK** (`cullis-sdk`).
 
 ## Development Setup
 
 ```bash
-# Clone the repo
+# Clone
 git clone https://github.com/cullis-security/cullis.git
 cd cullis
 
-# Create virtual environment
+# Virtualenv
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# Dependencies
 pip install -r requirements.txt
-
-# Run tests (parallel, ~60-100s)
-pytest tests/ -n auto --dist=loadfile
-
-# Boot the full sandbox (Court + 2 Mastios + 3 agents + 2 MCP servers in
-# 2 orgs, plus SPIRE / Keycloak / Vault / Postgres) and replay scenarios:
-./sandbox/demo.sh full
-./sandbox/demo.sh oneshot-a-to-b      # cross-org A2A
-./sandbox/demo.sh mcp-catalog          # intra-org MCP
-./sandbox/demo.sh down
-
-# Or run Cullis Court alone in a dev profile (Docker + PKI + Vault):
-./deploy_broker.sh --dev
 ```
 
-> The `deploy_broker.sh` / `deploy_proxy.sh` scripts at the repo root are
-> the historical entry points for standalone Court / Mastio dev deploys.
-> For production-style deploys use the release bundles under
-> [`packaging/`](packaging/). For end-to-end demo flows use
-> [`sandbox/demo.sh`](sandbox/).
+### Run the Mastio locally
 
-## Frontend Assets (Dashboard)
-
-The Court and Mastio dashboards ship compiled Tailwind CSS and a bundled
-copy of htmx — no CDN dependency. Generated CSS is `.gitignore`'d; build
-it once before running outside Docker:
+The fastest path is the bundle, which boots the Mastio + nginx TLS sidecar via `docker compose`:
 
 ```bash
-# Uses the Tailwind standalone CLI (no Node/npm install required).
-./scripts/build_frontend.sh
-# or with watch mode while iterating on templates:
-./scripts/build_frontend.sh --watch
+cd packaging/mastio-bundle
+./deploy.sh
+# https://localhost:9443/proxy/login
 ```
 
-The Docker images (`Dockerfile`, `mcp_proxy/Dockerfile`) run the build in
-a dedicated stage, so `./deploy_broker.sh` and `./deploy_proxy.sh`
-produce the CSS automatically.
+For a hand-rolled run against your local source tree, look at `packaging/mastio-bundle/docker-compose.yml` and `proxy.env.example`.
 
-Templates should rely on Tailwind utility classes only — inline `tailwind.config = {...}`
-blocks are not supported anymore (they required the runtime CDN build).
-Update `tailwind.config.js` at the repo root if you need new theme tokens.
+### Iterate on the SDK
+
+```bash
+pip install -e cullis_sdk
+python -c "from cullis_sdk import CullisClient; print(CullisClient)"
+```
+
+The SDK quickstart at [cullis.io/docs/quickstart/sdk](https://cullis.io/docs/quickstart/sdk/) walks through enrolling an agent identity and making the first authenticated call.
+
+## Frontend Assets (Mastio Dashboard)
+
+The Mastio dashboard ships compiled Tailwind CSS and a bundled copy of htmx — no CDN at runtime. Generated CSS is gitignored; build it once before running outside Docker:
+
+```bash
+# Tailwind standalone CLI, no Node/npm install required
+./scripts/build_frontend.sh
+./scripts/build_frontend.sh --watch    # iterate on templates
+```
+
+The `mcp_proxy/Dockerfile` runs the build in a dedicated stage, so the published image already includes the CSS.
 
 ## Code Conventions
 
-- **Async:** All DB and HTTP code uses async/await
-- **Type hints:** Required on all public functions
-- **Pydantic:** Every endpoint uses Pydantic schemas for request/response
-- **Logging:** Use `logging` module, never `print`
-- **Tests:** Every new feature requires tests in `tests/`
+- **Async:** all DB and HTTP code uses `async`/`await`
+- **Type hints:** required on public functions
+- **Pydantic:** every endpoint has request + response schemas
+- **Logging:** use the `logging` module, never `print`
+- **Tests:** every new feature ships with tests
 
 ## Pull Request Process
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Make your changes following the code conventions above
-4. Add tests for any new functionality
-5. Ensure all tests pass: `pytest tests/ -v`
-6. Commit with a clear message describing the change
-7. Push to your fork and open a Pull Request
+1. Fork the repository.
+2. Create a feature branch: `git checkout -b feat/my-feature`.
+3. Make your changes following the conventions above.
+4. Add tests for new functionality.
+5. Commit with a clear message describing the change. **All commits must be signed off** (`git commit -s`, see DCO below).
+6. Push to your fork and open a Pull Request against `main`.
 
 ## PR Checklist
 
 Before submitting, verify:
 
-- [ ] All tests pass (`pytest tests/ -n auto --dist=loadfile`)
-- [ ] Type hints added to public functions
-- [ ] No secrets, private keys, or credentials in the code
+- [ ] All commits signed off (`git commit -s`)
+- [ ] Type hints on new public functions
+- [ ] No secrets, private keys, or credentials in the diff
 - [ ] New endpoints have Pydantic schemas
-- [ ] Commits are signed off with `git commit -s` (DCO, see below)
+- [ ] CHANGELOG entry under `## [Unreleased]` if user-visible
 
 ## What to Contribute
 
-Check out issues labeled [`good-first-issue`](https://github.com/cullis-security/cullis/labels/good-first-issue) and [`help-wanted`](https://github.com/cullis-security/cullis/labels/help-wanted).
+Look at issues labelled [`good-first-issue`](https://github.com/cullis-security/cullis/labels/good-first-issue) and [`help-wanted`](https://github.com/cullis-security/cullis/labels/help-wanted).
 
 Areas where contributions are especially welcome:
-- **SDKs:** TypeScript, Go, Java client libraries
-- **Documentation:** Tutorials, deployment guides, API docs
-- **Dashboard:** UI improvements, new views
-- **Deployment:** Helm charts, Terraform modules, docker-compose variants
-- **Tests:** Additional test coverage
+
+- **Mastio**: hardening, observability, ergonomic admin endpoints
+- **Python SDK**: ergonomic primitives, retries, examples for popular agent frameworks
+- **Documentation**: tutorials, deployment guides, audit-trail walkthroughs
+- **Helm chart**: production hardening for `deploy/helm/cullis-mastio/`
+- **MCP tool packs**: builtin tools under `mcp_proxy/tools/builtins/`
 
 ## Security Issues
 
-**Do not open a public issue for security vulnerabilities.** Email
-[security@cullis.io](mailto:security@cullis.io) directly, or use GitHub's
-private vulnerability reporting. See [SECURITY.md](SECURITY.md) for the full
-disclosure policy.
+**Do not open a public issue for security vulnerabilities.** Email [security@cullis.io](mailto:security@cullis.io) directly, or use GitHub's private vulnerability reporting. See [SECURITY.md](SECURITY.md) for the full disclosure policy.
 
-## Questions?
+## Questions
 
-- General questions: email [hello@cullis.io](mailto:hello@cullis.io) or open a [GitHub Discussion](https://github.com/cullis-security/cullis/discussions) in the Q&A category.
-- Security questions: [security@cullis.io](mailto:security@cullis.io) (do not post in public).
+- General questions: [hello@cullis.io](mailto:hello@cullis.io) or a [GitHub Discussion](https://github.com/cullis-security/cullis/discussions) in the Q&A category.
+- Security questions: [security@cullis.io](mailto:security@cullis.io) (private channel).
 
 ## License
 
 Cullis uses a split licensing model. By contributing, you agree that your contribution is licensed under the same terms as the component you are modifying:
 
-- Contributions to `app/` or `mcp_proxy/` are licensed under [FSL-1.1-Apache-2.0](LICENSE).
-- Contributions to `cullis_sdk/` or `enterprise-kit/` are licensed under the [Apache License 2.0](cullis_sdk/LICENSE).
-- Contributions to `sdk-ts/` are licensed under the [MIT License](sdk-ts/LICENSE).
+- Contributions to `mcp_proxy/` (Cullis Mastio) are licensed under [FSL-1.1-Apache-2.0](LICENSE).
+- Contributions to `cullis_sdk/` (Python SDK) are licensed under the [Apache License 2.0](cullis_sdk/LICENSE).
 
-See [NOTICE](NOTICE) for the full component-by-component map.
+See [NOTICE](NOTICE) for the full component map.
 
 ## Developer Certificate of Origin (DCO)
 
-Every commit must be signed off to certify that you have the right to submit it under the applicable license. This is a lightweight alternative to a formal CLA, used by the Linux kernel and many other projects.
+Every commit must be signed off to certify you have the right to submit it under the applicable license. This is a lightweight alternative to a formal CLA, used by the Linux kernel and many other projects.
 
 Add the sign-off automatically with:
 

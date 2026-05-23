@@ -8,7 +8,7 @@ updated: "2026-04-23"
 
 # Enrollment API
 
-Endpoints under `/v1/admin/agents/enroll/` on the **Mastio** (never on the Court). All require `X-Admin-Secret`. Returns `201 Created` on success; API key in the response body is shown **exactly once** — the server stores only its bcrypt hash.
+Endpoints under `/v1/admin/agents/enroll/` on the **Mastio**. All require `X-Admin-Secret`. Returns `201 Created` on success; API key in the response body is shown **exactly once** — the server stores only its bcrypt hash.
 
 ---
 
@@ -38,7 +38,6 @@ Enroll an agent via a caller-supplied Org-CA-signed cert + key.
 | `cert_pem` | PEM | **yes** | Must chain to the Mastio's loaded Org CA |
 | `private_key_pem` | PEM | **yes** | Must match `cert_pem` public key |
 | `dpop_jwk` | JWK object | no | Public EC/RSA JWK. `d` (private) rejected. When supplied, the server computes RFC 7638 thumbprint and pins it |
-| `federated` | bool | no | Push the agent to the Court via the federation publisher |
 
 ### Response — 201
 

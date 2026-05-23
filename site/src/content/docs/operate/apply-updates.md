@@ -19,7 +19,7 @@ updated: "2026-05-22"
 
 ## What a framework update is
 
-Some bugs need more than a code change. Consider the Org CA that Cullis v0.1 emitted with `BasicConstraints(pathLen=0)` — a `git pull` + rebuild patched the generator, but every Mastio already bootstrapped kept the broken CA in its database. External verifiers (compliance auditors, stdlib x509 libraries, federated peers if you later attach this Mastio to a Court) reject those chains.
+Some bugs need more than a code change. Consider the Org CA that Cullis v0.1 emitted with `BasicConstraints(pathLen=0)` — a `git pull` + rebuild patched the generator, but every Mastio already bootstrapped kept the broken CA in its database. External verifiers (compliance auditors, stdlib x509 libraries) reject those chains.
 
 A **framework update** is a Python migration class that ships alongside the code fix. The Mastio discovers it at boot, inserts a row in the `pending_updates` table, and — if the migration is marked `critical` and affects enrollment methods the proxy actively uses — halts signing until the operator applies it. The admin then calls one endpoint to run the migration, which mutates state idempotently and records a rollback snapshot.
 
