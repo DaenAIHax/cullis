@@ -305,6 +305,58 @@ and key selection, and forwards to the configured upstream provider.
   `mcp_proxy/egress/provider_catalog.py`
 - `mcp_proxy/tools/secret_encrypt.py`
 
+## Component: policy bridge (OPA Data API + CloudEvents sink)
+
+### Data flow
+
+PR #907: Mastio exposes its policy + audit surface via two standards-shaped endpoints so external data planes (any gateway that speaks OPA + CloudEvents) can use Cullis as control plane without writing glue. `POST /v1/data/cullis/policy/{path}` accepts an OPA Data API request (`{"input": {...}}`) and returns `{"result": {"decision": ...}}`. `POST /v1/integrations/cloudevents` accepts a CloudEvents HTTP-binding event and persists it as one row on the hash-chained `audit_log`. Both endpoints share a single HMAC-SHA256 guard via `X-Cullis-Integration-Signature` keyed on `MCP_PROXY_INTEGRATIONS_HMAC_SECRET`.
+
+### STRIDE
+
+| Threat | Detail | Mitigation | Residual |
+|---|---|---|---|
+| Spoofing of the calling gateway | An unauthenticated peer on the Mastio network probes the OPA endpoint to discover `policy_rules` content via differential responses | The HMAC signature is required when `MCP_PROXY_INTEGRATIONS_HMAC_SECRET` is set; missing or mismatched signatures return 401 with **no body** so the caller cannot use timing or shape to distinguish "bad signature" from "wrong path" (audit 2026-04-30 lane 3 H3 same threat as `/pdp/policy`). Distinct secret from `pdp_webhook_hmac_secret` so rotation does not couple two trust boundaries. | When the operator deploys without setting the secret (documented rollout posture), any peer on the Mastio network can read the OPA decisions + write audit rows. The Mastio logs a warning at boot. Operator must enable HMAC before production traffic. |
+| Tampering with audit_log via the sink | Attacker injects forged rows that pollute the audit chain | Every row goes through `db.log_audit` which appends to the hash-chained `audit_log` table protected by the F-A-402 plpgsql trigger (BEFORE UPDATE/DELETE, RAISE). The CloudEvent `source` lands on `agent_id` prefixed with `external:` so dashboard queries and the `cullis-audit-verify.py` chain walk can isolate bridge rows from native Cullis agents. The HMAC gate above is the front-line defence; the trigger + hash chain are the integrity backstop. | An operator-trusted gateway that becomes compromised can write believable rows. The audit chain still detects tampering after the fact (rows hash-chain forward); the operator's gateway-side audit is the in-time gate. |
+| Repudiation | A peer denies sending a policy query | Same as the legacy PDP webhook: every request is bound by HMAC + lands in the audit log if it materialises a decision. The CloudEvent sink writes `request_id = ce-id` so an external trace can be reconciled against the Cullis chain. | No client-side non-repudiation: the HMAC binds only to a shared secret, not to a per-peer keypair. mTLS at the front layer can add that — out of scope for this endpoint, in scope for the Mastio's main listener. |
+| Information disclosure via OPA decision shape | An attacker probes the OPA endpoint with crafted `input` to enumerate the operator's `policy_rules` content | Unknown paths return `{"result": null}` (OPA convention) without revealing which paths exist; the HMAC gate keeps unauthorised peers out entirely when configured. | When the operator runs without HMAC the `policy_rules` content is enumerable, same as the legacy PDP webhook in that posture. |
+| DoS via expensive CloudEvents bodies | Attacker floods the sink with large payloads | The `audit_log.detail` JSON has a 16 KiB cap (`AUDIT_DETAILS_MAX_BYTES`, F-A-410) before `log_audit` writes — large bodies are rejected at the row boundary, not after a chain commit. Global request-body size limit middleware (`F-A-303`, 2 MiB default) caps the inbound payload before parsing. | Operator-side rate limit (NetworkPolicy / nginx) is the right outer perimeter. The Mastio's global rate limiter (`global_rate_limit`, 500 RPS default) is the next-inner. |
+| Elevation of privilege | A peer with the HMAC secret tries to write rows attributing them to a native Cullis agent | The `external:` prefix on `agent_id` is computed server-side from the CloudEvent `source` (untrusted) — the caller cannot suppress it. Cullis-native rows never carry that prefix; dashboard + audit verifier discriminate cleanly. | A peer with the HMAC secret is by definition trusted at the policy-bridge layer; the prefix is for cross-plane visibility, not for privilege segregation. |
+
+### References
+
+- `mcp_proxy/integrations/policy_bridge.py`, `mcp_proxy/integrations/__init__.py`
+- `mcp_proxy/main.py` route registration
+- `mcp_proxy/middleware/strip_x_cullis_headers.py` allowlist entry for `x-cullis-integration-signature`
+- `operate/policy-bridge.md` or `integrations/policy-bridge.md` for the operator-side deploy
+
+## Component: Rego policy engine (embedded WASM)
+
+### Data flow
+
+PR #908 + #909: the operator authors Rego in the dashboard Policies → Rego tab. The backend compiles via the bundled `opa build -t wasm` (OPA v1.16.2, SHA-256-pinned in `scripts/opa-sha256.txt`) and persists both the source and the base64-encoded WASM bundle inside the existing `proxy_config.policy_rules` JSON document. At decision time, `try_rego_decision` (in `mcp_proxy.policy.__init__`) reads the WASM, instantiates `OPAPolicy` via `opa-wasmtime` (process-wide cached on SHA-256), evaluates against the OPA-shaped input, and returns `{"decision": ..., "reason"?}`. The legacy allowlist (`blocked_agents`, `allowed_orgs`, `tool_rules`) backs up the Rego path: empty Rego → allowlist; Rego runtime eval error → allowlist + warning log.
+
+### STRIDE
+
+| Threat | Detail | Mitigation | Residual |
+|---|---|---|---|
+| Spoofing of the Rego author | Attacker pushes a malicious Rego that always allows | The Rego authoring surface (`/proxy/policies/rego`) is admin-protected (dashboard cookie + CSRF) — same trust boundary as every other policy-editing route. There is no public path that writes `policy_rules.rego`. | An attacker with admin credentials is the trust root for Cullis; this is the same posture as any other policy product. The hash-chained audit log is the post-hoc detection (`policy.rego_save` row stamped with the WASM sha256 prefix). |
+| Tampering at the compile step | Malformed Rego could exercise an `opa build` parser bug | The bundled OPA binary is **SHA-256-pinned** at Dockerfile build time (`scripts/opa-sha256.txt`) for both amd64 and arm64; supply-chain attestation covers the layer. Compile is bounded at 10 seconds and runs under the proxy container's uid, not root. Output bundle is extracted via `tarfile.extractfile` which returns a file-like in memory (NOT `extractall` — no filesystem write, no CVE-2007-4559 path-traversal surface). | An upstream OPA CVE we have not patched yet would still apply; we track OPA's security advisories. |
+| Tampering with the persisted WASM | Operator with DB access edits `rego_wasm_base64` to inject custom WASM | The persisted bundle is operator-trusted (same admin who could edit the JSON config could also push Rego through the dashboard). At eval time `opa-wasmtime` instantiates the WASM in a sandbox with **no host imports** (the engine passes no `builtins=` kwarg, so the WASM has only the OPA WASM ABI — memory + JSON manipulation, no FFI to host filesystem / network / syscalls). | A wasmtime sandbox-escape CVE (out of scope per rule #9 of the security-review filter) would apply. We track wasmtime's advisories. |
+| Repudiation of a policy change | Operator denies saving a Rego that allowed a transaction | The Save flow writes `policy.rego_save` (success) or `policy.rego_save` with `status=compile_error` (failed compile) into the audit log, with the operator's `admin` agent_id, the resulting WASM byte length, and the SHA-256 prefix. Audit log is hash-chained. | The dashboard session does not currently bind a WebAuthn assertion to the Save click; an admin password that leaked would let an attacker push a Rego silently. ADR-033 WebAuthn user-session binding (Phase 2) addresses this in a future release. |
+| Information disclosure via compile diagnostics | `opa build` stderr leaks internal paths | The compile runs in a `tempfile.TemporaryDirectory` so the path is `/tmp/cullis-rego-<random>/policy.rego`. The dashboard surfaces the diagnostic verbatim to the operator (intentional UX: they need to see the line/column). The path is non-secret. | The diagnostic is shown only to authenticated admin users on the editor page. |
+| DoS via Rego compile or eval loop | Runaway compile or eval consumes CPU | Compile is bounded at 10 seconds (`_COMPILE_TIMEOUT_SECONDS`). Eval has **no per-call timeout today** — a pathologically slow Rego would block one async task; the global rate limit + the synchronous nature of the call (one decision per request) bound the blast radius. | Per-eval timeout is on the roadmap (open items). |
+| Elevation of privilege through Rego rules | Operator's Rego authorises an agent that shouldn't be authorised | This is the operator's policy by construction — the engine evaluates what the operator wrote. The legacy allowlist + the existing PDP federation gates around the Rego output are the orthogonal defences (Rego decides allow vs deny, federation decides whether the cross-org peer can even be reached). | An operator who writes an over-permissive Rego carries the same liability as an over-permissive YAML allowlist. The decision is auditable per row. |
+
+### References
+
+- `mcp_proxy/policy/rego_engine.py` (compile + cache + eval)
+- `mcp_proxy/policy/__init__.py` (`try_rego_decision` two-layer dispatcher)
+- `mcp_proxy/dashboard/rego_rules.py` + `templates/rego_rules.html` (authoring surface)
+- `scripts/opa-sha256.txt` (binary pin)
+- `mcp_proxy/Dockerfile` (`opa-build` stage)
+- `scripts/bench-rego-eval.py` (perf bench)
+- `operate/rego-policies.md` for the operator workflow
+
 ## Component: license verifier
 
 ### Data flow
@@ -534,6 +586,10 @@ The threats this model does **not** mitigate:
 | Per-tool PDP rate-limit knob enforcement | P2 | Field present in the scope model, not enforced from policy today |
 | Dedicated JWT scrubber on the generic exception path | P3 | Today: HTTP responses for license errors are already minimal |
 | DPoP JTI cache warm-from-persistent-store on restart | P3 | Today: cold-starts empty; first-window after restart has weaker replay protection |
+| Strict Rego mode (`MCP_PROXY_POLICY_STRICT_REGO=true`) | P1 | Today: a runtime `RegoEvalError` falls through to the legacy allowlist with a warning log. Strict mode would fail-closed (deny) instead, which is the right posture for some pilots. |
+| Per-eval Rego timeout | P2 | Today: only the compile path is timed out (10 s). A pathologically slow operator-authored Rego could block one async task per call. |
+| Per-instance `OPAPolicy` lock for `asyncio.to_thread` migration | P3 | Today: the wasmtime store on top of each cached instance is not concurrent-native-safe, but FastAPI on the single-threaded asyncio loop never overlaps eval on the same instance. A future PR that moves eval onto a thread pool needs to add a per-instance lock. |
+| WebAuthn binding on dashboard Rego Save | P2 | Today: admin cookie + CSRF guards the Save endpoint. ADR-033 Phase 2 will add a WebAuthn user-signed assertion on policy-changing calls. |
 
 ## References
 
