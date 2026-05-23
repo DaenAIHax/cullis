@@ -12,6 +12,31 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+### SDK — `from_systemd_credentials` factory (Tier 2 agent key storage)
+
+- **New `CullisClient.from_systemd_credentials()` factory** for the
+  Linux production deployment pattern that replaces plain 0600 files
+  on a writable disk. The factory reads systemd's
+  `$CREDENTIALS_DIRECTORY` (set automatically by the unit's
+  `LoadCredential=` lines), loads cert + key + DPoP key from there,
+  and optionally lifts `mastio_url` / `agent_id` / `org_id` out of
+  an `agent.json` metadata file shipped alongside the credentials.
+  Credentials live on tmpfs only for the unit's lifetime; the agent
+  never reads from a writable disk at runtime.
+
+- **13 new unit tests** in `test/unit/test_sdk_systemd_credentials.py`
+  cover the resolution order ($CREDENTIALS_DIRECTORY → argument →
+  RuntimeError), eager file-existence checks (named errors on missing
+  cert / key, DPoP optional), metadata auto-population vs explicit
+  arg precedence, malformed `agent.json` surfaces a clear
+  `RuntimeError`, custom credential names (`cert_name=`,
+  `key_name=`, `dpop_key_name=`) for operators who deviated from the
+  SDK's persisted layout.
+
+- **Docs**: new "Production: systemd LoadCredential" section in
+  [Python SDK quickstart](https://cullis.io/docs/quickstart/sdk)
+  with a complete unit-file example and the matching agent code.
+
 ### Mastio — production-ready Postgres binding (F0.2)
 
 - **Bundle ships `--db postgres` flag** for `deploy.sh`. Brings up a

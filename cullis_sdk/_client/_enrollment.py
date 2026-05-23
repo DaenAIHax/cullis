@@ -288,6 +288,174 @@ class _EnrollmentMixin:
                    f"agent={instance._label})")
         return instance
 
+    @classmethod
+    def from_systemd_credentials(
+        cls,
+        mastio_url: str | None = None,
+        *,
+        credentials_dir: "str | Path | None" = None,
+        cert_name: str = "cert.pem",
+        key_name: str = "key.pem",
+        dpop_key_name: str | None = "dpop.jwk",
+        metadata_name: str | None = "agent.json",
+        agent_id: str | None = None,
+        org_id: str | None = None,
+        verify_tls: bool = True,
+        timeout: float = 10.0,
+        ca_chain_path: "str | Path | None" = None,
+    ) -> "CullisClient":
+        """Bootstrap from systemd ``LoadCredential=`` material.
+
+        The production deployment pattern that replaces the demo-VM file
+        layout (``cert.pem`` + ``key.pem`` at 0600 on a writable disk):
+        a systemd unit declares one ``LoadCredential=`` line per file,
+        and systemd materialises them under ``$CREDENTIALS_DIRECTORY``
+        with restrictive perms — readable only by the unit's user,
+        gone when the unit stops, never written to a writable disk
+        (the credentials live on tmpfs and only for the process
+        lifetime). The SDK reads ``$CREDENTIALS_DIRECTORY`` and points
+        ``from_identity_dir`` at it.
+
+        Example unit file::
+
+            [Unit]
+            Description=KYC screener agent
+            Wants=cullis-mastio.service
+
+            [Service]
+            ExecStart=/usr/bin/python /opt/kyc-agent/main.py
+            LoadCredential=cert.pem:/etc/cullis/kyc-screener/cert.pem
+            LoadCredential=key.pem:/etc/cullis/kyc-screener/key.pem
+            LoadCredential=dpop.jwk:/etc/cullis/kyc-screener/dpop.jwk
+            LoadCredential=agent.json:/etc/cullis/kyc-screener/agent.json
+
+        And inside the agent::
+
+            client = CullisClient.from_systemd_credentials()
+            # mastio_url + agent_id + org_id are loaded from agent.json
+            # cert/key/dpop are read from $CREDENTIALS_DIRECTORY/<name>
+
+        Args:
+            mastio_url: optional override. When ``None``, the value is
+                read from ``agent.json`` under ``$CREDENTIALS_DIRECTORY``.
+                Pass explicitly when no ``agent.json`` ships in the unit
+                or when the operator wants the URL pinned in code.
+            credentials_dir: where to read the files from. When ``None``
+                (default), the SDK reads ``$CREDENTIALS_DIRECTORY`` —
+                the env var systemd injects for any service that
+                declares at least one ``LoadCredential=`` line. Pass
+                explicitly to run the agent outside systemd (e.g. in a
+                container that mounts a similar tmpfs).
+            cert_name, key_name: the basenames inside the credentials
+                directory. Defaults match the SDK's persisted layout
+                (``cert.pem`` + ``key.pem``) so an operator who
+                ``LoadCredential=cert.pem:...`` does not need to override
+                them. Adjust when the unit names credentials differently
+                (e.g. when reusing an existing PKI bundle layout).
+            dpop_key_name: name of the DPoP private JWK file. ``None``
+                skips DPoP loading entirely — only safe while the
+                Mastio's ``egress_dpop_mode`` is ``off`` or ``optional``.
+            metadata_name: name of the JSON metadata file holding
+                ``{agent_id, org_id, mastio_url}``. ``None`` skips the
+                metadata read (caller passes mastio_url + agent_id +
+                org_id directly). The persisted file from
+                ``from_enrollment`` is named ``agent.json``.
+            agent_id, org_id: optional overrides. When ``None`` and a
+                metadata file is present, the value comes from JSON.
+
+        Raises:
+            RuntimeError: when ``credentials_dir`` is unset AND
+                ``$CREDENTIALS_DIRECTORY`` is not in the environment
+                (the unit forgot to declare ``LoadCredential=``).
+            FileNotFoundError: when one of the declared files
+                (``cert_name``, ``key_name``) is missing from the
+                credentials directory.
+            RuntimeError: when ``mastio_url`` cannot be resolved (no
+                argument passed, no metadata file present, or the JSON
+                file is missing the ``mastio_url`` field).
+        """
+        import json as _json
+        import os as _os
+
+        # Resolve the credentials directory: explicit arg wins, otherwise
+        # read systemd's ``$CREDENTIALS_DIRECTORY``. Crashing with a
+        # specific message beats letting ``open()`` raise a vague
+        # FileNotFoundError two stack frames down.
+        if credentials_dir is None:
+            env_dir = _os.environ.get("CREDENTIALS_DIRECTORY")
+            if not env_dir:
+                raise RuntimeError(
+                    "from_systemd_credentials: $CREDENTIALS_DIRECTORY is "
+                    "not set and no credentials_dir argument was passed. "
+                    "Either declare at least one LoadCredential= in the "
+                    "systemd unit, or pass credentials_dir= explicitly.",
+                )
+            credentials_dir = env_dir
+        creds_path = Path(credentials_dir)
+
+        cert_path = creds_path / cert_name
+        key_path = creds_path / key_name
+        dpop_path: Path | None = (
+            creds_path / dpop_key_name if dpop_key_name else None
+        )
+
+        # Eager existence check so the error mentions the missing
+        # credential by name rather than failing inside httpx's
+        # ssl.SSLContext.load_cert_chain with an opaque OSError.
+        for required in (cert_path, key_path):
+            if not required.exists():
+                raise FileNotFoundError(
+                    f"from_systemd_credentials: missing {required.name} "
+                    f"under {creds_path}. Confirm the unit's "
+                    f"``LoadCredential={required.name}:<host-path>`` line.",
+                )
+        if dpop_path is not None and not dpop_path.exists():
+            # DPoP optional: don't crash when the operator chose not to
+            # ship a DPoP key. Behave like ``from_identity_dir`` with
+            # ``dpop_key_path=None``.
+            dpop_path = None
+
+        # Optional metadata: when the operator ships agent.json next to
+        # the credentials, lift mastio_url + agent_id + org_id out of
+        # it so the caller's ``from_systemd_credentials()`` call stays
+        # zero-argument in the common case. Explicit kwargs still win.
+        if metadata_name:
+            meta_path = creds_path / metadata_name
+            if meta_path.exists():
+                try:
+                    meta = _json.loads(meta_path.read_text())
+                except (OSError, _json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"from_systemd_credentials: failed to read "
+                        f"metadata file {meta_path}: {exc}",
+                    ) from exc
+                if mastio_url is None:
+                    mastio_url = meta.get("mastio_url")
+                if agent_id is None:
+                    agent_id = meta.get("agent_id")
+                if org_id is None:
+                    org_id = meta.get("org_id")
+
+        if not mastio_url:
+            raise RuntimeError(
+                "from_systemd_credentials: mastio_url is required but "
+                "neither the argument nor the metadata file resolved "
+                "one. Pass mastio_url= explicitly or ship agent.json "
+                "with a ``mastio_url`` field next to the credentials.",
+            )
+
+        return cls.from_identity_dir(
+            mastio_url,
+            cert_path=cert_path,
+            key_path=key_path,
+            dpop_key_path=dpop_path,
+            agent_id=agent_id,
+            org_id=org_id,
+            verify_tls=verify_tls,
+            timeout=timeout,
+            ca_chain_path=ca_chain_path,
+        )
+
     # Backwards-compat alias — deprecated. Existing callers that pass
     # ``api_key_path`` get a clear deprecation warning. Prefer
     # ``from_identity_dir(cert_path=..., key_path=..., dpop_key_path=...)``.
