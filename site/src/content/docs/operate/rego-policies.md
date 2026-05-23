@@ -67,15 +67,15 @@ package cullis.policy
 
 # Session-open default: allow inside the org, otherwise consult the
 # operator's approved partners list and the initiator's capabilities.
-session := {"decision": "allow"} {
+session := {"decision": "allow"} if {
     same_org
 }
 
-session := {"decision": "allow"} {
+session := {"decision": "allow"} if {
     cross_org_allowed
 }
 
-session := {"decision": "deny", "reason": msg} {
+session := {"decision": "deny", "reason": msg} if {
     not same_org
     not cross_org_allowed
     msg := sprintf(
@@ -84,14 +84,14 @@ session := {"decision": "deny", "reason": msg} {
     )
 }
 
-same_org {
+same_org if {
     input.initiator_org_id == input.target_org_id
     input.initiator_org_id != ""
 }
 
 approved_partners := {"orga", "orgb", "treasury-partner-eu"}
 
-cross_org_allowed {
+cross_org_allowed if {
     input.target_org_id == approved_partners[_]
     "kyc.partner-disclose" == input.capabilities[_]
 }
@@ -105,7 +105,7 @@ What this expresses in plain English: same-org sessions always pass; cross-org s
 package cullis.policy
 
 # Default deny — only the explicit allow rules below let calls through.
-tool_call := {"decision": "deny", "reason": msg} {
+tool_call := {"decision": "deny", "reason": msg} if {
     not allow_tool_call
     msg := sprintf(
         "agent %s is not authorised to call tool %s",
@@ -113,33 +113,35 @@ tool_call := {"decision": "deny", "reason": msg} {
     )
 }
 
-tool_call := {"decision": "allow"} {
+tool_call := {"decision": "allow"} if {
     allow_tool_call
 }
 
 # KYC screener: read-only KYC tools.
-allow_tool_call {
+allow_tool_call if {
     input.agent_id == "orga::kyc-screener"
     input.tool_name == "sanctions_lookup"
 }
 
-allow_tool_call {
+allow_tool_call if {
     input.agent_id == "orga::kyc-screener"
     input.tool_name == "kyc_status_check"
 }
 
 # Treasury bot: explicit list of money-moving tools.
-allow_tool_call {
+allow_tool_call if {
     input.agent_id == "orga::treasury"
     input.tool_name == {"treasury_wire", "sepa_credit_transfer"}[_]
 }
 
 # Open KB lookups for any internal agent.
-allow_tool_call {
+allow_tool_call if {
     startswith(input.agent_id, "orga::")
     input.tool_name == "knowledge_base_query"
 }
 ```
+
+Both examples use the OPA v1 syntax (`if` keyword required on rule bodies). The bundled OPA binary is v1.16.2; the engine surfaces the `opa build` diagnostic verbatim when the operator pastes pre-v1 Rego, so the error message names the exact line + column to fix.
 
 Default-deny is the safer default — but you can flip the polarity by setting `tool_call := {"decision": "allow"}` as the bare default and explicitly denying the dangerous tools. Make the choice that matches your operator's mental model.
 
