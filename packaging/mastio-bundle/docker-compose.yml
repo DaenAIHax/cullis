@@ -104,7 +104,7 @@ services:
       # MCP_PROXY_DATABASE_URL stays as a backward-compat alias.
       MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
       PROXY_DB_URL:                ${PROXY_DB_URL:-}
-      # Shared secret for the agentgateway-integration endpoints
+      # Shared secret for the policy-bridge integration endpoints
       # (/v1/data/cullis/policy and /v1/integrations/cloudevents).
       # Empty by default — the endpoints accept unsigned calls during
       # the rollout window. Set to a strong random in proxy.env to

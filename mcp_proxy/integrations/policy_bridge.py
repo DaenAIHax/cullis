@@ -1,12 +1,14 @@
-"""Bridge router for agentgateway (agentgateway.dev) and any other
-OPA-compatible / CloudEvents-emitting agent infrastructure component.
+"""Policy + audit bridge for any external OPA-compatible /
+CloudEvents-emitting agent infrastructure component.
 
 Two endpoints:
 
   * ``POST /v1/data/cullis/policy/{path}`` — OPA Data API binding.
-    agentgateway is configured with its OPA endpoint pointed at
-    ``https://mastio.example.com/v1/data/cullis/policy``; each request
-    arrives as ``{"input": {...}}`` and must return ``{"result": ...}``.
+    Any policy-fetching gateway that already speaks the OPA Data API
+    contract (request body ``{"input": {...}}`` → response
+    ``{"result": ...}``) can point its OPA endpoint at
+    ``https://mastio.example.com/v1/data/cullis/policy`` and let Cullis
+    drive the allow/deny decision from its ``policy_rules`` config.
     Two paths are wired today:
 
       - ``/v1/data/cullis/policy/session`` — session-open authorization,
@@ -16,28 +18,29 @@ Two endpoints:
       - ``/v1/data/cullis/policy/tool_call`` — tool-execution
         authorization, mirrors ``/v1/policy/tool-call``.
 
-    Any other path returns ``{"result": null}`` (OPA's signal that the
-    document is undefined; agentgateway falls back to its default
-    posture which is configurable on the agentgateway side).
+    Any other path returns ``{"result": null}`` — OPA's convention for
+    "document undefined", which makes the caller fall back to its own
+    default posture (typically default-deny).
 
   * ``POST /v1/integrations/cloudevents`` — CloudEvents HTTP-binding
     sink. Accepts both binary mode (CloudEvent metadata in HTTP
     headers, payload in body) and structured mode (entire CloudEvent
     in a JSON body). Each event becomes one append-only row on
-    ``audit_log`` via :func:`mcp_proxy.db.log_audit`, so the customer
-    running agentgateway + Cullis side-by-side gets a single
-    cryptographically verifiable audit trail covering both planes.
+    ``audit_log`` via :func:`mcp_proxy.db.log_audit`, so a customer
+    that emits decisions / per-call events from any adjacent
+    component gets one cryptographically verifiable audit trail
+    covering both planes without writing aggregation code.
 
 Both endpoints optionally verify ``X-Cullis-Integration-Signature``
 (HMAC-SHA256 over the raw body, hex-encoded) when
 ``MCP_PROXY_INTEGRATIONS_HMAC_SECRET`` is set. Without the secret the
-endpoints accept unsigned calls and log a warning at boot — eases the
-mid-rollout window while the operator configures the shared secret on
-both sides. Default-deny once the secret is configured: a missing or
-mismatching signature returns 401 with no body so an unauthenticated
-caller cannot use differential timing / responses to probe
-``policy_rules`` content (same threat the existing PDP HMAC guards
-against, audit 2026-04-30 lane 3 H3).
+endpoints accept unsigned calls and the Mastio logs a warning at boot
+— eases the mid-rollout window while the operator configures the
+shared secret on both sides. Default-deny once the secret is
+configured: a missing or mismatching signature returns 401 with no
+body so an unauthenticated caller cannot use differential timing /
+responses to probe ``policy_rules`` content (same threat the existing
+PDP HMAC guards against, audit 2026-04-30 lane 3 H3).
 """
 from __future__ import annotations
 
@@ -53,7 +56,7 @@ from fastapi.responses import JSONResponse
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import get_config, log_audit
 
-_log = logging.getLogger("mcp_proxy.integrations.agentgateway")
+_log = logging.getLogger("mcp_proxy.integrations.policy_bridge")
 
 router = APIRouter(tags=["integrations"])
 
@@ -82,8 +85,8 @@ async def _verify_signature(request: Request, raw_body: bytes) -> None:
     ).hexdigest()
     if not provided or not hmac.compare_digest(provided, expected):
         _log.warning(
-            "agentgateway integration: rejected unsigned/mismatched "
-            "request to %s", request.url.path,
+            "policy_bridge: rejected unsigned/mismatched request to %s",
+            request.url.path,
         )
         # No body — don't leak whether the path / payload would have
         # been accepted on a valid signature.
@@ -98,8 +101,8 @@ async def _verify_signature(request: Request, raw_body: bytes) -> None:
 async def _evaluate_session_policy(opa_input: dict) -> dict:
     """Mirror of /pdp/policy logic against the OPA-shaped input.
 
-    Expected ``opa_input`` keys (agentgateway will populate these from
-    its identity + request context):
+    Expected ``opa_input`` keys (the calling gateway populates these
+    from its identity + request context):
 
       - initiator_agent_id (str)
       - target_agent_id (str)
@@ -109,7 +112,7 @@ async def _evaluate_session_policy(opa_input: dict) -> dict:
       - capabilities (list[str], optional)
 
     Returns an OPA-shaped result with a ``decision`` field (``allow`` /
-    ``deny``) and optional ``reason``. agentgateway maps allow → pass,
+    ``deny``) and optional ``reason``. The caller maps allow → pass,
     deny → block.
     """
     rules_raw = await get_config("policy_rules")
@@ -154,7 +157,7 @@ async def _evaluate_session_policy(opa_input: dict) -> dict:
     if reason:
         out["reason"] = reason
     _log.info(
-        "agentgateway PDP session %s: %s -> %s (ctx=%s) %s",
+        "policy_bridge session %s: %s -> %s (ctx=%s) %s",
         decision.upper(), initiator, target, context, reason,
     )
     return out
@@ -169,7 +172,7 @@ async def _evaluate_tool_call_policy(opa_input: dict) -> dict:
       - tool_name (str)
       - arguments (dict, optional — passed through but not inspected
         today; available for the operator's Rego when they want to
-        write a richer rule on the agentgateway side)
+        write a richer rule on the caller side)
 
     Returns ``{"decision": "allow" | "deny", "reason": ...}``. Pulls
     the ``tool_rules`` subtree of ``policy_rules`` — same surface the
@@ -192,7 +195,7 @@ async def _evaluate_tool_call_policy(opa_input: dict) -> dict:
     blocked_tools = tool_rules.get("blocked_tools", []) or []
     if tool_name in blocked_tools:
         _log.info(
-            "agentgateway PDP tool_call DENY: agent=%s tool=%s "
+            "policy_bridge tool_call DENY: agent=%s tool=%s "
             "(blocked_tools)", agent_id, tool_name,
         )
         return {
@@ -203,7 +206,7 @@ async def _evaluate_tool_call_policy(opa_input: dict) -> dict:
     allowed_tools = tool_rules.get("allowed_tools", []) or []
     if allowed_tools and tool_name not in allowed_tools:
         _log.info(
-            "agentgateway PDP tool_call DENY: agent=%s tool=%s "
+            "policy_bridge tool_call DENY: agent=%s tool=%s "
             "(not in allowed_tools)", agent_id, tool_name,
         )
         return {
@@ -212,7 +215,7 @@ async def _evaluate_tool_call_policy(opa_input: dict) -> dict:
         }
 
     _log.info(
-        "agentgateway PDP tool_call ALLOW: agent=%s tool=%s",
+        "policy_bridge tool_call ALLOW: agent=%s tool=%s",
         agent_id, tool_name,
     )
     return {"decision": "allow"}
@@ -220,11 +223,11 @@ async def _evaluate_tool_call_policy(opa_input: dict) -> dict:
 
 @router.post("/v1/data/cullis/policy/{path:path}")
 async def opa_data_api(path: str, request: Request) -> JSONResponse:
-    """OPA Data API binding for agentgateway.
+    """OPA Data API binding.
 
     Body shape (per OPA Data API spec): ``{"input": {...}}``.
     Response shape: ``{"result": {...}}`` (or ``{"result": null}`` for
-    unknown paths so agentgateway's ``default`` posture wins).
+    unknown paths so the caller's ``default`` posture wins).
 
     Supported ``path`` segments:
 
@@ -262,11 +265,11 @@ async def opa_data_api(path: str, request: Request) -> JSONResponse:
         result = await _evaluate_tool_call_policy(opa_input)
     else:
         # Unknown path — OPA's contract is to return ``result: null``
-        # so the caller's ``default`` posture wins. agentgateway is
-        # configured with default-deny on the operator side; this just
-        # signals "Cullis has no opinion on this query".
+        # so the caller's ``default`` posture wins. Callers typically
+        # default-deny on the operator side; this just signals "Cullis
+        # has no opinion on this query".
         _log.info(
-            "agentgateway OPA query for unknown path %s — returning "
+            "policy_bridge OPA query for unknown path %s — returning "
             "result=null", path,
         )
         return JSONResponse({"result": None})
@@ -328,8 +331,8 @@ def _parse_cloudevent(
                 event[lname[len("ce-"):]] = header_value
         if raw_body:
             # ``data`` is the body itself; try to JSON-decode for
-            # structured payloads (agentgateway emits JSON) and fall
-            # back to a base64-style preservation for opaque bodies.
+            # structured payloads and fall back to a base64-style
+            # preservation for opaque bodies.
             try:
                 event["data"] = _json.loads(raw_body)
             except _json.JSONDecodeError:
@@ -377,8 +380,8 @@ async def cloudevents_sink(request: Request) -> JSONResponse:
 
     event = _parse_cloudevent(request, raw_body)
 
-    source = str(event.get("source") or "agentgateway")
-    type_ = str(event.get("type") or "agentgateway.event")
+    source = str(event.get("source") or "external")
+    type_ = str(event.get("type") or "external.event")
     subject = event.get("subject")
     tool_name = str(subject) if subject else None
     event_id = str(event.get("id") or "")
@@ -400,12 +403,12 @@ async def cloudevents_sink(request: Request) -> JSONResponse:
     if "data_base64" in event:
         detail_payload["data_base64"] = event["data_base64"]
 
-    # Stamp the audit row. ``agent_id`` is namespaced to make the
-    # cross-plane origin obvious in dashboard queries; Cullis' own
-    # internal_agents table never holds an ``agentgateway:...`` row,
-    # so a regex ``^agentgateway:`` in audit_log selects the
-    # external-plane history cleanly.
-    agent_id = f"agentgateway:{source}"
+    # Stamp the audit row. ``agent_id`` is namespaced ``external:`` to
+    # make the cross-plane origin obvious in dashboard queries; Cullis'
+    # own internal_agents table never holds an ``external:...`` row,
+    # so a regex ``^external:`` in audit_log selects the
+    # external-emitter history cleanly.
+    agent_id = f"external:{source}"
 
     await log_audit(
         agent_id=agent_id,
@@ -417,7 +420,7 @@ async def cloudevents_sink(request: Request) -> JSONResponse:
     )
 
     _log.info(
-        "agentgateway CloudEvent recorded: id=%s source=%s type=%s "
+        "policy_bridge CloudEvent recorded: id=%s source=%s type=%s "
         "tool=%s", event_id, source, type_, tool_name,
     )
     return JSONResponse(

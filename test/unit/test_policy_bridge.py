@@ -1,4 +1,4 @@
-"""Tests for the agentgateway integration router.
+"""Tests for the policy-bridge integration router.
 
 Covers:
 
@@ -46,7 +46,7 @@ def app_under_test(monkeypatch):
     tests need. Mounting the router on a bare FastAPI is sufficient.
     """
     from fastapi import FastAPI
-    from mcp_proxy.integrations.agentgateway import router
+    from mcp_proxy.integrations.policy_bridge import router
 
     # Patch the config & DB hooks so the router has something to talk
     # to without spinning up the full Mastio.
@@ -67,13 +67,13 @@ def app_under_test(monkeypatch):
         return _FakeSettings()
 
     monkeypatch.setattr(
-        "mcp_proxy.integrations.agentgateway.get_config", _fake_get_config,
+        "mcp_proxy.integrations.policy_bridge.get_config", _fake_get_config,
     )
     monkeypatch.setattr(
-        "mcp_proxy.integrations.agentgateway.log_audit", _fake_log_audit,
+        "mcp_proxy.integrations.policy_bridge.log_audit", _fake_log_audit,
     )
     monkeypatch.setattr(
-        "mcp_proxy.integrations.agentgateway.get_settings", _fake_get_settings,
+        "mcp_proxy.integrations.policy_bridge.get_settings", _fake_get_settings,
     )
 
     app = FastAPI()
@@ -234,8 +234,8 @@ def test_cloudevents_binary_mode_records_audit_row(client, app_under_test):
         "/v1/integrations/cloudevents",
         headers={
             "ce-id": "evt-001",
-            "ce-source": "agentgateway://nyc/cluster-1",
-            "ce-type": "io.agentgateway.tool.allowed",
+            "ce-source": "gateway://nyc/cluster-1",
+            "ce-type": "io.gateway.tool.allowed",
             "ce-specversion": "1.0",
             "ce-time": "2026-05-23T20:00:00Z",
             "ce-subject": "kyc_lookup",
@@ -247,8 +247,8 @@ def test_cloudevents_binary_mode_records_audit_row(client, app_under_test):
     assert resp.json() == {"status": "recorded", "id": "evt-001"}
     assert len(state["audit_calls"]) == 1
     call = state["audit_calls"][0]
-    assert call["agent_id"] == "agentgateway:agentgateway://nyc/cluster-1"
-    assert call["action"] == "io.agentgateway.tool.allowed"
+    assert call["agent_id"] == "external:gateway://nyc/cluster-1"
+    assert call["action"] == "io.gateway.tool.allowed"
     assert call["tool_name"] == "kyc_lookup"
     assert call["status"] == "recorded"
     assert call["request_id"] == "evt-001"
@@ -267,8 +267,8 @@ def test_cloudevents_structured_mode_records_audit_row(client, app_under_test):
     envelope = {
         "specversion": "1.0",
         "id": "evt-042",
-        "source": "agentgateway://eu-west-1",
-        "type": "io.agentgateway.tool.denied",
+        "source": "gateway://eu-west-1",
+        "type": "io.gateway.tool.denied",
         "subject": "treasury_wire",
         "time": "2026-05-23T20:05:00Z",
         "data": {"agent_id": "orga::treasurer", "reason": "policy"},
@@ -281,7 +281,7 @@ def test_cloudevents_structured_mode_records_audit_row(client, app_under_test):
     assert resp.status_code == 202
     call = state["audit_calls"][0]
     assert call["request_id"] == "evt-042"
-    assert call["action"] == "io.agentgateway.tool.denied"
+    assert call["action"] == "io.gateway.tool.denied"
     assert call["tool_name"] == "treasury_wire"
     assert call["details"]["data"]["reason"] == "policy"
 
@@ -294,7 +294,7 @@ def test_cloudevents_missing_id_400(client):
         "/v1/integrations/cloudevents",
         headers={
             # ce-id missing on purpose
-            "ce-source": "agentgateway://x",
+            "ce-source": "gateway://x",
             "ce-type": "test",
             "ce-specversion": "1.0",
         },
@@ -339,7 +339,7 @@ def test_hmac_configured_rejects_unsigned(monkeypatch, app_under_test):
         integrations_hmac_secret: str = "test-secret-32-bytes-long-ok-123"
 
     monkeypatch.setattr(
-        "mcp_proxy.integrations.agentgateway.get_settings", lambda: _S(),
+        "mcp_proxy.integrations.policy_bridge.get_settings", lambda: _S(),
     )
     app, _ = app_under_test
     c = TestClient(app)
@@ -363,7 +363,7 @@ def test_hmac_configured_accepts_valid_signature(monkeypatch, app_under_test):
         integrations_hmac_secret: str = secret
 
     monkeypatch.setattr(
-        "mcp_proxy.integrations.agentgateway.get_settings", lambda: _S(),
+        "mcp_proxy.integrations.policy_bridge.get_settings", lambda: _S(),
     )
     app, _ = app_under_test
     c = TestClient(app)
@@ -392,7 +392,7 @@ def test_hmac_configured_rejects_mismatched_signature(
         integrations_hmac_secret: str = "right-secret-32-bytes-long-ok-12"
 
     monkeypatch.setattr(
-        "mcp_proxy.integrations.agentgateway.get_settings", lambda: _S(),
+        "mcp_proxy.integrations.policy_bridge.get_settings", lambda: _S(),
     )
     app, _ = app_under_test
     c = TestClient(app)
