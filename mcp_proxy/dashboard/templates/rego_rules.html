@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Rego Policies{% endblock %}
+{% block header_title %}Rego Policies{% endblock %}
+{% block content %}
+<div class="max-w-5xl">
+
+    <!-- Tabs (mirror /proxy/policies + /proxy/policies/tool-rules) -->
+    <div class="flex items-center gap-0 mb-6 border-b border-gray-800/60">
+        <a href="/proxy/policies"
+           class="px-4 py-2.5 text-xs font-medium uppercase tracking-wider border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition-colors">
+            Built-in Rules
+        </a>
+        <a href="/proxy/policies"
+           class="px-4 py-2.5 text-xs font-medium uppercase tracking-wider border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition-colors">
+            External PDP
+        </a>
+        <a href="/proxy/policies/tool-rules"
+           class="px-4 py-2.5 text-xs font-medium uppercase tracking-wider border-b-2 border-transparent text-gray-500 hover:text-gray-300 transition-colors">
+            Tool Rules
+        </a>
+        <a href="/proxy/policies/rego"
+           class="px-4 py-2.5 text-xs font-medium uppercase tracking-wider border-b-2 border-accent-400 text-accent-400 transition-colors">
+            Rego
+        </a>
+    </div>
+
+    <!-- Intro -->
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-6 mb-6 card-glow backdrop-blur-sm">
+        <h3 class="text-sm font-semibold text-white uppercase tracking-wider mb-1">Operator-authored Rego policy</h3>
+        <p class="text-xs text-gray-500 leading-relaxed">
+            The Mastio compiles the Rego source below via the bundled
+            <code class="text-accent-400">opa build -t wasm</code> on Save and evaluates the
+            resulting WebAssembly bundle in-process on every PDP decision
+            (<code class="text-accent-400">/pdp/policy</code> and
+            <code class="text-accent-400">/v1/data/cullis/policy/*</code>). The legacy
+            Built-in Rules + Tool Rules tabs above continue to back-stop this surface: when
+            the Rego is absent or its evaluation fails at runtime, the allowlist wins.
+        </p>
+        <p class="text-[11px] text-gray-600 mt-3">
+            Rego must declare two rules under <code class="text-accent-400">package cullis.policy</code> —
+            <code class="text-accent-400">session</code> and <code class="text-accent-400">tool_call</code> —
+            each returning <code class="text-accent-400">{"decision": "allow"|"deny", "reason"?: "..."}</code>.
+            See the <a href="https://cullis.io/docs/operate/rego-policies" target="_blank" class="text-accent-400 hover:text-accent-300 underline">operator docs</a>
+            for two worked examples.
+        </p>
+    </div>
+
+    {% if compile_error %}
+    <!-- Compile diagnostic, shown only when the last Save failed. -->
+    <div class="bg-red-950/40 border border-red-800/60 rounded-lg p-6 mb-6 card-glow backdrop-blur-sm">
+        <h3 class="text-sm font-semibold text-red-300 uppercase tracking-wider mb-2">Compile failed</h3>
+        <pre class="text-[11px] text-red-200 font-mono whitespace-pre-wrap leading-relaxed">{{ compile_error }}</pre>
+        <p class="text-[11px] text-gray-500 mt-3">
+            Your source is preserved below. Fix the error and click Save again. The
+            previous compiled bundle (if any) stays in place until a successful compile
+            replaces it.
+        </p>
+    </div>
+    {% endif %}
+
+    <!-- Editor -->
+    <form method="post" action="/proxy/policies/rego/save" class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-6 mb-6 card-glow backdrop-blur-sm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-white uppercase tracking-wider">Rego source</h3>
+            {% if sha_prefix %}
+            <span class="text-[11px] text-gray-500 font-mono">
+                bundle sha256: <span class="text-accent-400">{{ sha_prefix }}</span>
+            </span>
+            {% endif %}
+        </div>
+
+        <textarea
+            name="rego"
+            rows="22"
+            spellcheck="false"
+            class="w-full bg-surface-950/60 border border-gray-800/60 rounded p-3 text-xs font-mono text-gray-200 leading-relaxed focus:outline-none focus:border-accent-500/60"
+            placeholder="package cullis.policy&#10;&#10;session := {&quot;decision&quot;: &quot;allow&quot;}&#10;tool_call := {&quot;decision&quot;: &quot;allow&quot;}"
+        >{{ source }}</textarea>
+
+        <div class="flex items-center gap-3 mt-4">
+            <button type="submit"
+                    class="px-4 py-2 bg-accent-500 hover:bg-accent-400 text-surface-950 text-xs font-semibold uppercase tracking-wider rounded transition-colors">
+                Save + compile
+            </button>
+            {% if has_source %}
+            <span class="text-[11px] text-gray-500">
+                Save replaces the compiled bundle. Use Delete below to wipe both source
+                and bundle and fall back to the allowlist layer.
+            </span>
+            {% else %}
+            <span class="text-[11px] text-gray-500">
+                Compile bounded at 10 seconds. Diagnostic is shown inline if Rego is malformed.
+            </span>
+            {% endif %}
+        </div>
+    </form>
+
+    {% if has_source %}
+    <!-- Delete -->
+    <form method="post" action="/proxy/policies/rego/delete" class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-6 card-glow backdrop-blur-sm"
+          onsubmit="return confirm('Delete the Rego policy + compiled bundle? Future decisions will fall back to the Built-in Rules + Tool Rules tabs.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <h3 class="text-sm font-semibold text-white uppercase tracking-wider mb-2">Delete Rego policy</h3>
+        <p class="text-xs text-gray-500 leading-relaxed mb-4">
+            Wipes both the source above and the compiled WASM bundle. The Mastio falls
+            back to the Built-in Rules + Tool Rules tabs for every subsequent PDP
+            decision. No restart needed.
+        </p>
+        <button type="submit"
+                class="px-4 py-2 bg-red-900/40 hover:bg-red-800/50 border border-red-800/60 text-red-200 text-xs font-semibold uppercase tracking-wider rounded transition-colors">
+            Delete
+        </button>
+    </form>
+    {% endif %}
+
+</div>
+{% endblock %}

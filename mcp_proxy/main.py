@@ -2227,6 +2227,13 @@ app.include_router(local_policies_router)
 from mcp_proxy.dashboard.tool_rules import router as tool_rules_router
 app.include_router(tool_rules_router)
 
+# Rego policy authoring surface — editor + compile + delete under
+# /proxy/policies/rego. Compiles via the bundled opa binary, stores
+# source + WASM bundle in the same policy_rules JSON the legacy
+# Built-in Rules + Tool Rules tabs already write to.
+from mcp_proxy.dashboard.rego_rules import router as rego_rules_router
+app.include_router(rego_rules_router)
+
 # ADR-017 Phase 4 — dashboard CRUD for AI provider credentials (the
 # admin secret API surface lives in mcp_proxy.admin.ai_providers).
 from mcp_proxy.dashboard.ai_providers import router as ai_providers_dashboard_router
