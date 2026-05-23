@@ -156,7 +156,6 @@ To inspect: dashboard `https://mastio.example.com/proxy/audit` or offline export
 ## What's next
 
 - [SDK quickstart](sdk) — enrollment + auth, the prerequisites of this page
+- [MCP tools via Mastio](mcp-tools) — deeper dive on `list_mcp_tools` + `call_mcp_tool` outside the chat loop (deterministic task runners, ETL, ops scripts)
 - [Audit export](../operate/audit-export) — export the chain that records these calls
 - [Mastio on Docker](../install/mastio-bundle) — stand up a local Mastio with Ollama wired for development
-
-The companion `quickstart/mcp-tools.md` (deeper dive on `list_mcp_tools` + `call_mcp_tool` outside the chat loop) is in progress.

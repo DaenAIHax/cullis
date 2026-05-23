@@ -8,7 +8,7 @@ updated: "2026-05-22"
 
 # Python SDK quickstart
 
-**Scope of this page**: enrollment + transport-layer authentication. LLM completions and MCP tool calls (`client.chat_completion`, `client.call_mcp_tool`) get you to the point where those calls work; companion pages for the call surfaces are in progress. Until they land, the reference agent in `agent_kyc_screener/main_stack.py` (cullis-enterprise repo) shows the full loop end-to-end.
+**Scope of this page**: enrollment + transport-layer authentication. For LLM completions and MCP tool calls, see the companion pages [Chat completion via Mastio](chat-completion) and [MCP tools via Mastio](mcp-tools). The reference agent in `agent_kyc_screener/main_stack.py` (cullis-enterprise repo) shows the full loop end-to-end.
 
 **Python only.** TypeScript / Go / Java SDKs are not available publicly.
 
