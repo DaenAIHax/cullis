@@ -104,7 +104,6 @@ in Mastio v0.5 on a separate roadmap.
 | Command | Effect |
 |---|---|
 | `./deploy.sh` | Standalone Mastio, private docker network. Default. |
-| `./deploy.sh --shared-broker` | Federated. Joins an existing Court's docker network. |
 | `./deploy.sh --prod` | Production safety: fails fast on insecure defaults. Requires `proxy.env` pre-provisioned. |
 | `./deploy.sh --pull` | Force re-pull the image before starting. |
 | `./deploy.sh --down` | Stop and remove containers. Bind dirs (`./data`, `./nginx-certs`, `./certs`) are preserved. |
@@ -252,7 +251,6 @@ full values reference.
 |---|---|
 | `permission denied` on `./deploy.sh` | `chmod +x deploy.sh generate-proxy-env.sh` |
 | `docker compose is not installed` | Install Docker Engine 20.10+ with Compose v2 |
-| `network cullis-broker_default not found` (with `--shared-broker`) | Bring the Court compose project up first, or drop `--shared-broker` |
 | Browser warns "self-signed certificate" | Expected. The Org CA is local; accept once or import `./nginx-certs/org-ca.crt` (also exported to `./certs/org-ca.pem` by `./deploy.sh` post-up). |
 | Agent gets `401 Invalid DPoP proof: htu mismatch` | The Mastio validates DPoP proofs against `MCP_PROXY_PROXY_PUBLIC_URL` (default `https://localhost:9443` for quickstart). Production deploys MUST override this in `proxy.env` to match the public hostname agents reach the Mastio at — e.g. `MCP_PROXY_PROXY_PUBLIC_URL=https://mastio.myorg.example.com`. |
 | Agent fails with `SSL: CERTIFICATE_VERIFY_FAILED` or `hostname doesn't match` | The nginx sidecar's TLS cert is signed by the auto-generated Org CA and includes only the SAN entries listed in `MCP_PROXY_NGINX_SAN` (default `mastio.local,localhost`). `./deploy.sh` auto-extracts the hostname from your prompt answer and adds it to the SAN; if you set `MCP_PROXY_PROXY_PUBLIC_URL` manually after-the-fact, also append the hostname to `MCP_PROXY_NGINX_SAN` (e.g. `MCP_PROXY_NGINX_SAN=mastio.acme.local,mastio.local,localhost`) and `./deploy.sh --pull` to re-mint the cert. |

@@ -2,21 +2,13 @@
 # Cullis MCP Proxy — Org-Level Gateway + Built-in PDP
 # =============================================================================
 #
-# Default deploy = standalone Mastio on its own private docker network.
-# The Mastio derives its Org CA + org_id at first boot (ADR-006 §2.2),
-# the mastio-nginx sidecar (ADR-014) terminates TLS on host port 9443
-# with mTLS on /v1/(egress|agents). Zero broker dependency at boot;
-# federation ("allaccio al Court") is post-setup, opt-in via the
-# dashboard /proxy/federation page.
+# Standalone Mastio on its own private docker network. The Mastio
+# derives its Org CA + org_id at first boot, the mastio-nginx sidecar
+# terminates TLS on host port 9443 with mTLS on /v1/(egress|agents).
 #
-# Operators who want to bring up the Mastio with a Court already on
-# the same docker host (CI smoke, dev fixtures) layer the
-# docker-compose.proxy.shared-broker.yml override on top.
-#
-# Usage:
-#   ./deploy_proxy.sh                       # dev, standalone (default)
-#   ./deploy_proxy.sh --shared-broker       # join the broker's docker net
-#   ./deploy_proxy.sh --prod                # fail-fast on insecure defaults
+# For the customer-facing one-shot deploy script, use the bundle under
+# packaging/mastio-bundle/. This compose file is the source of truth
+# the bundle ships alongside its env templates.
 #
 # Host port 9443 is the only published port. The in-pod Mastio listener
 # (9100) is reachable only via the sidecar at 127.0.0.1 inside the

@@ -27,9 +27,9 @@ The `local_audit` table has the following columns:
 | `entry_hash` | SHA-256 over canonical representation of the row |
 | `previous_hash` | Link to the prior row's `entry_hash` (chain pointer) |
 | `chain_seq` | Monotonic sequence within the chain |
-| `peer_org_id`, `peer_row_hash` | Cross-org cross-reference fields (used when this Mastio is federated under a Court — empty in standalone deploys) |
+| `peer_org_id`, `peer_row_hash` | Reserved for future cross-org reconciliation. Empty on standalone deploys. |
 
-The chain is **per-org** on the Mastio. A standalone Mastio (the default bundle deploy) writes a single per-org chain; federated deploys (Mastio attached to a Court) populate `peer_org_id` / `peer_row_hash` on cross-org events for later reconciliation.
+The chain is **per-org** on the Mastio. The standalone Mastio (the default bundle deploy) writes a single per-org chain.
 
 Tamper-evidence properties:
 
@@ -147,20 +147,8 @@ Per-org chains: 1
 - `0` — all checks passed
 - `2` — chain tamper detected (mismatch or break)
 - `3` — TSA anchor mismatch (when applicable; the bundle includes RFC 3161 / mock TSA tokens and one doesn't match its row)
-- `4` — cross-org reconciliation mismatch (when verifying two NDJSON bundles together)
+- `4` — reserved (cross-org reconciliation, future use)
 - `5` — unrecognized TSA token format
-
-### Cross-org reconciliation
-
-If you operate two Mastios federated under a Court (enterprise path) and need to prove that cross-org events match on both sides:
-
-```bash
-python scripts/cullis-audit-verify.py \
-    --bundle acme-april-2026.ndjson \
-    --bundle bravo-april-2026.ndjson
-```
-
-The verifier matches rows by `peer_row_hash` and confirms `event_type` / `session_id` / `details` agree across the two bundles. Mismatches are surfaced with both row IDs and the divergence point.
 
 ## Troubleshoot
 

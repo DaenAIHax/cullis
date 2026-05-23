@@ -25,7 +25,7 @@ Moving to SPIRE shifts what the Mastio enforces. Be deliberate:
 - **The Org CA stops being the signing oracle.** It becomes an offline trust anchor. Your SPIRE server holds a short-lived intermediate signed by the Org CA; SVIDs mint under that intermediate. A compromised SPIRE server can mint SVIDs until the intermediate rotates or is revoked.
 - **Thumbprint pinning is disabled** for SPIRE-enrolled agents. Pinning assumes cert stability across calls — SVIDs change every hour, so pinning would break auth. Identity is instead bound by chain walk + SPIFFE URI match, and ultimately by SPIRE's workload attestation (which Cullis delegates to).
 - **Org CA `pathLenConstraint ≤ 1`.** The Mastio refuses to onboard an Org CA with `pathLen > 1` under a declared `trust_domain`. One intermediate only.
-- **One `trust_domain` per `org_id`.** Two SPIRE clusters under the same logical org need two separate orgs on the Court.
+- **One `trust_domain` per `org_id`.** Two SPIRE clusters under the same logical org need two separate Mastios.
 
 If this trade-off isn't acceptable, don't enable SPIRE enrollment for that org — stay on BYOCA.
 
@@ -34,66 +34,17 @@ If this trade-off isn't acceptable, don't enable SPIRE enrollment for that org �
 - An Org CA (your SPIFFE trust domain's root of trust). Keep the private key offline or in an HSM. Issue it with `BasicConstraints: CA=true, pathLen=1`.
 - A SPIRE server configured with your Org CA as `UpstreamAuthority`. Any topology works — single server, HA pair, multi-region — as long as every SPIRE instance chains to the same Org CA.
 - A Cullis Mastio deployed in your org
-- A `trust_domain` chosen — conventionally reverse-DNS under your control (`acme.com`, `payments.acme.internal`). Must be unique across orgs on the Court.
+- A `trust_domain` chosen — conventionally reverse-DNS under your control (`acme.com`, `payments.acme.internal`). Must be unique to your Mastio.
 - The Mastio admin secret (`$MASTIO_ADMIN_SECRET`)
 
-## 1. Register the org with a `trust_domain`
+## 1. Configure the Mastio's trust domain
 
-Two flows, depending on whether your org is already on the Court.
+The standalone Mastio derives its org and trust domain at first boot via the admin wizard. To enable SPIRE-issued SVIDs, two pieces of configuration land on the Mastio:
 
-### A. Fresh onboarding via invite token
+- Set `MCP_PROXY_REQUIRE_SPIFFE_SAN=true` in `proxy.env` to require a SPIFFE URI in every agent cert's SAN at enrollment time.
+- Upload the Org CA that signs your SPIRE intermediate via the dashboard (Setup → Org CA → Upload) or with `POST /v1/admin/pki/attach-ca`. The Mastio validates `CA=true`, key size ≥ 2048 RSA or a recognised EC curve, and `pathLenConstraint ≤ 1`. A 400 on pathLen means your CA was issued too permissively — re-issue it and retry.
 
-The Court admin mints an invite:
-
-```bash
-curl -X POST https://court.example.com/v1/admin/invites \
-    -H "X-Admin-Secret: $COURT_ADMIN_SECRET" \
-    -H "Content-Type: application/json" \
-    -d '{"label": "acme onboarding", "ttl_hours": 24}'
-```
-
-Your org redeems it with the trust domain declared:
-
-```bash
-curl -X POST https://court.example.com/v1/onboarding/join \
-    -H "Content-Type: application/json" \
-    -d '{
-        "org_id": "acme",
-        "display_name": "Acme Corp",
-        "secret": "<long random>",
-        "contact_email": "sec@acme.com",
-        "ca_certificate": "-----BEGIN CERTIFICATE-----\n...Org CA PEM...",
-        "invite_token": "<token>",
-        "trust_domain": "acme.com"
-    }'
-```
-
-The Court validates:
-
-- `trust_domain` is syntactically valid and not already claimed
-- Org CA has `CA=true` and key size ≥ 2048 RSA or a recognised EC curve
-- Org CA `pathLenConstraint ≤ 1`
-
-A 400 on pathLen means your CA was issued too permissively — re-issue it and retry. Don't request a Court-side waiver; it would widen the trust surface silently.
-
-The org starts in `pending`. The Court admin approves it with `POST /v1/admin/orgs/{org_id}/approve`.
-
-### B. `attach-ca` for a pre-provisioned org
-
-If the Court admin already created your org (no CA yet) and issued an `attach-ca` invite:
-
-```bash
-curl -X POST https://court.example.com/v1/onboarding/attach \
-    -H "Content-Type: application/json" \
-    -d '{
-        "ca_certificate": "...PEM...",
-        "invite_token": "<attach-ca token>",
-        "secret": "<long random>",
-        "trust_domain": "acme.com"
-    }'
-```
-
-Same pathLen rule applies.
+Restart the Mastio so the env change takes effect.
 
 ## 2. Configure SPIRE
 
@@ -203,21 +154,7 @@ print('token_prefix:', c.get_token()[:24])
 "
 ```
 
-On the Court, check the audit:
-
-```bash
-curl -s "https://court.example.com/v1/admin/audit/export?org_id=acme&event_type=auth.token_issued" \
-    -H "X-Admin-Secret: $COURT_ADMIN" \
-    | jq -s 'last'
-```
-
-You should see `agent.id=acme::sales-agent` with chain length 2 in the span attributes (`auth.x509_chain_verify.chain.length`).
-
-## Deprecated — direct-to-Court SPIFFE login
-
-Cullis used to support `CullisClient.from_spiffe_workload_api(...)` — a one-shot call that pulled an SVID and minted a token straight from the Court. That path is **deprecated**. It still works and emits a `DeprecationWarning` + `Deprecation: true` + `Sunset` response headers until the Court's `/v1/auth/token` returns `410 Gone`. New deployments treat SPIRE as an *enrollment* primitive (section 3 above) and use `from_api_key_file(...)` at runtime.
-
-If you have existing workloads on the direct-login path, see [Migration from direct login](../reference/migration-from-direct-login) for the zero-downtime move.
+Check the audit dashboard at `https://mastio.example.com/proxy/audit` for the `auth.token_issued` event. You should see `agent.id=acme::sales-agent` with chain length 2 in the span attributes (`auth.x509_chain_verify.chain.length`).
 
 ## Operational notes
 
@@ -227,7 +164,7 @@ An agent either authenticates with a classic BYOCA cert (pinning on) or with an 
 
 ### Multiple proxies in the same trust domain
 
-`N` Mastios can share a `trust_domain` as long as every SPIRE instance chains to the same Org CA. The Court accepts any SVID whose chain terminates at the registered Org CA, regardless of which intermediate signed it. HA, multi-region, site isolation — all work naturally.
+`N` Mastios can share a `trust_domain` as long as every SPIRE instance chains to the same Org CA. The Mastio accepts any SVID whose chain terminates at the registered Org CA, regardless of which intermediate signed it. HA, multi-region, site isolation — all work naturally.
 
 ### Name Constraints (recommended, not enforced)
 
@@ -245,7 +182,7 @@ Coordinated rotation:
 
 1. Issue a new Org CA with `pathLen=1`
 2. Configure SPIRE to use both old and new as `UpstreamAuthority` during the overlap
-3. Register the new CA on the Court with `POST /v1/registry/orgs/{org_id}/certificate` (classic rotate — no invite consumed)
+3. Upload the new CA on the Mastio via the dashboard (Setup → Org CA → Replace) or `POST /v1/admin/pki/attach-ca`
 4. Once all workloads rotated SVIDs under the new intermediate, decommission the old CA
 
 Workloads don't need to reconnect — SPIRE rotation + SDK re-auth covers the window within an SVID TTL.
@@ -253,16 +190,16 @@ Workloads don't need to reconnect — SPIRE rotation + SDK re-auth covers the wi
 ### Revoking a single workload
 
 - SPIRE-native: `spire-server entry delete <id>`. The workload loses its SVID within one rotation cycle.
-- Cullis-native: `POST /v1/admin/certs/revoke` with the SVID's `serial_hex` for immediate effect at the Court. Useful if SPIRE rotation is slow or its signing material is compromised.
+- Cullis-native: `POST /v1/admin/certs/revoke` with the SVID's `serial_hex` for immediate effect at the Mastio. Useful if SPIRE rotation is slow or its signing material is compromised.
 
 ## Troubleshoot
 
 | Symptom | Likely cause |
 |---|---|
-| `No organization registered for trust domain 'X'` | `trust_domain` not declared at `/onboarding/join`, or registered with a different value. Check `organizations.trust_domain` in the Court DB. |
+| `No organization registered for trust domain 'X'` | `trust_domain` not configured on the Mastio, or set to a different value. Check the Mastio's `MCP_PROXY_TRUST_DOMAIN` env / dashboard Org page. |
 | `CA pathLenConstraint is 2 — pathLen must be ≤ 1` | Org CA too permissive. Re-issue with `pathLen=1` and re-register via `attach-ca`. |
 | `certificate chain broken at position 0` | `x5c` ordering wrong (must be leaf first, then intermediates; never the trust anchor) or SDK sending only the leaf. Confirm `len(x5c) >= 2`. |
-| `Agent not found or org mismatch` | The `agent_id` derived from the SVID's last path segment isn't registered on the Court. Re-run step 3. |
+| `Agent not found or org mismatch` | The `agent_id` derived from the SVID's last path segment isn't registered on the Mastio. Re-run the SPIFFE enrollment step. |
 | `certificate chain contains a duplicate entry` | Your SDK is appending the Org CA to `x5c`. Strip it — the trust anchor is implicit. |
 | `svid_missing_spiffe_uri` | The SVID has no SPIFFE URI SAN. SPIRE workload attestation didn't bind a SPIFFE ID. Check the registration entry. |
 
@@ -270,7 +207,7 @@ Workloads don't need to reconnect — SPIRE rotation + SDK re-auth covers the wi
 
 - [BYOCA enrollment](byoca) — the alternative when SPIRE isn't part of your stack
 - [Enrollment API reference](../reference/enrollment-api) — `POST /v1/admin/agents/enroll/spiffe` full schema
-- [Migration from direct login](../reference/migration-from-direct-login) — moving legacy direct-to-Court deployments onto this enrollment path
+- [BYOCA enrollment](byoca) — the alternative for long-lived agents signed by an existing org CA
 - [Rotate keys § 3](../operate/rotate-keys#3-rotate-the-org-ca) — the Org CA rotation flow in detail
 
 ## References

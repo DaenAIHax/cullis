@@ -29,18 +29,18 @@ vulnerabilities before a coordinated disclosure window has passed.
 
 ### Response Timeline
 
-We aim for the following service-level targets, measured from the moment
-we receive the report:
+Cullis is currently maintained by a small team. The targets below are
+aspirational and best-effort, not contractual. We will communicate a
+concrete timeline in the acknowledgment of each report.
 
-| Phase | Target |
+| Phase | Target (best effort) |
 |---|---|
-| Acknowledgment | within 48 hours |
-| Initial triage + severity assignment | within 7 days |
-| Fix for CRITICAL severity | within 7 days |
-| Fix for HIGH severity | within 14 days |
-| Fix for MEDIUM severity | within 30 days |
-| Fix for LOW severity | best effort, next minor release |
-| Public disclosure | 90 days after report, or upon coordinated release, whichever comes first |
+| Acknowledgment of receipt | within 7 days |
+| Initial triage + severity assignment | within 14 days |
+| Fix for CRITICAL severity | top priority — typically weeks, not months |
+| Fix for HIGH severity | next planned release window |
+| Fix for MEDIUM / LOW severity | as scope and capacity permit |
+| Coordinated public disclosure | 90 days from acknowledgment, or upon a coordinated release, whichever comes first |
 
 Severity follows [CVSS v3.1](https://www.first.org/cvss/v3.1/specification-document)
 base score:
@@ -50,49 +50,38 @@ base score:
 - **MEDIUM** — CVSS 4.0 - 6.9
 - **LOW** — CVSS 0.1 - 3.9
 
-If a fix will take longer than the target window (e.g. it requires a
-breaking change or a coordinated upstream release), we will say so in
+If a fix will take longer than the targets above (breaking change,
+coordinated upstream release, capacity), we will say so explicitly in
 the acknowledgment and agree a revised timeline with the reporter.
 
 ## Supported Versions
 
-Cullis ships several components, each released independently. We patch
-security issues on the **latest stable release of each release track**.
-Older tags are end-of-life unless explicitly listed below.
+We patch security issues on the **latest stable release of each
+release track**. Older tags are end-of-life unless explicitly listed
+below.
 
 | Component | Release tag prefix | Supported window |
 |---|---|---|
-| Cullis Court (federation broker) | `court-v*` | latest stable |
 | Cullis Mastio (open-core image) | `mastio-v*` | latest stable |
-| Cullis Mastio Enterprise (paid image) | `mastio-enterprise-v*` | latest stable + previous minor |
-| Cullis Mastio open-core bundle | `mastio-bundle-v*` | latest stable |
-| Cullis Mastio enterprise bundle | `mastio-enterprise-bundle-v*` | latest stable |
-| Cullis Frontdesk bundle | `frontdesk-bundle-v*` | latest stable |
-| Cullis Chat SPA | `chat-v*` | latest stable |
-| Cullis Connector (desktop / PyPI / Docker) | `connector-v*` | latest stable |
+| Cullis Mastio bundle | distributed via the `mastio-v*` release | latest stable |
 | Python SDK (`cullis-sdk`) | PyPI semver | latest minor |
-| TypeScript SDK (`@cullis/sdk`) | npm semver | latest minor |
 
-While Cullis is pre-1.0, the "previous minor" support window is
-intentionally narrow — operators should expect to track the latest
-release. Once a paid component reaches 1.0, the support window will
-widen and the support policy will be re-published here in this file
-before the change takes effect.
+While Cullis is pre-1.0 the support window is intentionally narrow —
+operators should expect to track the latest release. Once a component
+reaches 1.0 the support window will widen and this policy will be
+updated in this file before the change takes effect.
 
 ## Scope
 
 In scope for this policy:
 
-- This repository (`cullis-security/cullis`) — Court, Mastio open-core,
-  Connector, Cullis Chat, SDKs, deploy bundles, site sources.
-- The private companion repo (`cullis-security/cullis-enterprise`) —
-  paid plugins, signing pipeline. Reports there are handled through
-  the same channels.
-- The published container images on `ghcr.io/cullis-security/*`.
-- The published PyPI / npm packages (`cullis-sdk`, `cullis-connector`,
-  `@cullis/sdk`).
-- The published license verification pipeline (signing keys, JWT
-  verifier, supply-chain artefacts attached to GitHub Releases).
+- This repository (`cullis-security/cullis`) — Cullis Mastio source,
+  Python SDK source, Mastio bundle, site sources.
+- The published container images on `ghcr.io/cullis-security/*` for
+  the Mastio.
+- The published PyPI package `cullis-sdk`.
+- The Mastio bundle archive attached to GitHub Releases
+  (`cullis-mastio-bundle-*.tar.gz`).
 
 Out of scope:
 
@@ -102,9 +91,8 @@ Out of scope:
   misconfiguration easy.
 - Third-party AI providers reachable through the embedded AI gateway
   (Anthropic, OpenAI, etc.). Report those upstream.
-- The `cullis.io` marketing site (`docs/` source + Cloudflare Pages)
-  for non-security cosmetic issues — open a regular GitHub issue
-  instead.
+- The `cullis.io` marketing site for non-security cosmetic issues —
+  open a regular GitHub issue instead.
 
 ## Safe Harbour
 
@@ -131,12 +119,12 @@ programme; this section will be updated here when that changes.
 
 Cullis is built with security as a core design principle:
 
-- x509 PKI with 3-tier certificate chain
-- DPoP token binding (RFC 9449) — no plain Bearer tokens
-- E2E encryption (AES-256-GCM + RSA-OAEP) — broker never reads plaintext
-- Default-deny session policy with federated PDP webhooks
-- Append-only cryptographic audit log
+- x509 PKI with 3-tier certificate chain (Org Root → Mastio Intermediate → agent leaf)
+- DPoP token binding (RFC 9449) — no plain Bearer tokens accepted
+- mTLS RFC 8705 §3 — client cert is the credential, no shared API key
+- Default-deny session policy with PDP webhook + capability gate per agent
+- Append-only cryptographic audit log (per-org hash chain, RFC 3161 TSA optional)
 - Certificate thumbprint pinning
 - Rate limiting on all public endpoints
 
-For a full security architecture overview, see the [README](README.md#security-architecture).
+For a full security architecture overview see the [README](README.md) and the threat model at [cullis.io/docs/security/threat-model](https://cullis.io/docs/security/threat-model/).
