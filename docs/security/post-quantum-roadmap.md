@@ -24,8 +24,8 @@ it once a CRQC is available.
   regulated industries (banking, insurance, supply chain) retain
   audit material for 7 to 10 years. A 2032-grade CRQC against
   2026-grade RSA-OAEP-SHA256 envelope keys is in scope.
-- **Federation handshake material.** Mastio-to-Court and
-  Mastio-to-Mastio traffic carries identity assertions signed by
+- **Intra-org handshake material.** Mastio-to-agent and
+  Mastio-to-MCP-tool traffic carries identity assertions signed by
   the org's Intermediate CA. Captured handshakes plus access to the
   CA chain decrypt those assertions retroactively.
 - **Cert authority chains.** Org Root CA validity is 15 years. A
@@ -162,7 +162,7 @@ estimate today: 2027 H1.
 
 **Deliverables:**
 
-- Federation handshake Mastio to Court and Mastio to Mastio
+- Intra-org TLS handshake (Mastio to agent, Mastio to MCP tool)
   negotiates `X25519MLKEM768` (IETF
   `draft-ietf-tls-hybrid-design`) as the preferred group.
 - Classical fallback (`X25519`, `secp256r1`) remains for
@@ -184,8 +184,8 @@ land for the typed-principal SAN format to remain stable.
 - Backward compat by design: classical-only verifiers verify the
   classical signature and ignore the PQ signature. Hybrid
   verifiers require both.
-- Mastio Intermediate CA, Mastio Leaf, agent leaf, Connector cert,
-  and nginx server TLS cert all gain dual-sig at issuance time.
+- Mastio Intermediate CA, Mastio Leaf, agent leaf, and nginx server
+  TLS cert all gain dual-sig at issuance time.
 - Org Root CA gains dual-sig at the Phase 1a kickoff rotation
   (see section 8).
 
@@ -340,8 +340,8 @@ Phase 1a kickoff"**.
 
 ## 9. Threat model interaction
 
-The PQC roadmap interacts with the threat model
-[`docs/security/threat-model.md`](./threat-model.md) at three points:
+The PQC roadmap interacts with the public threat model on
+[cullis.io/docs/security/threat-model](https://cullis.io/docs/security/threat-model/) at three points:
 
 - **HNDL on audit logs.** Today's audit log entries are protected
   by AES-256-GCM payload encryption (Grover-resilient at acceptable
@@ -421,8 +421,7 @@ section 6 close, **or** a single concrete buyer signal lands.
 - IETF TLS working group hybrid drafts: <https://datatracker.ietf.org/wg/tls/documents/>
 - ADR-022 (Cullis internal): `imp/adrs/adr-022-post-quantum-strategy.md`, ratified 2026-05-06.
 - Wave 1-A PKI hardening (Cullis internal): `imp/adrs/adr-033-pki-three-tier-hardening.md`, classical baseline.
-- [`docs/security/threat-model.md`](./threat-model.md): threat
-  model and trust boundaries.
+- [Cullis threat model on cullis.io](https://cullis.io/docs/security/threat-model/): threat catalog and trust boundaries.
 - [`SECURITY.md`](../../SECURITY.md): responsible disclosure
   policy.
 
