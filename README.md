@@ -109,7 +109,7 @@ cullis_sdk/        Cullis SDK (Python client + MCP server)
 packaging/         Release bundles (Mastio container bundle, SDK PyPI build)
 deploy/            Helm chart + Docker Compose for the Mastio
 nginx/             TLS sidecar config used by the Mastio bundle
-docs/              cullis.io site source, ops runbooks, ratified ADRs
+docs/              ops runbooks, integrations, architecture notes
 scripts/           Maintainer scripts (env generation, audit verification, Postgres backup)
 site/              cullis.io Astro site
 ```

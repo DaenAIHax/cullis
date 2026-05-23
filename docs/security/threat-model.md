@@ -338,8 +338,7 @@ responsibility, with our support.
   (Frontdesk shared mode + per-user KMS), ADR-029 (tool-level PDP),
   ADR-031 (Vault as Org CA KMS backend), ADR-033 (PKI three-tier
   hardening), ADR-033 (Frontdesk shared-mode threat model). Public
-  ADRs are in `docs/adrs/`; ADRs with commercial-sensitive content
-  are internal-only in `imp/adrs/`.
+  ADRs are internal-only in `imp/adrs/` (gitignored).
 
 ---
 
