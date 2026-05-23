@@ -124,6 +124,20 @@ async def _evaluate_session_policy(opa_input: dict) -> dict:
     else:
         rules = {}
 
+    # Two-layer policy: operator's Rego first, legacy allowlist as
+    # fall-through. See ``mcp_proxy.policy.try_rego_decision`` for the
+    # contract (returns None when no Rego is configured or its eval
+    # fails — the latter logged at warning level inside the helper).
+    from mcp_proxy.policy import try_rego_decision
+    rego_decision = try_rego_decision(rules, opa_input, surface="session")
+    if rego_decision is not None:
+        _log.info(
+            "policy_bridge[rego] session %s: %s",
+            rego_decision.get("decision", "").upper(),
+            rego_decision.get("reason", ""),
+        )
+        return rego_decision
+
     initiator = opa_input.get("initiator_agent_id", "?")
     target = opa_input.get("target_agent_id", "?")
     context = opa_input.get("session_context", "?")
@@ -185,6 +199,21 @@ async def _evaluate_tool_call_policy(opa_input: dict) -> dict:
             rules = _json.loads(rules_raw)
         except _json.JSONDecodeError:
             rules = {}
+
+    # Two-layer policy: operator's Rego first, ``tool_rules`` allowlist
+    # as fall-through. Mirror of the session surface above.
+    from mcp_proxy.policy import try_rego_decision
+    rego_decision = try_rego_decision(rules, opa_input, surface="tool_call")
+    if rego_decision is not None:
+        _log.info(
+            "policy_bridge[rego] tool_call %s: agent=%s tool=%s %s",
+            rego_decision.get("decision", "").upper(),
+            opa_input.get("agent_id", "?"),
+            opa_input.get("tool_name", "?"),
+            rego_decision.get("reason", ""),
+        )
+        return rego_decision
+
     tool_rules = rules.get("tool_rules", {})
     if not isinstance(tool_rules, dict):
         tool_rules = {}

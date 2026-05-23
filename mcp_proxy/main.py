@@ -1740,6 +1740,31 @@ async def pdp_policy(request: Request):
     else:
         rules = {}
 
+    # Two-layer policy: try the operator's Rego first (compiled WASM
+    # bundle stored under ``policy_rules.rego_wasm_base64``); fall
+    # through to the legacy allowlist below if Rego is not configured
+    # or its eval fails (the helper logs the failure).
+    from mcp_proxy.policy import try_rego_decision
+    rego_decision = try_rego_decision(
+        rules,
+        {
+            "initiator_agent_id": initiator,
+            "target_agent_id": target,
+            "initiator_org_id": body.get("initiator_org_id", ""),
+            "target_org_id": body.get("target_org_id", ""),
+            "session_context": context,
+            "capabilities": body.get("capabilities", []),
+        },
+        surface="session",
+    )
+    if rego_decision is not None:
+        _log.info(
+            "PDP[rego] %s: %s -> %s (ctx=%s) %s",
+            rego_decision.get("decision", "").upper(),
+            initiator, target, context, rego_decision.get("reason", ""),
+        )
+        return JSONResponse(rego_decision)
+
     # Evaluate rules (empty = allow all)
     decision = "allow"
     reason = ""
@@ -2201,6 +2226,13 @@ app.include_router(local_policies_router)
 # ADR-029 Phase E, dashboard authoring for tool-level PDP rules.
 from mcp_proxy.dashboard.tool_rules import router as tool_rules_router
 app.include_router(tool_rules_router)
+
+# Rego policy authoring surface — editor + compile + delete under
+# /proxy/policies/rego. Compiles via the bundled opa binary, stores
+# source + WASM bundle in the same policy_rules JSON the legacy
+# Built-in Rules + Tool Rules tabs already write to.
+from mcp_proxy.dashboard.rego_rules import router as rego_rules_router
+app.include_router(rego_rules_router)
 
 # ADR-017 Phase 4 — dashboard CRUD for AI provider credentials (the
 # admin secret API surface lives in mcp_proxy.admin.ai_providers).
