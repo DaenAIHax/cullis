@@ -166,6 +166,60 @@ client.login_via_proxy_with_local_key()
 
 `from_identity_dir` is the only runtime constructor you need. Production agents that load credentials from Vault, K8s secrets, HSMs, or any other secret store use this same call once the material has been read into the three file paths.
 
+### Production: systemd LoadCredential
+
+For Linux production deployments, prefer systemd's `LoadCredential=` mechanism over plain 0600 files. systemd materialises the credentials on tmpfs under `$CREDENTIALS_DIRECTORY` only for the lifetime of the unit, with `0400 root:root` perms, gone the moment the service stops. The agent never reads from a writable disk.
+
+Unit file (`/etc/systemd/system/cullis-kyc-agent.service`):
+
+```ini
+[Unit]
+Description=KYC screener agent (Cullis-authenticated)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=cullis-kyc
+ExecStart=/opt/kyc-agent/venv/bin/python /opt/kyc-agent/main.py
+
+# systemd reads these from disk once at unit start and re-materialises them
+# on tmpfs under /run/credentials/cullis-kyc-agent.service/<name>. The
+# source paths can be 0400 root:root — only systemd needs to read them.
+LoadCredential=cert.pem:/etc/cullis/kyc-screener/cert.pem
+LoadCredential=key.pem:/etc/cullis/kyc-screener/key.pem
+LoadCredential=dpop.jwk:/etc/cullis/kyc-screener/dpop.jwk
+LoadCredential=agent.json:/etc/cullis/kyc-screener/agent.json
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Inside the agent, replace `from_identity_dir(...)` with the zero-argument `from_systemd_credentials()`:
+
+```python
+from cullis_sdk import CullisClient
+
+# Reads $CREDENTIALS_DIRECTORY, loads cert + key + dpop, lifts
+# mastio_url / agent_id / org_id from agent.json.
+client = CullisClient.from_systemd_credentials()
+client.login_via_proxy_with_local_key()
+```
+
+The factory accepts the same `verify_tls`, `timeout`, and `ca_chain_path` arguments as `from_identity_dir`, plus overrides if your unit names the credentials differently (`cert_name=`, `key_name=`, `dpop_key_name=`). Setting `dpop_key_name=None` skips DPoP loading entirely — only safe while the Mastio's `egress_dpop_mode` is `off` or `optional`.
+
+The `agent.json` file ships the runtime metadata the SDK needs to talk to your Mastio:
+
+```json
+{
+  "mastio_url": "https://mastio.acme.corp",
+  "agent_id": "orga::kyc-screener",
+  "org_id": "orga"
+}
+```
+
+It's the same JSON the `enroll_via_byoca` / `enroll_via_spiffe` helpers persist under `persist_to/agent.json`, so an operator who provisioned with the SDK can copy it verbatim to `/etc/cullis/kyc-screener/`. Operators who provisioned with `curl` write it by hand.
+
 ## What's next
 
 - [BYOCA enrollment](../enroll/byoca) — full cert chain rules and CA attach flow
