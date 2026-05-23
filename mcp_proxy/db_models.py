@@ -24,6 +24,7 @@ from sqlalchemy import (
     Float,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     PrimaryKeyConstraint,
     SmallInteger,
@@ -144,6 +145,64 @@ class AuditLogEntry(Base):
         Index("idx_audit_log_chain_seq", "chain_seq", unique=True),
         Index("idx_audit_log_dpop_jkt", "dpop_jkt"),
         Index("idx_audit_log_on_behalf_of_user", "on_behalf_of_user_id"),
+    )
+
+
+class AuditChainAnchor(Base):
+    """RFC 3161 timestamp anchor for the audit_log hash chain.
+
+    Periodically (configurable via ``MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS``)
+    a background task computes the current ``(chain_seq, row_hash)`` head
+    and asks a public RFC 3161 TSA (default ``http://timestamp.digicert.com``)
+    to sign a timestamp over ``sha256(row_hash)``. The resulting
+    TimeStampToken is persisted here verbatim. Verifiers replaying the
+    chain reconstruct ``row_hash`` at ``chain_seq`` and check the token's
+    ``messageImprint`` matches — the chain is then tamper-evident not
+    only against an operator inside the org, but against an operator
+    colluding with the Cullis vendor: a forged history cannot reproduce
+    the TSA's signature without compromising the TSA itself.
+
+    Storage is intentionally append-only. The Mastio audit chain
+    integrity claim now extends to the anchor table: rows are written
+    once, never updated, never deleted — the same plpgsql trigger
+    pattern as ``audit_log`` (F-A-402) applies via migration
+    ``0043_audit_chain_anchors``.
+    """
+    __tablename__ = "audit_chain_anchors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Wall-clock at the moment Mastio received the TSA response.
+    # The authoritative timestamp is inside the token (TSA's GenTime,
+    # asserted by the TSA's cert chain). This column is for operator
+    # bookkeeping only.
+    anchored_at = Column(Text, nullable=False)
+    # The Mastio's own org_id at anchor time. Cullis is single-org
+    # per Mastio so this is stable, but bundling it in the row makes
+    # the NDJSON export self-describing for the offline verifier.
+    org_id = Column(Text, nullable=False)
+    # Chain position the anchor binds to. Foreign key in spirit only;
+    # we don't declare a FK constraint because audit_log is append-only
+    # and the anchor row would block a (future) row deletion in a way
+    # that hides the deletion from the chain-verification path.
+    chain_seq = Column(Integer, nullable=False)
+    # The row_hash at that chain_seq. Duplicated here from audit_log
+    # so the anchor is self-contained: a verifier reading anchors
+    # alone (without the audit_log table) can already check the TSA
+    # token's messageImprint matches this row_hash.
+    row_hash = Column(Text, nullable=False)
+    # URL of the TSA the operator pointed Mastio at. Logged for
+    # forensic traceability when multiple TSAs are used in rotation.
+    tsa_url = Column(Text, nullable=False)
+    # Raw TimeStampToken bytes prefixed with the ``T1|`` magic the
+    # ``cullis-audit-verify.py`` standalone verifier already
+    # understands (mock tokens use ``MK|``; we never write those
+    # outside tests). Verifier decodes the ASN.1 TimeStampToken via
+    # asn1crypto/rfc3161-client.
+    tsa_token = Column(LargeBinary, nullable=False)
+
+    __table_args__ = (
+        Index("idx_audit_chain_anchors_chain_seq", "chain_seq"),
+        Index("idx_audit_chain_anchors_anchored_at", "anchored_at"),
     )
 
 

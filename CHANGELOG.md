@@ -12,6 +12,49 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+### Mastio — audit chain TSA anchoring (tamper-evident vs operator + vendor)
+
+- **New lifespan watcher `audit_anchor_watcher`** — periodically
+  (default hourly) reads the audit_log's chain head, POSTs the
+  current `row_hash` to a public RFC 3161 TSA (default
+  `http://timestamp.digicert.com`), and persists the signed
+  TimeStampToken in the new `audit_chain_anchors` table. Forging
+  the chain end-to-end now requires forging the TSA's signature —
+  the audit trail is tamper-evident even against an operator
+  colluding with the Cullis vendor.
+
+- **New table `audit_chain_anchors`** (migration
+  `0043_audit_chain_anchors`) — append-only via the same plpgsql /
+  SQLite trigger pattern as audit_log (F-A-402). Stores the
+  TimeStampToken raw bytes prefixed with `T1|` so the offline
+  verifier `scripts/cullis-audit-verify.py` (which already
+  understood the schema) can route them to the asn1crypto / rfc3161
+  decoder.
+
+- **`mcp_proxy/audit/tsa_client.py`**: synchronous RFC 3161 client.
+  Build the TimeStampReq with `rfc3161-client`, POST over httpx,
+  parse the response with `asn1crypto.tsp` (lenient about non-DER
+  SET ordering inside SignedData.certificates which several real
+  TSAs emit). Re-check the token's messageImprint matches the
+  digest we sent before returning, so a rogue TSA cannot poison
+  the local table.
+
+- **Configuration**: `MCP_PROXY_AUDIT_ANCHOR_{ENABLED,TSA_URL,
+  INTERVAL_SECONDS,TSA_TIMEOUT_SECONDS}`. Default on, default TSA
+  DigiCert public, default interval 1h.
+
+- **5 new unit tests** in `test/unit/test_audit_anchor_watcher.py`:
+  watcher anchors the latest chain head, skips when already
+  anchored, persists nothing on TSA failure, silent on empty chain,
+  exits cleanly on `stop_event` set.
+
+- **Dependencies**: `rfc3161-client` + `asn1crypto` added to
+  `mcp_proxy/requirements-proxy.txt`.
+
+- **Docs**: new
+  [Operate → Audit chain TSA anchoring](https://cullis.io/docs/operate/audit-anchoring)
+  page.
+
 ### Mastio — Rego engine perf: OPAPolicy instance cache + bench tool
 
 - **Process-wide `OPAPolicy` instance cache** keyed on
