@@ -1,0 +1,57 @@
+# =============================================================================
+# Cullis Mastio bundle — Postgres 16 backend overlay
+# =============================================================================
+#
+# Layered on top of docker-compose.yml by ./deploy.sh --db postgres.
+# Flips MCP_PROXY_DATABASE_URL + PROXY_DB_URL to an asyncpg URL pointing
+# at an in-network Postgres service, brings up the bundled Postgres
+# container alongside the proxy, and gates Mastio start on a healthy
+# pg_isready probe.
+#
+# Manual usage (without deploy.sh)::
+#
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.postgres.yml \
+#     --env-file proxy.env \
+#     up -d --wait
+#
+# proxy.env must set POSTGRES_PASSWORD (no default — see
+# generate-proxy-env.sh --db postgres for a strong random value).
+#
+# For managed cloud Postgres (RDS / Cloud SQL / Azure Database) skip
+# this overlay and set ``PROXY_DB_URL=postgresql+asyncpg://...`` in
+# proxy.env directly. The base bundle picks it up unchanged.
+# =============================================================================
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cullis-mastio-postgres
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-cullis_mastio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for the Postgres overlay — regenerate proxy.env with ./generate-proxy-env.sh --db postgres}
+      POSTGRES_DB:       ${POSTGRES_DB:-cullis_mastio}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    networks:
+      - proxy_net
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-cullis_mastio} -d ${POSTGRES_DB:-cullis_mastio}
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  mcp-proxy:
+    environment:
+      PROXY_DB_URL: postgresql+asyncpg://${POSTGRES_USER:-cullis_mastio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cullis_mastio}
+      MCP_PROXY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cullis_mastio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cullis_mastio}
+    depends_on:
+      postgres:
+        condition: service_healthy

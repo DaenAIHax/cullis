@@ -97,7 +97,13 @@ services:
       # boots ignore the env (the persisted hash wins, rotation goes
       # through the dashboard).
       MCP_PROXY_INITIAL_ADMIN_PASSWORD: ${MCP_PROXY_INITIAL_ADMIN_PASSWORD:-}
-      MCP_PROXY_DATABASE_URL:      sqlite+aiosqlite:////data/mcp_proxy.db
+      # Default file-backed SQLite. The docker-compose.postgres.yml
+      # overlay (invoked by ``./deploy.sh --db postgres``) flips this to
+      # ``postgresql+asyncpg://...`` against an in-network Postgres 16
+      # service. PROXY_DB_URL is the canonical env (ADR-001 Phase 1.3);
+      # MCP_PROXY_DATABASE_URL stays as a backward-compat alias.
+      MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
+      PROXY_DB_URL:                ${PROXY_DB_URL:-}
       MCP_PROXY_BROKER_URL:        ${MCP_PROXY_BROKER_URL:-}
       MCP_PROXY_BROKER_JWKS_URL:   ${MCP_PROXY_BROKER_JWKS_URL:-}
       MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}

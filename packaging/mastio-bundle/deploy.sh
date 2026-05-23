@@ -479,6 +479,17 @@ Options:
   (no flags)                  Standalone Mastio, private docker network
   --shared-broker             Join the broker's docker network. Requires
                               the Court compose project to be up.
+  --db <sqlite|postgres>      Database backend. Default ``sqlite`` (good
+                              for quick-try and demo VMs). Use
+                              ``postgres`` for pilot / production: brings
+                              up a bundled Postgres 16 container alongside
+                              the Mastio via docker-compose.postgres.yml,
+                              and the proxy reads PROXY_DB_URL pointing
+                              at it. Requires POSTGRES_PASSWORD in
+                              proxy.env (generate via
+                              ./generate-proxy-env.sh --db postgres). For
+                              managed cloud Postgres, set PROXY_DB_URL in
+                              proxy.env directly and skip this flag.
   --prod                      Production: fail-fast on insecure defaults,
                               requires proxy.env pre-provisioned.
   --down                      Stop and remove containers. Bind dirs
@@ -570,6 +581,12 @@ EOF
 ACTION="up"
 MODE="development"
 SHARED_BROKER=0
+# ``--db postgres`` opts into the bundled Postgres 16 overlay
+# (docker-compose.postgres.yml). Default ``sqlite`` keeps the
+# single-binary, zero-extra-container quick-start. F0.2 — production
+# pilots should always set ``postgres`` (SQLite p99 8.7s at 500 VU is
+# a known pre-pilot blocker, see Run 3 soak report).
+DB_BACKEND="sqlite"
 FORCE_PULL=0
 UPGRADE_TO=""
 UPGRADE_BUNDLE_TO=""
@@ -598,6 +615,23 @@ while [[ $# -gt 0 ]]; do
         --pull)          FORCE_PULL=1; shift ;;
         --prod)          MODE="production"; shift ;;
         --shared-broker) SHARED_BROKER=1; shift ;;
+        --db)
+            shift
+            [[ $# -gt 0 && "$1" != --* ]] || die "--db requires a value (sqlite|postgres)"
+            case "$1" in
+                sqlite|postgres) DB_BACKEND="$1" ;;
+                *) die "--db: unsupported backend '$1' (allowed: sqlite, postgres)" ;;
+            esac
+            shift
+            ;;
+        --db=*)
+            DB_BACKEND="${arg#--db=}"
+            case "$DB_BACKEND" in
+                sqlite|postgres) ;;
+                *) die "--db=: unsupported backend '$DB_BACKEND' (allowed: sqlite, postgres)" ;;
+            esac
+            shift
+            ;;
         --upgrade)
             shift
             [[ $# -gt 0 && "$1" != --* ]] || die "--upgrade requires a version (e.g. --upgrade 0.3.0-rc3)"
@@ -636,6 +670,17 @@ done
 COMPOSE_FILES="-f docker-compose.yml"
 [[ $SHARED_BROKER -eq 1 ]]    && COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.shared-broker.yml"
 [[ "$MODE" == "production" ]] && COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.prod.yml"
+if [[ "$DB_BACKEND" == "postgres" ]]; then
+    [[ -f docker-compose.postgres.yml ]] || die "docker-compose.postgres.yml missing — re-extract the bundle tarball"
+    COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.postgres.yml"
+    # POSTGRES_PASSWORD must be present in proxy.env BEFORE compose
+    # renders the overlay (the ``:?`` in the env line would surface as
+    # a generic compose error otherwise). Fail loudly with the actual
+    # remediation step.
+    if [[ "$ACTION" == "up" ]] && ! grep -qE '^POSTGRES_PASSWORD=' proxy.env 2>/dev/null; then
+        die "--db postgres requires POSTGRES_PASSWORD in proxy.env. Run ./generate-proxy-env.sh --db postgres to mint one (or set a managed-Postgres password manually)."
+    fi
+fi
 
 if [[ "$ACTION" == "down" ]]; then
     step "Stopping Cullis Mastio"
