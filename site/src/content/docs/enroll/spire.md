@@ -8,7 +8,7 @@ updated: "2026-04-23"
 
 # SPIRE enrollment
 
-**Who this is for**: a platform engineer whose organization already runs SPIRE as the workload identity fabric, and who wants Cullis to trust the same SPIFFE identities the rest of the stack does. If you don't run SPIRE, use [Connector](connector-device-code) (laptops) or [BYOCA](byoca) (long-lived agents with an org CA) instead.
+**Who this is for**: a platform engineer whose organization already runs SPIRE as the workload identity fabric, and who wants Cullis to trust the same SPIFFE identities the rest of the stack does. If you don't run SPIRE, use [BYOCA](byoca) instead — it covers both long-lived agents signed by an org CA and ad-hoc developer enrollment.
 
 ## When SPIRE is the right enrollment method
 

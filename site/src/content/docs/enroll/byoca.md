@@ -10,7 +10,7 @@ updated: "2026-04-23"
 
 **Who this is for**: a platform engineer provisioning headless agents (CI/CD jobs, backend services, scheduled workflows) where the organization already runs an internal PKI. BYOCA — "bring your own CA" — lets you use the cert material your security team already manages instead of a Connector approval click.
 
-If you're an end-user developer on a laptop, use the [Connector device-code flow](connector-device-code) instead. If your agents already hold a SPIRE SVID, use [SPIRE enrollment](spire).
+If your agents already hold a SPIRE SVID, use [SPIRE enrollment](spire) instead.
 
 ## Prerequisites
 

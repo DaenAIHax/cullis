@@ -122,9 +122,9 @@ Enroll an agent via an X.509-SVID verified against a SPIRE trust bundle.
 
 The pre-ADR-011 path. Still the default for programmatic agents created from scripts or CI. See existing runbooks — behavior unchanged, except the row now carries `enrollment_method='admin'` automatically.
 
-## `POST /v1/enrollment/start` + polling — connector flow
+## `POST /v1/enrollment/start` + polling — device-code flow
 
-The device-code enrollment for Connector Desktop. Unchanged; see [SPIFFE onboarding](spiffe-onboarding.md) and the Connector README. Rows get `enrollment_method='connector'`.
+The device-code enrollment flow. An interactive client (typically running on a developer laptop or workstation) starts a session, the user approves the request from a browser-based dashboard, the client polls for the issued credential. Rows get `enrollment_method='connector'` for historical reasons. See [SPIRE enrollment](../enroll/spire) for the non-interactive equivalent.
 
 ---
 

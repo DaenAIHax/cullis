@@ -173,7 +173,7 @@ MCP_PROXY_STANDALONE=false
 
 ## Next
 
-- [Self-host the Mastio](../install/mastio-self-host) — step-by-step for a production `.env`
+- [Mastio bundle](../install/mastio-bundle) — step-by-step `docker compose` deploy with a production `.env`
 - [Mastio on Kubernetes](../install/mastio-kubernetes) — Helm `values.yaml` equivalents
 - [Rotate keys](../operate/rotate-keys) — which variables participate in key rotation
 - [Migration from direct login](migration-from-direct-login) — context for `CULLIS_ALLOW_LEGACY_AUTH_LOGIN`
