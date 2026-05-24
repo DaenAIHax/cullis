@@ -167,6 +167,13 @@ class _EnrollmentMixin:
         # Mirror __init__: callers may attach the on-disk identity bundle
         # afterwards (see ``canonical_recipient`` in cullis_connector).
         instance.identity = None
+        # Bug #1 fix — fault in login on the first authed call so
+        # ``list_mcp_tools`` / ``call_mcp_tool`` / ``send_oneshot`` /
+        # ``chat_completion`` "just work" after ``from_enrollment``.
+        # Explicit ``login_via_proxy[_with_local_key]`` before the
+        # first call sets ``self.token`` and short-circuits the lazy
+        # path. See ``_AuthMixin._authed_request`` for the gate.
+        instance._auto_login_pending = True
 
         # F-B-11 Phase 3c (#181) — load or generate the persistent
         # DPoP keypair. The server stores the thumbprint in
@@ -277,6 +284,14 @@ class _EnrollmentMixin:
         # that other factories also use), the attribute must exist.
         instance.server_role = None
         instance.identity = None
+        # Bug #1 fix — fault in login on the first authed call. See the
+        # same flag set in ``from_enrollment`` and the lazy branch in
+        # ``_AuthMixin._authed_request``. ADR-014 mTLS handshake remains
+        # the credential at /v1/egress/* (no broker token needed there),
+        # but the MCP aggregator + broker-mediated paths read ``self.
+        # token`` and would otherwise crash on the first call until the
+        # caller explicitly invoked login_via_proxy[_with_local_key].
+        instance._auto_login_pending = True
 
         if dpop_key_path is not None:
             from cullis_sdk.dpop import DpopKey

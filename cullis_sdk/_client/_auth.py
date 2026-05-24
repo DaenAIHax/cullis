@@ -115,7 +115,43 @@ class _AuthMixin:
         used at bootstrap — and retries the request. ``_no_relogin``
         guards against infinite recursion if the re-login itself yields
         another 401.
+
+        Lazy first-call auto-login (Bug #1 fix): the proxy-bound factories
+        ``from_identity_dir`` / ``from_enrollment`` build the client with
+        ``self.token = None`` and leave the broker login as a separate
+        explicit step. Customers daily-tripped on ``RuntimeError("Not
+        authenticated — call login() first")`` the first time they
+        called ``list_mcp_tools`` / ``call_mcp_tool`` / ``send_oneshot``
+        / ``chat_completion``. When the factory sets
+        ``_auto_login_pending = True``, the first authed call faults in
+        the right login method (local-key when a signing key is on the
+        client, proxy-mediated otherwise) before composing the headers.
+        The flag is cleared BEFORE the login call so a recursive
+        ``_authed_request`` issued from inside login (today none, but
+        defensive) cannot loop. After ``self.token`` is set the guard
+        ``self.token is None`` skips the branch, so an explicit
+        ``login_via_proxy[...]`` call before the first request keeps
+        the original semantics: a single login round-trip, no second.
         """
+        if (
+            getattr(self, "token", None) is None
+            and getattr(self, "_auto_login_pending", False)
+        ):
+            # Clear FIRST so a recursive authed sub-request from inside
+            # the login (today none — both login_via_proxy and
+            # login_via_proxy_with_local_key use raw self._http.post)
+            # cannot re-enter this branch. If the login itself raises,
+            # the exception bubbles up to the caller verbatim — a
+            # ConnectionError / PermissionError from the login method
+            # is strictly more informative than the cryptic
+            # "Not authenticated — call login() first" RuntimeError
+            # _headers would raise next.
+            self._auto_login_pending = False
+            if getattr(self, "_signing_key_pem", None):
+                self.login_via_proxy_with_local_key()
+            else:
+                self.login_via_proxy()
+
         resp = self._http.request(
             method, f"{self.base}{path}",
             headers=self._headers(method, path), **kwargs,
