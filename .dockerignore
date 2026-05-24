@@ -54,3 +54,10 @@ tests/connector/__pycache__/
 test/smoke/state/
 test/smoke/.smoke-fail-*/
 **/.smoke-fail-*/
+
+# Bundle runtime bind dirs — also uid-10001-owned after deploy.sh runs,
+# also context-loader-hostile.
+packaging/mastio-bundle/data/
+packaging/mastio-bundle/nginx-certs/
+packaging/mastio-bundle/audit-archive/
+packaging/mastio-bundle/keys/
