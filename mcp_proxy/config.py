@@ -248,6 +248,42 @@ class ProxySettings(BaseSettings):
     audit_anchor_interval_seconds: int = 3600
     audit_anchor_tsa_timeout_seconds: float = 10.0
 
+    # ADR-037 Phase 1 — Merkle batch anchoring of audit_log row_hash
+    # segments. Where audit_anchor_* binds a single chain head per
+    # tick, the Merkle watcher batches a contiguous range of audit_log
+    # rows under one SHA-256 Merkle root and persists it in
+    # ``audit_merkle_anchors`` (one row per batch). Two scaling wins:
+    # (a) inclusion proof becomes O(log batch_size) instead of an
+    # O(n) chain walk, and (b) the optional TSA token covers the
+    # whole batch root — one TSA call per batch instead of one per
+    # row. Default ON, but only activates once the chain has at least
+    # ``audit_merkle_min_batch`` un-anchored rows so the first ticks
+    # on an idle install do not emit single-leaf trees.
+    audit_merkle_enabled: bool = True
+    # Maximum rows per Merkle batch. 1024 keeps the proof depth at
+    # ceil(log2(1024)) = 10 siblings = 320 bytes per inclusion proof,
+    # a comfortable balance between proof size and the per-tick
+    # SHA-256 work the watcher does (~1024 hashes per batch).
+    audit_merkle_batch_size: int = 1024
+    # Minimum rows required before the watcher emits an anchor. Same
+    # math as audit_merkle_batch_size: at 256 the proof is at most 8
+    # siblings, which keeps even idle Mastios from producing 1-leaf
+    # trees in their first tick window after install.
+    audit_merkle_min_batch: int = 256
+    # Anchor cadence. Default 5 minutes — Merkle batches are forensic
+    # not real-time, and a 5-minute cadence keeps the per-anchor
+    # latency-to-evidence window short enough for DORA Art. 12 record-
+    # keeping without hammering the watcher or (when enabled) the TSA.
+    audit_merkle_interval_seconds: int = 300
+    # Whether to anchor each Merkle root via the same TSA the
+    # audit_anchor watcher uses. The math (PR #918) doesn't need a TSA
+    # to be sound — the local chain still proves consistency — but the
+    # TSA token on the root makes the batch tamper-evident against the
+    # operator. Default ON to mirror audit_anchor_enabled; set to false
+    # when the operator wants Merkle batching without any external
+    # network dependency.
+    audit_merkle_tsa_enabled: bool = True
+
     # SSRF escape hatch — PR #2 audit 2026-05-20.
     # When False (the production default) outbound URL helpers
     # (mcp_proxy/utils/url_safety.assert_safe_outbound_url) refuse any

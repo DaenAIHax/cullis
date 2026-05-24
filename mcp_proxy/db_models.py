@@ -206,6 +206,71 @@ class AuditChainAnchor(Base):
     )
 
 
+class AuditMerkleAnchor(Base):
+    """Merkle batch anchor over a contiguous range of audit_log rows.
+
+    Where ``AuditChainAnchor`` proves a single chain_seq head existed
+    at the TSA's GenTime, this anchor binds an entire batch
+    [chain_seq_start, chain_seq_end] via a SHA-256 binary Merkle tree
+    over the row_hash bytes of every audited row in the batch. The
+    tree math is in ``mcp_proxy.audit.merkle`` (ADR-037 Phase 0).
+
+    Two scaling properties this unlocks (vs anchoring every row):
+
+      * **Inclusion proof O(log n)** instead of O(n) chain walk. An
+        auditor with merkle_root + ceil(log2(batch_size)) sibling
+        digests reconstructs the root and asserts inclusion without
+        touching DB rows beyond the batch's audit_log range.
+      * **TSA anchoring amortised**: one TSA call per batch instead
+        of one per row, while every individual row still inherits
+        the tamper-evidence through the inclusion path.
+
+    Storage is append-only, same trigger pattern as audit_log
+    (F-A-402) and audit_chain_anchors. The lifespan watcher walks
+    forward only — never rewrites an existing anchor — so the
+    append-only constraint matches the worker's intent.
+    """
+    __tablename__ = "audit_merkle_anchors"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Wall-clock at insertion. Not the authoritative timestamp when a
+    # TSA token is present (the TSA's GenTime inside the token is).
+    created_at = Column(Text, nullable=False)
+    # Mastio's own org_id at anchor time, mirroring AuditChainAnchor.
+    org_id = Column(Text, nullable=False)
+    # Inclusive bounds of the audit_log.chain_seq range covered. The
+    # watcher starts the next batch at chain_seq_end + 1, so an
+    # operator inspecting two adjacent anchors sees exact contiguity:
+    # anchor[i].chain_seq_end + 1 == anchor[i+1].chain_seq_start.
+    chain_seq_start = Column(Integer, nullable=False)
+    chain_seq_end = Column(Integer, nullable=False)
+    # Equals chain_seq_end - chain_seq_start + 1. Stored explicitly so
+    # the audit export does not have to recompute it for the inclusion
+    # proof depth (ceil(log2(leaf_count))).
+    leaf_count = Column(Integer, nullable=False)
+    # 64 lowercase hex chars: the SHA-256 Merkle root over the
+    # row_hash bytes of every row in [start, end], computed by
+    # ``mcp_proxy.audit.merkle.compute_merkle_root``.
+    merkle_root = Column(Text, nullable=False)
+    # Optional RFC 3161 TSA TimeStampToken over the merkle_root.
+    # NULL when the worker ran with TSA anchoring disabled or when
+    # the TSA call failed at batch time (the batch row is still
+    # written; the retry is "next batch", not "stop the loop").
+    tsa_url = Column(Text, nullable=True)
+    tsa_token = Column(LargeBinary, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "idx_audit_merkle_anchors_org_chain_seq_end",
+            "org_id", "chain_seq_end",
+        ),
+        Index(
+            "idx_audit_merkle_anchors_chain_seq_start",
+            "chain_seq_start",
+        ),
+    )
+
+
 class ProxyConfig(Base):
     __tablename__ = "proxy_config"
 
