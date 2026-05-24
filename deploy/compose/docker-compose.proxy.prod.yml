@@ -1,8 +1,14 @@
 # Production hardening overlay for the MCP Proxy.
 #
-# Usage:
-#   ./deploy_proxy.sh --prod                              # same-host (base + prod)
-#   ./deploy_proxy.sh --prod --standalone                 # remote broker (+ standalone override)
+# Usage (paths relative to repo root):
+#   docker compose \
+#     -f deploy/compose/docker-compose.proxy.yml \
+#     -f deploy/compose/docker-compose.proxy.prod.yml \
+#     --env-file deploy/proxy/proxy.env \
+#     up -d --wait
+#
+# For the customer-facing one-shot deploy (TLS sidecar, env mint,
+# postgres overlay), use packaging/mastio-bundle/deploy.sh instead.
 #
 # Effect:
 #   - Fails fast via ${VAR:?} if ADMIN_SECRET / DASHBOARD_SIGNING_KEY /

@@ -105,6 +105,27 @@ Then point your agent at the identity dir using the code example above. The firs
 
 The Mastio bundle README in `packaging/mastio-bundle/` covers custom hostnames, Postgres and Vault production overrides, oauth2-proxy integration, and the upgrade procedure.
 
+### Run from source (developer)
+
+If you cloned the repo and want to run the Mastio against your working tree (not the released bundle), drive `docker compose` directly:
+
+```bash
+# Dev: standalone Mastio + nginx TLS sidecar, built from source
+docker compose \
+  -f deploy/compose/docker-compose.proxy.yml \
+  --env-file deploy/proxy/proxy.env \
+  up -d --wait
+
+# Prod-safety overlay (fails fast on dev defaults)
+docker compose \
+  -f deploy/compose/docker-compose.proxy.yml \
+  -f deploy/compose/docker-compose.proxy.prod.yml \
+  --env-file deploy/proxy/proxy.env \
+  up -d --wait
+```
+
+Copy `deploy/proxy/proxy.env.example` to `deploy/proxy/proxy.env` and fill in the required values before the first `up`. The customer bundle in `packaging/mastio-bundle/` mints these automatically; the from-source path is intentionally explicit.
+
 ---
 
 ## Project layout
