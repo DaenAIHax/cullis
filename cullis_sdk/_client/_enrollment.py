@@ -264,6 +264,21 @@ class _EnrollmentMixin:
         instance.token = None
         instance._label = agent_id or "(client-cert-auth)"
         instance._signing_key_pem = None
+        # ADR-014 + Bug #1 follow-up: ``key_path`` is the agent's TLS
+        # client cert private key — it IS the signing key under the
+        # "TLS cert is the credential" model. Lifting it into
+        # ``_signing_key_pem`` lets the lazy auto-login branch in
+        # ``_authed_request`` dispatch to ``login_via_proxy_with_local_key``
+        # (correct for local-key-holders) instead of ``login_via_proxy``
+        # (which 404s at Mastio because Mastio doesn't hold this key).
+        try:
+            instance._signing_key_pem = Path(key_path).read_text()
+        except OSError as exc:
+            raise RuntimeError(
+                f"from_identity_dir: cannot read key_path={key_path!r} "
+                f"for signing-key auto-population ({exc}). The same file "
+                f"is required for TLS mTLS handshake."
+            ) from exc
         # H7 audit — share the operator-pinned Org CA with the sender-cert
         # verifier. Without this attribute ``decrypt_oneshot`` crashes with
         # AttributeError under the cls.__new__(cls) factory route.

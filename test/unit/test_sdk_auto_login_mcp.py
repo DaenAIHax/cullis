@@ -16,6 +16,18 @@ proxy-mediated otherwise). The branch clears the flag BEFORE the login
 call so a recursive authed sub-request from inside the login cannot
 loop.
 
+PR #927 security review follow-up: ``from_identity_dir`` now populates
+``_signing_key_pem`` from ``key_path`` at factory time. Under ADR-014
+the TLS client cert IS the credential, and the matching private key is
+ALSO the signing key — Mastio never holds a copy of this key, so the
+lazy auto-login branch MUST dispatch to ``login_via_proxy_with_local_key``
+(which signs locally) rather than ``login_via_proxy`` (which would 404
+because Mastio doesn't have the key). The 3 tests below that previously
+asserted the proxy-mediated dispatch were rewritten to assert the
+local-key dispatch — they captured the pre-fix dispatch as expected
+behavior in the same PR, so updating them is the natural completion of
+the security review fix.
+
 The tests run against a real ``CullisClient`` constructed via the
 factories. ``_build_proxy_http_client`` is patched out so no TLS
 context is built (the factories try to load real cert/key files);
@@ -132,12 +144,19 @@ def test_from_identity_dir_sets_auto_login_pending(
     assert client.token is None
 
 
-def test_from_identity_dir_first_call_triggers_proxy_login(
+def test_from_identity_dir_first_call_triggers_local_key_login(
     tmp_path, fake_http_factory, patched_logins,
 ):
     """First ``list_mcp_tools`` after ``from_identity_dir`` calls
-    ``login_via_proxy`` exactly once (no local signing key on disk so
-    the lazy branch picks the proxy-mediated path)."""
+    ``login_via_proxy_with_local_key`` exactly once.
+
+    Updated after the PR #927 security review fix populated
+    ``_signing_key_pem`` from ``key_path`` at factory time. Under ADR-014
+    the key in ``key_path`` IS the local signing key (Mastio doesn't
+    hold a copy), so the lazy auto-login branch correctly routes through
+    the local-key login arm — dispatching to ``login_via_proxy`` would
+    404 at Mastio because Mastio cannot reproduce the local signature.
+    """
     proxy_calls, local_calls = patched_logins
     cert = tmp_path / "cert.pem"
     key = tmp_path / "key.pem"
@@ -157,12 +176,13 @@ def test_from_identity_dir_first_call_triggers_proxy_login(
 
     tools = client.list_mcp_tools()
     assert tools == []
-    assert len(proxy_calls) == 1, (
-        f"expected exactly one login_via_proxy call, got {proxy_calls}"
+    assert len(local_calls) == 1, (
+        f"expected exactly one login_via_proxy_with_local_key call, "
+        f"got {local_calls}"
     )
-    assert len(local_calls) == 0
+    assert len(proxy_calls) == 0
     assert client._auto_login_pending is False
-    assert client.token == "fake-proxy-token"
+    assert client.token == "fake-local-token"
 
 
 def test_explicit_login_before_first_call_does_not_double_login(
@@ -226,6 +246,65 @@ def test_local_signing_key_routes_to_local_login(
     assert len(proxy_calls) == 0
 
 
+# ── PR #927 security review fix: post-fix invariants ─────────────────────
+
+
+def test_from_identity_dir_populates_signing_key_for_local_auto_login(
+    tmp_path, fake_http_factory,
+):
+    """After the PR #927 security review fix, ``from_identity_dir``
+    populates ``_signing_key_pem`` from the contents of ``key_path`` at
+    factory time. This is what flips the lazy auto-login dispatch to
+    the local-key arm (the only arm Mastio can serve for a
+    local-key-holder, since Mastio doesn't have a copy of the key)."""
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("FAKE-CERT")
+    key_pem_body = "-----BEGIN PRIVATE KEY-----\nFAKE-KEY-BODY\n-----END PRIVATE KEY-----\n"
+    key.write_text(key_pem_body)
+    from cullis_sdk import CullisClient
+
+    client = CullisClient.from_identity_dir(
+        "https://mastio.local:9443",
+        cert_path=cert,
+        key_path=key,
+    )
+    assert client._signing_key_pem is not None
+    assert client._signing_key_pem == key_pem_body
+
+
+def test_from_identity_dir_auto_login_dispatches_with_local_key(
+    tmp_path, fake_http_factory, patched_logins,
+):
+    """End-to-end PR #927 invariant: build a client via
+    ``from_identity_dir``, trigger the lazy auto-login through
+    ``list_mcp_tools``, and confirm the dispatch went through the
+    local-key login arm (not the proxy-mediated one). Mastio would 404
+    on the proxy-mediated arm because it doesn't hold the agent's
+    private key."""
+    proxy_calls, local_calls = patched_logins
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("FAKE-CERT")
+    key.write_text(
+        "-----BEGIN PRIVATE KEY-----\nFAKE-KEY-BODY\n-----END PRIVATE KEY-----\n"
+    )
+    from cullis_sdk import CullisClient
+
+    client = CullisClient.from_identity_dir(
+        "https://mastio.local:9443",
+        cert_path=cert,
+        key_path=key,
+        agent_id="acme::agent-1",
+    )
+    client._http = fake_http_factory
+
+    client.list_mcp_tools()
+
+    assert len(local_calls) == 1
+    assert len(proxy_calls) == 0
+
+
 # ── from_enrollment ───────────────────────────────────────────────────────
 
 
@@ -271,13 +350,25 @@ def test_auto_login_failure_surfaces_login_exception(
 ):
     """When the lazy login itself fails, the caller sees the login's
     exception (informative) rather than the cryptic ``RuntimeError``
-    that ``_headers`` would have raised."""
+    that ``_headers`` would have raised.
+
+    Updated after the PR #927 security review fix: the dispatch arm
+    flipped to ``login_via_proxy_with_local_key`` because
+    ``from_identity_dir`` now populates ``_signing_key_pem`` from
+    ``key_path`` at factory time. The semantics under test (login
+    failure raises a clear exception, NOT the cryptic ``_headers``
+    ``RuntimeError``) are identical, just on the other arm.
+    """
     from cullis_sdk._client._auth import _AuthMixin
 
     def _failing_login(self) -> None:
-        raise PermissionError("login_via_proxy failed (HTTP 401): nope")
+        raise PermissionError(
+            "login_via_proxy_with_local_key failed (HTTP 401): nope"
+        )
 
-    monkeypatch.setattr(_AuthMixin, "login_via_proxy", _failing_login)
+    monkeypatch.setattr(
+        _AuthMixin, "login_via_proxy_with_local_key", _failing_login,
+    )
 
     cert = tmp_path / "cert.pem"
     key = tmp_path / "key.pem"
@@ -292,7 +383,9 @@ def test_auto_login_failure_surfaces_login_exception(
     )
     client._http = fake_http_factory
 
-    with pytest.raises(PermissionError, match="login_via_proxy failed"):
+    with pytest.raises(
+        PermissionError, match="login_via_proxy_with_local_key failed",
+    ):
         client.list_mcp_tools()
     # Flag must be cleared even when login failed so a retry does not
     # re-enter the lazy branch with a now-broken inner state.
@@ -327,8 +420,15 @@ def test_token_expiry_relogin_path_still_works(
     """Existing token-expiry 401 → ``_relogin_callable`` → retry path
     must not regress. After the first lazy login wires the callable, a
     subsequent 401 from the server triggers exactly one re-login + one
-    retry."""
-    proxy_calls, _local_calls = patched_logins
+    retry.
+
+    Updated after the PR #927 security review fix: the dispatch arm
+    flipped to ``login_via_proxy_with_local_key`` because
+    ``from_identity_dir`` now populates ``_signing_key_pem`` from
+    ``key_path`` at factory time. Counters roll into ``local_calls``
+    instead of ``proxy_calls``, semantics identical.
+    """
+    _proxy_calls, local_calls = patched_logins
     cert = tmp_path / "cert.pem"
     key = tmp_path / "key.pem"
     cert.write_text("FAKE-CERT")
@@ -365,9 +465,11 @@ def test_token_expiry_relogin_path_still_works(
     client._http.request = _request
 
     client.list_mcp_tools()
-    # 1 lazy login + 1 re-login on the 401 = 2 total login_via_proxy
-    # invocations. The fake _relogin_callable is the same patched
-    # method, so the count rolls into proxy_calls.
-    assert len(proxy_calls) == 2
+    # 1 lazy login + 1 re-login on the 401 = 2 total
+    # login_via_proxy_with_local_key invocations. The fake
+    # _relogin_callable is the same patched method, so the count rolls
+    # into local_calls.
+    assert len(local_calls) == 2
+    assert len(_proxy_calls) == 0
     # 2 _http.request calls: first 401, retry 200.
     assert call_count["n"] == 2
