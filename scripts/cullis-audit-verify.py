@@ -58,6 +58,11 @@ Exit codes:
        malformed, no matching chain_seq entry in bundle, bundle
        row_hash disagrees with proof leaf_hex, or reconstructed root
        does not match anchored root) — ADR-037 Phase 3
+  7  — Enterprise audit_archive verification failure (STH ES256
+       signature invalid, manifest signature invalid, RFC 6962 audit
+       path does not reconstruct the anchored root, bundle row_hash
+       disagrees with proof leaf_hash, or --archive-manifest-pubkey
+       missing when archive flags are set)
 """
 from __future__ import annotations
 
@@ -991,6 +996,397 @@ def verify_merkle_proofs(
     return verified
 
 
+# ── Enterprise archive verification (audit_archive plugin) ──────────
+#
+# Operators on the Enterprise edition run the ``audit_archive`` plugin
+# (cullis-security/cullis-enterprise) which exports the per-epoch
+# audit chain to a WORM-sealed sink (S3 Object Lock COMPLIANCE, file://,
+# Azure Blob immutable on roadmap), computes an RFC 6962 Merkle root
+# over the row_hash leaves, and signs the root with the active Mastio
+# ES256 identity key as a Signed Tree Head (STH).
+#
+# An auditor receiving the NDJSON bundle + STH JSON + inclusion proof
+# JSON + the Mastio's ES256 public key can verify the whole envelope
+# offline with this CLI — no Mastio access, no Cullis vendor trust.
+# That is the open-core line: the WORM sink + STH generation are
+# Enterprise (per-deployment integration), the math + the verifier
+# are public so the auditor's check is vendor-independent.
+#
+# Three artefact shapes (matching the audit_archive plugin output):
+#
+#   STH JSON (per epoch):
+#     {"epoch_utc": "2026-05-24T00:00:00Z",
+#      "mastio_org_id": "acme",
+#      "tree_size": 1234,
+#      "root_hash_hex": "<64 hex>",
+#      "chain_seq_lo": 1, "chain_seq_hi": 1234,
+#      "signature_b64u": "<base64url ECDSA sig over canonical JSON>",
+#      "mastio_kid": "mastio-<id>",
+#      "signed_at": "<RFC 3339>"}
+#
+#   Inclusion proof JSON (per row):
+#     {"epoch_utc": "...",
+#      "leaf_index": 567,
+#      "leaf_hash_hex": "<64 hex>",
+#      "audit_path": ["<64 hex>", ...],     # RFC 6962 sibling list, no positions
+#      "sth": { ... STH inlined for self-contained verify ... }}
+#
+#   Manifest JSON (per bundle export):
+#     {"epoch_utc": "...",
+#      "chain_seq_lo": 1, "chain_seq_hi": 1234, "row_count": 1234,
+#      "sink_url": "s3://.../audit-2026-05-24.ndjson.zst",
+#      "bundle_sha256": "<64 hex>",
+#      "signature_b64u": "<base64url ECDSA sig over canonical JSON>"}
+#
+# The math is inlined here so the CLI stays a single-file
+# self-contained tool, but it follows RFC 6962 §2.1 byte-for-byte
+# (leaf prefix 0x00, internal prefix 0x01) so a third-party CT
+# library would compute the same root.
+
+
+_RFC6962_LEAF_PREFIX = b"\x00"
+_RFC6962_NODE_PREFIX = b"\x01"
+
+
+def _rfc6962_leaf_hash(row_hash_hex: str) -> bytes:
+    """RFC 6962 §2.1: leaf hash = sha256(0x00 || raw_leaf_bytes).
+
+    The Mastio's row_hash is already a SHA-256 hex digest, but RFC 6962
+    treats THAT as the leaf content; we prepend the leaf prefix and
+    rehash, matching what the audit_archive STH builder does
+    server-side.
+    """
+    raw = bytes.fromhex(row_hash_hex)
+    return hashlib.sha256(_RFC6962_LEAF_PREFIX + raw).digest()
+
+
+def _rfc6962_node_hash(left: bytes, right: bytes) -> bytes:
+    """RFC 6962 §2.1: internal node = sha256(0x01 || left || right)."""
+    return hashlib.sha256(_RFC6962_NODE_PREFIX + left + right).digest()
+
+
+def _rfc6962_verify_audit_path(
+    leaf_hash: bytes,
+    audit_path: list[str],
+    leaf_index: int,
+    tree_size: int,
+    expected_root: bytes,
+) -> bool:
+    """Verify an RFC 6962 audit path under the "promote unpaired"
+    construction used by the audit_archive plugin.
+
+    The plugin builds the tree with ``compute_merkle_root``:
+    pairwise hashing within each layer, trailing unpaired nodes are
+    PROMOTED to the next layer unchanged (not duplicated). The
+    matching ``compute_inclusion_proof`` emits an empty string in
+    ``audit_path`` at each level where the current node was promoted
+    unpaired — the verifier MUST skip the sibling combination at
+    that level and only advance the index.
+
+    Position at each level is the LSB of the index folded one bit
+    per step. The audit_path therefore carries no L/R marker, only
+    siblings (or '' for promote-skip).
+    """
+    if not 0 <= leaf_index < tree_size:
+        return False
+    if len(leaf_hash) != 32 or len(expected_root) != 32:
+        return False
+
+    h = leaf_hash
+    idx = leaf_index
+    for sibling_hex in audit_path:
+        if sibling_hex == "":
+            # Promoted unpaired at this level — h passes through.
+            idx >>= 1
+            continue
+        if not isinstance(sibling_hex, str):
+            return False
+        try:
+            sibling = bytes.fromhex(sibling_hex)
+        except (TypeError, ValueError):
+            return False
+        if len(sibling) != 32:
+            return False
+        if idx & 1:
+            # Current node sits on the right of its parent.
+            h = _rfc6962_node_hash(sibling, h)
+        else:
+            h = _rfc6962_node_hash(h, sibling)
+        idx >>= 1
+    return h == expected_root
+
+
+def _canonical_json(obj: dict) -> bytes:
+    """Canonical JSON encoding for signing/verification.
+
+    sorted keys, no whitespace, ensure_ascii=True. Bytes returned ready
+    for ECDSA sign/verify input. Matches what the audit_archive plugin
+    feeds into ``AgentManager.countersign`` server-side.
+    """
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+
+
+def _verify_es256_signature(
+    payload: bytes,
+    signature_b64u: str,
+    pubkey_pem_bytes: bytes,
+) -> bool:
+    """Verify a JOSE ES256 signature (ECDSA P-256 + SHA-256) over
+    ``payload`` against a PEM-encoded EC public key.
+
+    ``signature_b64u`` is the JOSE flat encoding: base64url(r || s)
+    where r and s are each 32 bytes big-endian (RFC 7515 §3.4 / RFC
+    7518 §3.4 ``ES256``). We convert to the DER form ``cryptography``
+    expects before calling ``verify``.
+
+    Returns False on any malformed input or signature mismatch.
+    Never raises — the offline verifier path must stay robust against
+    adversarial bundle content.
+    """
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import (
+            encode_dss_signature,
+        )
+    except ImportError:
+        return False
+
+    try:
+        pad = "=" * (-len(signature_b64u) % 4)
+        raw_sig = base64.urlsafe_b64decode(signature_b64u + pad)
+        if len(raw_sig) != 64:
+            return False
+        r = int.from_bytes(raw_sig[:32], "big")
+        s = int.from_bytes(raw_sig[32:], "big")
+        der_sig = encode_dss_signature(r, s)
+
+        pubkey = serialization.load_pem_public_key(pubkey_pem_bytes)
+        if not isinstance(pubkey, ec.EllipticCurvePublicKey):
+            return False
+        if not isinstance(pubkey.curve, ec.SECP256R1):
+            return False
+        pubkey.verify(der_sig, payload, ec.ECDSA(hashes.SHA256()))
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+    except Exception:  # noqa: BLE001 — adversarial input must not crash CLI
+        return False
+
+
+def _sth_canonical_payload(sth: dict) -> bytes:
+    """The exact field set the audit_archive plugin signs over.
+
+    Order is documented in the patch: mastio_org_id, epoch_utc,
+    tree_size, root_hash_hex, chain_seq_lo, chain_seq_hi, mastio_kid,
+    issued_at. ``signature_b64u`` is NOT in the signed payload (it
+    IS the signature). ``signed_at`` is also outside the canonical
+    payload to match the server-side signer.
+    """
+    fields = {
+        "mastio_org_id": sth["mastio_org_id"],
+        "epoch_utc": sth["epoch_utc"],
+        "tree_size": int(sth["tree_size"]),
+        "root_hash_hex": sth["root_hash_hex"],
+        "chain_seq_lo": int(sth["chain_seq_lo"]),
+        "chain_seq_hi": int(sth["chain_seq_hi"]),
+        "mastio_kid": sth["mastio_kid"],
+        "issued_at": sth["signed_at"],
+    }
+    return _canonical_json(fields)
+
+
+def _manifest_canonical_payload(manifest: dict) -> bytes:
+    """Canonical payload the audit_archive plugin signs for each
+    bundle manifest. Fields: epoch_utc, mastio_org_id, chain_seq_lo,
+    chain_seq_hi, row_count, sink_url, bundle_sha256.
+    """
+    fields = {
+        "epoch_utc": manifest["epoch_utc"],
+        "mastio_org_id": manifest.get("mastio_org_id", ""),
+        "chain_seq_lo": int(manifest["chain_seq_lo"]),
+        "chain_seq_hi": int(manifest["chain_seq_hi"]),
+        "row_count": int(manifest["row_count"]),
+        "sink_url": manifest["sink_url"],
+        "bundle_sha256": manifest["bundle_sha256"],
+    }
+    return _canonical_json(fields)
+
+
+def verify_archive_proofs(
+    sth_paths: list[str],
+    proof_paths: list[str],
+    manifest_paths: list[str],
+    pubkey_pem_path: str | None,
+    bundles: list[tuple[str, list[dict]]],
+) -> tuple[int, int, int]:
+    """Verify Enterprise audit_archive artefacts: STH signatures,
+    bundle manifests, and per-row inclusion proofs against the
+    Mastio's ES256 public key.
+
+    Returns ``(sth_verified, manifest_verified, proof_verified)``.
+    Exits 7 on any failure mode so an operator can wire archive
+    verification into a distinct alarm vs chain (2) / anchor (3,5) /
+    cross-ref (4) / Merkle proof (6).
+
+    All three artefact families share the same pubkey: the auditor
+    obtains it out of band (the Mastio's ``/v1/admin/mastio-pubkey``
+    endpoint, or a customer-handover PEM). Trust path is "the
+    auditor trusted this pubkey was the Mastio's at archive time",
+    not "trust whatever kid is in the JSON".
+    """
+    if not (sth_paths or proof_paths or manifest_paths):
+        return 0, 0, 0
+
+    if pubkey_pem_path is None:
+        print(
+            "ARCHIVE VERIFY: --archive-manifest-pubkey is required when "
+            "--archive-sth / --archive-proof / --archive-manifest is set"
+        )
+        sys.exit(7)
+
+    try:
+        with open(pubkey_pem_path, "rb") as f:
+            pubkey_pem = f.read()
+    except OSError as exc:
+        print(f"ARCHIVE PUBKEY UNREADABLE path={pubkey_pem_path}: {exc}")
+        sys.exit(7)
+
+    # ── 1. STH JSONs ────────────────────────────────────────────────
+    sth_verified = 0
+    sth_by_epoch: dict[str, dict] = {}
+    for path in sth_paths:
+        sth = _load_json_file(path, "ARCHIVE STH")
+        try:
+            payload = _sth_canonical_payload(sth)
+            sig = sth["signature_b64u"]
+        except KeyError as exc:
+            print(f"ARCHIVE STH MALFORMED path={path}: missing {exc}")
+            sys.exit(7)
+        if not _verify_es256_signature(payload, sig, pubkey_pem):
+            print(
+                f"ARCHIVE STH SIGNATURE INVALID path={path} "
+                f"epoch={sth.get('epoch_utc', '?')}"
+            )
+            sys.exit(7)
+        sth_by_epoch[str(sth["epoch_utc"])] = sth
+        sth_verified += 1
+
+    # ── 2. Manifests ────────────────────────────────────────────────
+    manifest_verified = 0
+    for path in manifest_paths:
+        manifest = _load_json_file(path, "ARCHIVE MANIFEST")
+        try:
+            payload = _manifest_canonical_payload(manifest)
+            sig = manifest["signature_b64u"]
+        except KeyError as exc:
+            print(f"ARCHIVE MANIFEST MALFORMED path={path}: missing {exc}")
+            sys.exit(7)
+        if not _verify_es256_signature(payload, sig, pubkey_pem):
+            print(
+                f"ARCHIVE MANIFEST SIGNATURE INVALID path={path} "
+                f"epoch={manifest.get('epoch_utc', '?')}"
+            )
+            sys.exit(7)
+        manifest_verified += 1
+
+    # ── 3. Inclusion proofs ─────────────────────────────────────────
+    # Each proof has its STH inlined (self-contained verify). We
+    # re-verify the embedded STH signature even if the same epoch was
+    # already verified standalone — the inlined STH could disagree
+    # with the standalone one and that disagreement is the signal an
+    # operator needs to see.
+    proof_verified = 0
+    by_chain_seq: dict[int, dict] = {}
+    for _path, entries in bundles:
+        for e in entries:
+            seq = e.get("chain_seq")
+            if seq is None:
+                continue
+            try:
+                by_chain_seq[int(seq)] = e
+            except (TypeError, ValueError):
+                continue
+
+    for path in proof_paths:
+        proof = _load_json_file(path, "ARCHIVE PROOF")
+        try:
+            inlined_sth = proof["sth"]
+            leaf_index = int(proof["leaf_index"])
+            leaf_hash_hex = str(proof["leaf_hash_hex"])
+            audit_path_hex = list(proof["audit_path"])
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"ARCHIVE PROOF MALFORMED path={path}: {exc}")
+            sys.exit(7)
+
+        sth_payload = _sth_canonical_payload(inlined_sth)
+        if not _verify_es256_signature(
+            sth_payload, inlined_sth["signature_b64u"], pubkey_pem,
+        ):
+            print(
+                f"ARCHIVE PROOF STH-SIGNATURE INVALID path={path} "
+                f"epoch={inlined_sth.get('epoch_utc', '?')}"
+            )
+            sys.exit(7)
+
+        try:
+            leaf_hash = bytes.fromhex(leaf_hash_hex)
+            root = bytes.fromhex(inlined_sth["root_hash_hex"])
+            tree_size = int(inlined_sth["tree_size"])
+            chain_seq_lo = int(inlined_sth["chain_seq_lo"])
+            # audit_path_hex stays as list[str] — entries may be ""
+            # to signal a promoted-unpaired level (skip sibling combine).
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"ARCHIVE PROOF hex parse error: {exc}")
+            sys.exit(7)
+
+        if not _rfc6962_verify_audit_path(
+            leaf_hash, audit_path_hex, leaf_index, tree_size, root,
+        ):
+            print(
+                f"ARCHIVE PROOF INCLUSION FAIL path={path} "
+                f"leaf_index={leaf_index} epoch={inlined_sth.get('epoch_utc', '?')}"
+            )
+            sys.exit(7)
+
+        # Cross-check against the bundle: bundle row at
+        # chain_seq = chain_seq_lo + leaf_index must have row_hash
+        # whose RFC 6962 leaf hash equals the proof's leaf_hash.
+        bundle_chain_seq = chain_seq_lo + leaf_index
+        entry = by_chain_seq.get(bundle_chain_seq)
+        if entry is not None:
+            bundle_row_hash = entry.get("row_hash") or entry.get("entry_hash")
+            if bundle_row_hash is not None:
+                computed = _rfc6962_leaf_hash(str(bundle_row_hash))
+                if computed != leaf_hash:
+                    print(
+                        f"ARCHIVE PROOF BUNDLE MISMATCH path={path} "
+                        f"chain_seq={bundle_chain_seq}: bundle row_hash "
+                        f"leaf-hash != proof leaf_hash_hex — bundle and "
+                        f"proof disagree on the same row"
+                    )
+                    sys.exit(7)
+        proof_verified += 1
+
+    return sth_verified, manifest_verified, proof_verified
+
+
+def _load_json_file(path: str, label: str) -> dict:
+    try:
+        with open(path) as f:
+            obj = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"{label} UNREADABLE path={path}: {exc}")
+        sys.exit(7)
+    if not isinstance(obj, dict):
+        print(f"{label} not a JSON object: path={path}")
+        sys.exit(7)
+    return obj
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
@@ -1058,6 +1454,57 @@ def main() -> int:
             "batch of proofs in one run. Exit code 6 on any failure."
         ),
     )
+    ap.add_argument(
+        "--archive-sth", action="append", default=[],
+        metavar="STH_JSON",
+        help=(
+            "Path to a Signed Tree Head JSON emitted by the Enterprise "
+            "audit_archive plugin (GET /v1/admin/audit/sth/{epoch} or "
+            "/sth/latest). The CLI verifies the ES256 signature over "
+            "the canonical STH fields against --archive-manifest-pubkey. "
+            "Pass multiple times to batch-verify a window of epochs."
+        ),
+    )
+    ap.add_argument(
+        "--archive-proof", action="append", default=[],
+        metavar="PROOF_JSON",
+        help=(
+            "Path to an RFC 6962 inclusion proof JSON emitted by "
+            "GET /v1/admin/audit/proof?chain_seq=N (Enterprise "
+            "audit_archive plugin). Each proof carries its STH "
+            "inlined; the CLI re-verifies the STH ES256 signature, "
+            "walks the RFC 6962 audit_path bottom-up against the "
+            "anchored root, and (when the bundle is loaded) confirms "
+            "the proof's leaf_hash matches sha256(0x00 || row_hash) "
+            "of the corresponding chain_seq entry. Exit code 7."
+        ),
+    )
+    ap.add_argument(
+        "--archive-manifest", action="append", default=[],
+        metavar="MANIFEST_JSON",
+        help=(
+            "Path to a per-epoch bundle manifest JSON. The CLI verifies "
+            "the ES256 signature over the manifest's canonical payload "
+            "(epoch, range, row_count, sink_url, bundle_sha256) against "
+            "--archive-manifest-pubkey, proving the operator's named "
+            "bundle URL was authoritatively sealed by the Mastio at "
+            "archive time."
+        ),
+    )
+    ap.add_argument(
+        "--archive-manifest-pubkey",
+        default=None,
+        metavar="PEM",
+        help=(
+            "Path to the Mastio's ES256 public key in PEM format. "
+            "Required when any --archive-sth, --archive-proof, or "
+            "--archive-manifest is set. The auditor obtains this "
+            "pubkey out of band (the Mastio's /v1/admin/mastio-pubkey "
+            "endpoint, or a customer handover); trust is anchored on "
+            "having received this pubkey from a trusted channel, not "
+            "on the kid metadata inside the JSONs."
+        ),
+    )
     args = ap.parse_args()
 
     bundles: list[tuple[str, list[dict]]] = []
@@ -1089,6 +1536,13 @@ def main() -> int:
 
     cross_n = cross_reconcile(bundles)
     merkle_n = verify_merkle_proofs(args.merkle_proof, bundles)
+    sth_n, manifest_n, archive_proof_n = verify_archive_proofs(
+        args.archive_sth,
+        args.archive_proof,
+        args.archive_manifest,
+        args.archive_manifest_pubkey,
+        bundles,
+    )
 
     # CISO-readable PASS summary. The line breaks below are deliberate
     # so the auditor's terminal output reads like a verdict, not a CSV.
@@ -1106,6 +1560,20 @@ def main() -> int:
         print(f"  {cross_n} cross-org peer row{'s' if cross_n != 1 else ''} reconciled")
     if merkle_n:
         print(f"  {merkle_n} Merkle inclusion proof{'s' if merkle_n != 1 else ''} verified")
+    if sth_n or manifest_n or archive_proof_n:
+        parts: list[str] = []
+        if sth_n:
+            parts.append(f"{sth_n} STH{'s' if sth_n != 1 else ''}")
+        if manifest_n:
+            parts.append(
+                f"{manifest_n} bundle manifest{'s' if manifest_n != 1 else ''}"
+            )
+        if archive_proof_n:
+            parts.append(
+                f"{archive_proof_n} archive inclusion proof"
+                f"{'s' if archive_proof_n != 1 else ''}"
+            )
+        print(f"  {' · '.join(parts)} verified against the Mastio pubkey")
     print("")
     print("  Every entry_hash matches the SHA-256 of its canonical row.")
     print("  No previous_hash → next entry_hash break detected.")
