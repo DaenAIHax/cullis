@@ -1,0 +1,9 @@
+# Cross-scenario shared state (admin password, agent certs, Org CA,
+# NDJSON audit export). Never committed.
+state/
+
+# Snapshots written by smoke.sh on any failing scenario.
+.smoke-fail-*/
+
+# Tmp file picked up by some shells when sourcing.
+*.tmp.*

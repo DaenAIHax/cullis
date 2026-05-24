@@ -1,0 +1,191 @@
+# =============================================================================
+# Cullis smoke harness — base compose stack
+# =============================================================================
+#
+# Standalone Mastio + nginx TLS sidecar + redis + mock TSA. No Court,
+# no sandbox, no Frontdesk (those live in cullis-enterprise post the
+# 2026-05-21 Portkey pivot).
+#
+# Build context = the repo root (../..) so docker can see mcp_proxy/
+# and cullis_sdk/. Image tag is local (no GHCR pull); the cullis-smoke
+# project namespace keeps the stack isolated from a real bundle on the
+# same host.
+#
+# Overlays:
+#   - compose.sqlite.yml    (default — empty overlay, here for symmetry)
+#   - compose.postgres.yml  (--pg flag)
+# =============================================================================
+
+services:
+
+  # ── init-permissions — chown bind dirs before Mastio comes up ──────────────
+  # Same pattern as packaging/mastio-bundle/. The Mastio image runs as
+  # uid 10001 and the SQLite open fails on a root-owned bind dir.
+  init-permissions:
+    image: busybox:stable
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /data /nginx-certs
+        chown -R 10001:10001 /data /nginx-certs
+        chmod 0750 /data /nginx-certs
+    volumes:
+      - ./state/data:/data
+      - ./state/nginx-certs:/nginx-certs
+    restart: "no"
+    networks:
+      - smoke_net
+
+  # ── mock-tsa — RFC 3161 TSA + tiny chat-completions stub ───────────────────
+  # Single process, two ports: 2560 speaks RFC 3161 (TimeStampReq →
+  # TimeStampResp signed by a self-issued CA baked into the image),
+  # 2561 speaks an OpenAI-compatible /v1/chat/completions stub the
+  # Mastio's AI gateway hits when MCP_PROXY_AI_GATEWAY_BACKEND=portkey.
+  # The container's source lives in ./mock-tsa/ and the build context
+  # is the same dir so the CA + server.py are baked at image time.
+  mock-tsa:
+    build:
+      context: ./mock-tsa
+      dockerfile: Dockerfile
+    image: cullis-smoke/mock-tsa:local
+    expose:
+      - "2560"
+      - "2561"
+    networks:
+      - smoke_net
+    healthcheck:
+      # python:3.11-slim has no wget/curl — use the bundled python.
+      test: ["CMD", "python3", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:2560/health', timeout=2).status == 200 else 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+  # ── redis — DPoP JTI store + rate-limit + leader election locks ────────────
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    networks:
+      - smoke_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  # ── Mastio — built from the current worktree ───────────────────────────────
+  # ``build.context: ../..`` reaches the repo root so the Dockerfile can
+  # COPY mcp_proxy/. ``image:`` tags the build output so subsequent
+  # ``up`` commands skip rebuild.
+  mcp-proxy:
+    build:
+      context: ../..
+      dockerfile: mcp_proxy/Dockerfile
+    image: cullis-security/cullis-mastio:${CULLIS_MASTIO_VERSION:-smoke-local}
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      mock-tsa:
+        condition: service_healthy
+    expose:
+      - "9100"
+    command:
+      - uvicorn
+      - mcp_proxy.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9100"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+      - --workers
+      - ${MASTIO_WORKERS:-1}
+    environment:
+      MCP_PROXY_VERSION:                ${CULLIS_MASTIO_VERSION:-smoke-local}
+      MCP_PROXY_ENVIRONMENT:            ${MCP_PROXY_ENVIRONMENT:-development}
+      MCP_PROXY_STANDALONE:             ${MCP_PROXY_STANDALONE:-true}
+      MCP_PROXY_ADMIN_SECRET:           ${MCP_PROXY_ADMIN_SECRET:-}
+      MCP_PROXY_DASHBOARD_SIGNING_KEY:  ${MCP_PROXY_DASHBOARD_SIGNING_KEY:-}
+      MCP_PROXY_INITIAL_ADMIN_PASSWORD: ${MCP_PROXY_INITIAL_ADMIN_PASSWORD:-}
+      MCP_PROXY_LOCAL_AUTH_ENABLED:     ${MCP_PROXY_LOCAL_AUTH_ENABLED:-true}
+      MCP_PROXY_DATABASE_URL:           ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
+      PROXY_DB_URL:                     ${PROXY_DB_URL:-}
+      MCP_PROXY_PROXY_PUBLIC_URL:       ${MCP_PROXY_PROXY_PUBLIC_URL:-https://host.docker.internal:19444}
+      MCP_PROXY_NGINX_CERT_DIR:         /var/lib/mastio/nginx-certs
+      MCP_PROXY_NGINX_SAN:              ${MCP_PROXY_NGINX_SAN:-mastio.local,localhost,host.docker.internal,mastio-nginx,mcp-proxy,127.0.0.1}
+      MCP_PROXY_REDIS_URL:              redis://redis:6379/0
+      # TSA — point at the in-stack mock so the scenarios run offline.
+      MCP_PROXY_AUDIT_ANCHOR_ENABLED:           ${MCP_PROXY_AUDIT_ANCHOR_ENABLED:-true}
+      MCP_PROXY_AUDIT_ANCHOR_TSA_URL:           ${MCP_PROXY_AUDIT_ANCHOR_TSA_URL:-http://mock-tsa:2560/tsr}
+      MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS:  ${MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS:-30}
+      MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS:-5}
+      # AI gateway — point at the mock OpenAI-compatible endpoint on
+      # mock-tsa:2561. The Portkey backend respects ai_gateway_url
+      # (litellm_embedded uses provider SDKs directly).
+      MCP_PROXY_AI_GATEWAY_BACKEND:     ${MCP_PROXY_AI_GATEWAY_BACKEND:-portkey}
+      MCP_PROXY_AI_GATEWAY_URL:         ${MCP_PROXY_AI_GATEWAY_URL:-http://mock-tsa:2561}
+      MCP_PROXY_ANTHROPIC_API_KEY:      ${MCP_PROXY_ANTHROPIC_API_KEY:-smoke-fake-anthropic-key}
+      MCP_PROXY_AI_GATEWAY_REQUEST_TIMEOUT_S: ${MCP_PROXY_AI_GATEWAY_REQUEST_TIMEOUT_S:-5}
+      # No outbound TLS verification needed (mock-tsa is plain HTTP)
+      SSL_CERT_FILE:                    ""
+      REQUESTS_CA_BUNDLE:               ""
+    volumes:
+      - ./state/data:/data
+      - ./state/nginx-certs:/var/lib/mastio/nginx-certs:rw
+    networks:
+      - smoke_net
+    extra_hosts:
+      # Linux: docker maps ``host.docker.internal`` to the host gateway
+      # so MCP_PROXY_PROXY_PUBLIC_URL resolves from inside the container
+      # when an scenario fetches a URL the Mastio also reflects in DPoP
+      # htu validation.
+      - "host.docker.internal:host-gateway"
+    restart: "no"  # smoke runs are short-lived
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  # ── mastio-nginx — TLS sidecar terminating on host port ────────────────────
+  mastio-nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      mcp-proxy:
+        condition: service_healthy
+    ports:
+      - "${MCP_PROXY_PORT:-19444}:9443"
+    volumes:
+      - ../../nginx/mastio:/etc/nginx/conf.d:ro
+      - ./state/nginx-certs:/etc/nginx/certs:ro
+    networks:
+      - smoke_net
+    restart: "no"
+    healthcheck:
+      # 127.0.0.1 literal — Alpine musl's getaddrinfo prefers AAAA, and
+      # the listen directive binds IPv4 only. ``localhost`` resolves to
+      # ::1 first and the probe reports unhealthy even though the cert
+      # is being served fine.
+      test:
+        - CMD-SHELL
+        - >-
+          test -s /etc/nginx/certs/mastio-server.crt &&
+          test -s /etc/nginx/certs/mastio-server.key &&
+          test -s /etc/nginx/certs/org-ca.crt &&
+          wget -q --no-check-certificate -O /dev/null https://127.0.0.1:9443/health
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s
+
+networks:
+  smoke_net:
+    name: cullis-smoke-net
+    driver: bridge
