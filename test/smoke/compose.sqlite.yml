@@ -1,0 +1,16 @@
+# =============================================================================
+# Cullis smoke — SQLite overlay (default)
+# =============================================================================
+#
+# Intentionally empty-but-present so smoke.sh can pass the same
+# ``-f compose.yml -f compose.sqlite.yml`` shape for both backends and
+# the diff between sqlite and postgres runs is one filename.
+#
+# The SQLite default URL is already baked into compose.yml's
+# MCP_PROXY_DATABASE_URL fallback, so this file does not need to set
+# anything. It exists so:
+#   1. smoke.sh's compose invocation is symmetric across backends
+#   2. future SQLite-specific knobs (e.g. WAL mode env, journal size)
+#      have an obvious home without growing compose.yml
+# =============================================================================
+services: {}

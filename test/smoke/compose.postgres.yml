@@ -1,0 +1,46 @@
+# =============================================================================
+# Cullis smoke — Postgres 16 overlay (--pg)
+# =============================================================================
+#
+# Brings up a bundled Postgres 16 and rewrites Mastio's MCP_PROXY_
+# DATABASE_URL + PROXY_DB_URL to point at it. Mirrors
+# packaging/mastio-bundle/docker-compose.postgres.yml but lives in the
+# smoke project namespace so a real bundle on the same host is not
+# disturbed.
+# =============================================================================
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-cullis_smoke}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in env.smoke}
+      POSTGRES_DB:       ${POSTGRES_DB:-cullis_smoke}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./state/postgres-data:/var/lib/postgresql/data
+    networks:
+      - smoke_net
+    restart: "no"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-cullis_smoke} -d ${POSTGRES_DB:-cullis_smoke}
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 3s
+
+  mcp-proxy:
+    environment:
+      PROXY_DB_URL:           postgresql+asyncpg://${POSTGRES_USER:-cullis_smoke}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cullis_smoke}
+      MCP_PROXY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cullis_smoke}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cullis_smoke}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init-permissions:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      mock-tsa:
+        condition: service_healthy
