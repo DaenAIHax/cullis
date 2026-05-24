@@ -502,6 +502,59 @@ async def lifespan(app: FastAPI):
                 exc,
             )
 
+    # ADR-037 Phase 1 — Merkle batch anchoring. Companion to the
+    # audit_anchor watcher above: where audit_anchor binds a single
+    # chain head per tick, this loop batches contiguous chain_seq
+    # ranges under a SHA-256 Merkle root and persists one row per
+    # batch in audit_merkle_anchors. Inclusion proof drops from
+    # O(n) chain walk to O(log batch_size); the optional TSA token
+    # over the root amortises the TSA cost. Leader-elected like the
+    # other watchers; non-leaders skip silently.
+    if getattr(settings, "audit_merkle_enabled", True):
+        try:
+            from mcp_proxy.lifespan import get_leader as _merkle_get_leader
+            from mcp_proxy.lifespan.merkle_anchor_watcher import (
+                merkle_anchor_watcher_loop,
+            )
+            merkle_leader = _merkle_get_leader("merkle_anchor_watcher")
+            if await merkle_leader.acquire():
+                merkle_stop = asyncio.Event()
+                _merkle_org_id = getattr(agent_mgr, "_org_id", None) or ""
+                merkle_task = asyncio.create_task(
+                    merkle_anchor_watcher_loop(
+                        org_id=_merkle_org_id,
+                        stop_event=merkle_stop,
+                        batch_size=settings.audit_merkle_batch_size,
+                        min_batch=settings.audit_merkle_min_batch,
+                        tsa_enabled=settings.audit_merkle_tsa_enabled,
+                        tsa_url=settings.audit_anchor_tsa_url,
+                        tick_seconds=settings.audit_merkle_interval_seconds,
+                        tsa_timeout_seconds=settings.audit_anchor_tsa_timeout_seconds,
+                    ),
+                    name="merkle_anchor_watcher",
+                )
+                app.state.merkle_anchor_watcher_task = merkle_task
+                app.state.merkle_anchor_watcher_stop = merkle_stop
+                app.state.merkle_anchor_watcher_leader = merkle_leader
+                _log.info(
+                    "merkle_anchor_watcher: leader acquired, loop spawned "
+                    "(tick=%ds, batch_size=%d, min_batch=%d)",
+                    settings.audit_merkle_interval_seconds,
+                    settings.audit_merkle_batch_size,
+                    settings.audit_merkle_min_batch,
+                )
+            else:
+                _log.info(
+                    "merkle_anchor_watcher: another worker holds the leader "
+                    "lock, skipping",
+                )
+        except Exception as exc:
+            _log.warning(
+                "merkle_anchor_watcher startup failed: %s — Merkle batch "
+                "anchoring disabled until next restart",
+                exc,
+            )
+
     # Wave 2 fix 7+8 — agent cert + DPoP jkt rotation grace period
     # cleanup. Hourly leader-elected sweep clears expired previous_*
     # columns on internal_agents so the trust surface collapses back
