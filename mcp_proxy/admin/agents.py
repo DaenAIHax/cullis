@@ -166,17 +166,26 @@ async def create_agent(
         cert_pem, key_pem = mgr._generate_agent_cert(agent_name)
         minted_locally = True
 
-    # Persist the private key. Store in Vault if configured, otherwise
-    # fall back to proxy_config (same pattern as AgentManager.create_agent).
-    try:
-        await mgr._store_key_vault(agent_id, key_pem)
-    except Exception as exc:
-        from mcp_proxy.db import set_config
-        _log.info("Vault unavailable for %s (%s) — stashing key in proxy_config",
-                  agent_id, exc)
-        await set_config(f"agent_key:{agent_id}", key_pem)
-
+    # Bug #6 tactical fix: persist the agent row atomically with the
+    # private-key write so a duplicate ``agent_id`` (typo, demo reset,
+    # multi-worker race on the same name) cannot clobber an existing
+    # agent's signing key before failing.
+    #
+    # Order matters:
+    #   1. INSERT INTO internal_agents FIRST. The PRIMARY KEY on
+    #      ``agent_id`` serialises concurrent attempts at the DB layer
+    #      and raises IntegrityError on duplicates BEFORE any key
+    #      material is exposed. SQLite WAL + Postgres both honour
+    #      this, no application-level lock needed.
+    #   2. Vault store (out-of-DB, idempotent overwrite). Failure here
+    #      falls back to ``set_config`` in the same transaction so the
+    #      INSERT rolls back if neither store succeeds.
+    #   3. ``set_config`` fallback writes into ``proxy_config`` on the
+    #      open ``conn`` so the rollback covers both rows if anything
+    #      after raises.
+    from mcp_proxy.db import set_config
     ts = _now_iso()
+    vault_stored = False
     try:
         async with get_db() as conn:
             await conn.execute(
@@ -208,7 +217,40 @@ async def create_agent(
                     "federated": bool(body.federated),
                 },
             )
+            # Store private key. Vault is the preferred backend; on
+            # failure fall back to proxy_config inside the same DB tx so
+            # the rollback covers the agent row too if anything later
+            # raises.
+            try:
+                await mgr._store_key_vault(agent_id, key_pem)
+                vault_stored = True
+            except Exception as exc:
+                _log.info(
+                    "Vault unavailable for %s (%s), stashing key in proxy_config",
+                    agent_id, exc,
+                )
+                await set_config(
+                    f"agent_key:{agent_id}", key_pem, conn=conn,
+                )
     except IntegrityError as exc:
+        # The agent already existed. The INSERT raised before any key
+        # write touched proxy_config; if Vault was attempted at all on
+        # this code path the call is unreachable here (we get to the
+        # Vault block only after the INSERT succeeded). Leave a warning
+        # so operators noticing a stranded Vault entry from a prior
+        # interrupted run have a breadcrumb; there is no
+        # ``_delete_key_vault`` helper today and inventing one is out of
+        # scope for this tactical fix.
+        if vault_stored:
+            # Defensive: this branch should be unreachable because
+            # Vault store is inside the transaction AFTER the INSERT.
+            # Logged in case of refactor regression.
+            _log.warning(
+                "agent %s INSERT raised IntegrityError after Vault store "
+                "succeeded; Vault entry may be stale (no _delete_key_vault "
+                "helper, manual cleanup required)",
+                agent_id,
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"agent {agent_id!r} already registered",

@@ -991,20 +991,37 @@ async def get_config(key: str) -> str | None:
         return row["value"] if row else None
 
 
-async def set_config(key: str, value: str) -> None:
+async def set_config(
+    key: str,
+    value: str,
+    *,
+    conn: AsyncConnection | None = None,
+) -> None:
     """Set a config value (upsert).
 
     SQLite and PostgreSQL both support ON CONFLICT ... DO UPDATE with the
     same syntax, so a raw text() upsert stays portable.
+
+    Bug #6 tactical fix: when ``conn`` is provided, the upsert runs on
+    that connection so the caller can compose it with other writes in a
+    single transaction. With ``conn=None`` (default, every existing
+    caller), the helper opens its own ``get_db()`` context exactly as
+    before. Pinning the key upsert to an already-open transaction is
+    what lets ``admin/agents.py:create_agent`` order the agent INSERT
+    BEFORE the key write, so a duplicate ``agent_id`` is rejected by
+    the UNIQUE constraint before any existing agent's signing key is
+    overwritten in ``proxy_config``.
     """
-    async with get_db() as conn:
-        await conn.execute(
-            text(
-                """INSERT INTO proxy_config (key, value) VALUES (:key, :value)
-                   ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
-            ),
-            {"key": key, "value": value},
-        )
+    stmt = text(
+        """INSERT INTO proxy_config (key, value) VALUES (:key, :value)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+    )
+    params = {"key": key, "value": value}
+    if conn is not None:
+        await conn.execute(stmt, params)
+    else:
+        async with get_db() as c:
+            await c.execute(stmt, params)
 
 
 async def set_config_if_absent(key: str, value: str) -> bool:
