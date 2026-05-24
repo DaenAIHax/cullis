@@ -86,6 +86,14 @@ class AgentCreateResponse(BaseModel):
     capabilities: list[str]
     federated: bool
     cert_pem: str
+    # Three-tier PKI hardening (ADR-033): leaf certs are signed by the
+    # Mastio Intermediate CA, NOT directly by the Org Root. Clients that
+    # do mTLS against ``ssl_client_certificate = org-ca.crt`` need the
+    # Intermediate on the wire to build the chain. ``cert_chain_pem``
+    # carries ``leaf || Intermediate`` (PEM concatenated, leaf first).
+    # ``cert_pem`` stays leaf-only for backward compat with existing
+    # consumers (BYOCA enrolment tooling, audit log emit, etc.).
+    cert_chain_pem: str | None = None
     private_key_pem: str | None = None  # echoed when the Mastio minted the keypair
 
 
@@ -263,12 +271,26 @@ async def create_agent(
         detail=f"agent_id={agent_id} federated={body.federated}",
     )
 
+    # ADR-033 full chain: concatenate the Mastio Intermediate CA cert
+    # so mTLS clients have everything they need to build
+    # ``leaf -> Intermediate -> Org Root`` (root lives in the client
+    # trust store). Legacy Org-Root-only deploys keep ``cert_chain_pem
+    # = None``.
+    cert_chain_pem: str | None = None
+    mastio_ca_cert = getattr(mgr, "_mastio_ca_cert", None)
+    if mastio_ca_cert is not None:
+        from cryptography.hazmat.primitives import serialization as _ser
+        cert_chain_pem = cert_pem + mastio_ca_cert.public_bytes(
+            _ser.Encoding.PEM
+        ).decode()
+
     return AgentCreateResponse(
         agent_id=agent_id,
         display_name=body.display_name or agent_name,
         capabilities=body.capabilities,
         federated=body.federated,
         cert_pem=cert_pem,
+        cert_chain_pem=cert_chain_pem,
         # Echo the freshly-minted private key only when the Mastio
         # generated the keypair itself — otherwise the caller already
         # has it (BYOCA / volume-shared sandbox bootstrap).

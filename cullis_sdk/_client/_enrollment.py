@@ -254,10 +254,60 @@ class _EnrollmentMixin:
         instance = cls.__new__(cls)
         instance.base = mastio_url.rstrip("/")
         instance._verify_tls = verify_tls
+
+        # Bug #1 follow-up #3: under ADR-033 three-tier PKI hardening
+        # the leaf in ``cert.pem`` is signed by the Mastio Intermediate
+        # CA, not the Org Root that nginx's ``ssl_client_certificate``
+        # points at. Strict TLS clients (Python ssl, OpenSSL, Go) need
+        # the Intermediate on the wire to build the path
+        # ``leaf -> Intermediate -> Org Root``.
+        #
+        # Convention discovery: if a sibling ``ca-chain.pem`` exists
+        # next to ``cert_path``, assemble a fullchain file (leaf ||
+        # Intermediate, PEM concatenated) and hand THAT to the httpx
+        # mTLS context. Customers who pre-assemble fullchain into
+        # ``cert.pem`` themselves keep working — they just have no
+        # sibling ``ca-chain.pem`` and we use the original
+        # ``cert_path`` unchanged. Connector enrollment writes the
+        # split layout (cert.pem leaf + ca-chain.pem) so this auto-
+        # discovery covers the "30-min-to-agent" customer scenario.
+        cert_path_obj = Path(cert_path)
+        chain_sibling = cert_path_obj.parent / "ca-chain.pem"
+        effective_cert_path: "str | Path" = cert_path
+        if chain_sibling.is_file():
+            fullchain_path = cert_path_obj.parent / "fullchain.pem"
+            try:
+                leaf_pem = cert_path_obj.read_text()
+                chain_pem = chain_sibling.read_text()
+                # Idempotent rewrite: if fullchain.pem is stale (older
+                # mtime than either source), regenerate. Otherwise reuse.
+                regenerate = (
+                    not fullchain_path.is_file()
+                    or fullchain_path.stat().st_mtime
+                    < max(
+                        cert_path_obj.stat().st_mtime,
+                        chain_sibling.stat().st_mtime,
+                    )
+                )
+                if regenerate:
+                    fullchain_path.write_text(leaf_pem.rstrip() + "\n" + chain_pem)
+                effective_cert_path = fullchain_path
+                log(
+                    "sdk",
+                    f"discovered ca-chain.pem sibling → using fullchain="
+                    f"{fullchain_path} for mTLS handshake",
+                )
+            except OSError as exc:
+                log(
+                    "sdk",
+                    f"warning: ca-chain.pem sibling present but unreadable "
+                    f"({exc}) — falling back to cert_path leaf only",
+                )
+
         instance._http = _build_proxy_http_client(
             verify_tls=verify_tls,
             timeout=timeout,
-            cert_path=cert_path,
+            cert_path=effective_cert_path,
             key_path=key_path,
             ca_chain_path=ca_chain_path,
         )
@@ -292,6 +342,69 @@ class _EnrollmentMixin:
         instance._egress_dpop_nonce = None
         instance._proxy_agent_id = agent_id
         instance._proxy_org_id = org_id
+        # Bug #1 follow-up #2: ``login_via_proxy_with_local_key`` also
+        # needs ``_cert_pem`` AND ``_proxy_agent_id`` /
+        # ``_proxy_org_id``. ``from_identity_dir`` previously left
+        # them unset for callers who didn't pass ``agent_id=`` /
+        # ``org_id=`` explicitly, which broke the local-key
+        # auto-login dispatch. Fill them in from the cert content on
+        # disk so the cohort that holds cert+key locally can mint a
+        # LOCAL_TOKEN without a separate enrolment round-trip.
+        try:
+            instance._cert_pem = Path(cert_path).read_text()
+            # Same chain-sibling discovery as the mTLS handshake above:
+            # if ``ca-chain.pem`` is present, include the Intermediate
+            # in ``_cert_pem`` too so ``/v1/auth/sign-challenged-
+            # assertion`` can verify the path against the Org Root.
+            if chain_sibling.is_file():
+                try:
+                    instance._cert_pem = (
+                        instance._cert_pem.rstrip() + "\n"
+                        + chain_sibling.read_text()
+                    )
+                except OSError:
+                    # Already logged above; mTLS path may still work
+                    # if the server is lenient about chain verification.
+                    pass
+        except OSError as exc:
+            raise RuntimeError(
+                f"from_identity_dir: cannot read cert_path={cert_path!r} "
+                f"({exc}). The same file is required for TLS mTLS handshake."
+            ) from exc
+
+        if instance._proxy_agent_id is None or instance._proxy_org_id is None:
+            try:
+                from cryptography import x509 as _x509
+                from cryptography.hazmat.backends import default_backend as _be
+                _cert_obj = _x509.load_pem_x509_certificate(
+                    instance._cert_pem.encode(), _be(),
+                )
+                _san_ext = _cert_obj.extensions.get_extension_for_class(
+                    _x509.SubjectAlternativeName,
+                )
+                for _uri in _san_ext.value.get_values_for_type(
+                    _x509.UniformResourceIdentifier,
+                ):
+                    # SPIFFE ID shape: spiffe://<trust_domain>/<org_id>/<agent_name>
+                    if not _uri.startswith("spiffe://"):
+                        continue
+                    _parts = _uri.split("/", 4)
+                    if len(_parts) >= 5 and _parts[3] and _parts[4]:
+                        _parsed_org = _parts[3]
+                        _parsed_name = _parts[4]
+                        if instance._proxy_org_id is None:
+                            instance._proxy_org_id = _parsed_org
+                        if instance._proxy_agent_id is None:
+                            instance._proxy_agent_id = (
+                                f"{_parsed_org}::{_parsed_name}"
+                            )
+                        instance._label = instance._proxy_agent_id
+                        break
+            except Exception as _exc:  # noqa: BLE001 best-effort
+                log(
+                    "sdk",
+                    f"warning: could not extract agent_id from cert SAN: {_exc}",
+                )
         # Dogfood Finding #9 — proxy-bound: see __init__.
         instance._use_egress_for_sessions = True
         # ``_update_nonce`` reads ``self.server_role`` on every response;
