@@ -1196,6 +1196,74 @@ def validate_config(settings: ProxySettings) -> None:
                 )
                 raise SystemExit(1)
 
+        # F-A-406 (audit 2026-05-20) — refuse mock-equivalent TSA anchor
+        # configuration in production. The legacy ``app/`` codebase shipped
+        # ``audit_tsa_backend="mock"`` whose ``MockTsaClient`` returned an
+        # opaque blob "trust-equivalent to the broker database itself" —
+        # production must declare intent (real RFC 3161 TSA, or anchoring
+        # disabled outright). The current ``mcp_proxy`` audit-anchor
+        # implementation is RFC 3161-only (no ``mock`` backend literal),
+        # so the operator-reachable mock-equivalent vector is pointing
+        # ``MCP_PROXY_AUDIT_ANCHOR_TSA_URL`` at a localhost / private-IP
+        # service the operator (or attacker on the LAN) controls. Such a
+        # TSA can emit signed tokens for any digest and the dispute-grade
+        # claim of the audit chain (CWE-1188) silently collapses.
+        #
+        # Pattern reference (feedback_h4_convergent_pattern_fallback_
+        # insecure_default): every new gate must have a validator in
+        # ``validate_config(production)`` that raises rather than
+        # silently accepting the insecure default. PR #830 was the first
+        # H4 sweep — F-A-406 is one of the recurrences that pattern did
+        # not yet cover.
+        if settings.audit_anchor_enabled:
+            tsa_url = (settings.audit_anchor_tsa_url or "").strip()
+            if not tsa_url:
+                _log.critical(
+                    "MCP_PROXY_AUDIT_ANCHOR_ENABLED=true but "
+                    "MCP_PROXY_AUDIT_ANCHOR_TSA_URL is empty in "
+                    "production. Set the URL of a real RFC 3161 TSA "
+                    "(e.g. http://timestamp.digicert.com) or disable "
+                    "anchoring with MCP_PROXY_AUDIT_ANCHOR_ENABLED=false "
+                    "(audit F-A-406)."
+                )
+                raise SystemExit(1)
+
+            try:
+                from mcp_proxy.utils.url_safety import (
+                    UnsafeUrlError,
+                    assert_safe_outbound_url,
+                )
+            except ImportError:
+                # Defensive: utils.url_safety has been a runtime dep
+                # since PR #831 (SSRF helper). Refuse to start rather
+                # than skip the gate silently if the import ever breaks.
+                _log.critical(
+                    "mcp_proxy.utils.url_safety unavailable — cannot "
+                    "validate MCP_PROXY_AUDIT_ANCHOR_TSA_URL safety "
+                    "(audit F-A-406)."
+                )
+                raise SystemExit(1)
+
+            try:
+                assert_safe_outbound_url(tsa_url, allow_private=False)
+            except UnsafeUrlError as exc:
+                _log.critical(
+                    "MCP_PROXY_AUDIT_ANCHOR_TSA_URL=%r is not permitted "
+                    "in production: %s. A TSA on a private / loopback "
+                    "address is trust-equivalent to the broker database "
+                    "itself (mock-equivalent backend, audit F-A-406) — "
+                    "set the URL of a real public RFC 3161 TSA (e.g. "
+                    "http://timestamp.digicert.com), allowlist the "
+                    "internal FQDN explicitly via "
+                    "MCP_PROXY_INTERNAL_HOST_ALLOWLIST if you run a "
+                    "qualified TSP on a private network, or disable "
+                    "anchoring with "
+                    "MCP_PROXY_AUDIT_ANCHOR_ENABLED=false.",
+                    tsa_url,
+                    exc,
+                )
+                raise SystemExit(1)
+
         # Audit F-A-404 — background flush retry exhaustion must surface.
         # ``audit_chain_background_fail_deny`` and
         # ``audit_chain_background_fail_open`` are mutually exclusive: the
