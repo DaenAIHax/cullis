@@ -2141,6 +2141,10 @@ app.include_router(admin_mastio_ca_router)
 from mcp_proxy.admin.observability import router as admin_observability_router
 app.include_router(admin_observability_router)
 
+# ADR-037 Phase 2 — /v1/admin/audit/merkle/{anchors,proof/{chain_seq}}.
+from mcp_proxy.admin.audit_merkle import router as admin_audit_merkle_router
+app.include_router(admin_audit_merkle_router)
+
 # ADR-009 sandbox — Connector JSON API for MCP resources + bindings.
 from mcp_proxy.admin.mcp_resources import router as admin_mcp_resources_router
 app.include_router(admin_mcp_resources_router)
