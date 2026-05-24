@@ -54,6 +54,10 @@ Exit codes:
   5  — unrecognized TSA format that cannot be verified, or RFC 3161
        anchor seen without ``--tsa-trust-store`` and
        ``--tsa-allow-unverified-signature`` not set
+  6  — Merkle inclusion proof failure (proof file unreadable or
+       malformed, no matching chain_seq entry in bundle, bundle
+       row_hash disagrees with proof leaf_hex, or reconstructed root
+       does not match anchored root) — ADR-037 Phase 3
 """
 from __future__ import annotations
 
@@ -829,6 +833,164 @@ def cross_reconcile(bundles: list[tuple[str, list[dict]]]) -> int:
     return verified
 
 
+# ── Merkle inclusion proof (ADR-037 Phase 3, offline path) ──────────
+#
+# The Mastio's /v1/admin/audit/merkle/proof/{chain_seq} endpoint
+# returns a JSON object with the shape:
+#
+#   {"anchor_id": int,
+#    "chain_seq": int,
+#    "chain_seq_start": int, "chain_seq_end": int, "leaf_count": int,
+#    "merkle_root": "<64 hex chars>",
+#    "leaf_hex": "<64 hex chars>",
+#    "proof": [{"sibling_hex": "<64 hex chars>", "position": "L"|"R"},
+#              ...]}
+#
+# An auditor with a bundle export + one or more such proof files can
+# replay this verifier offline (no Mastio access) and assert that the
+# row at ``chain_seq`` was included in the anchored Merkle root. The
+# math is inlined here so the CLI stays a single-file self-contained
+# script — the same math lives in ``mcp_proxy.audit.merkle`` for the
+# in-process path.
+
+
+def _merkle_verify_inclusion(
+    leaf: bytes, proof: list[tuple[bytes, str]], expected_root: bytes,
+) -> bool:
+    """Reconstruct the root from leaf + proof and compare to
+    ``expected_root``. Never raises on malformed input: returns False.
+    Mirrors ``mcp_proxy.audit.merkle.verify_inclusion`` byte-for-byte.
+    """
+    if not isinstance(leaf, (bytes, bytearray)) or len(leaf) != 32:
+        return False
+    if not isinstance(expected_root, (bytes, bytearray)) or len(expected_root) != 32:
+        return False
+    current = bytes(leaf)
+    for step in proof:
+        if not isinstance(step, tuple) or len(step) != 2:
+            return False
+        sibling, position = step
+        if not isinstance(sibling, (bytes, bytearray)) or len(sibling) != 32:
+            return False
+        if position == "L":
+            current = hashlib.sha256(bytes(sibling) + current).digest()
+        elif position == "R":
+            current = hashlib.sha256(current + bytes(sibling)).digest()
+        else:
+            return False
+    return current == expected_root
+
+
+def verify_merkle_proofs(
+    proof_paths: list[str],
+    bundles: list[tuple[str, list[dict]]],
+) -> int:
+    """Verify each inclusion proof JSON against the bundle entries.
+
+    For every proof file the verifier:
+      1. Loads the JSON and validates shape
+      2. Finds the matching ``chain_seq`` entry in the loaded bundles
+      3. Asserts the bundle's row_hash (or entry_hash legacy field)
+         equals the proof's ``leaf_hex``
+      4. Replays ``_merkle_verify_inclusion`` against the proof's root
+
+    Exit code 6 on any failure mode (no matching entry, leaf
+    disagreement, math fails). Distinct from chain (2) / anchor (3,5)
+    / cross (4) exit codes so an operator can wire the Merkle path
+    into a separate alarm without polluting the existing forensic
+    classifiers.
+
+    Returns the count of proofs verified successfully.
+    """
+    if not proof_paths:
+        return 0
+
+    # Flatten bundle entries into a single chain_seq → entry lookup.
+    by_seq: dict[int, dict] = {}
+    for _path, entries in bundles:
+        for e in entries:
+            seq = e.get("chain_seq")
+            if seq is None:
+                continue
+            try:
+                by_seq[int(seq)] = e
+            except (TypeError, ValueError):
+                continue
+
+    verified = 0
+    for path in proof_paths:
+        try:
+            with open(path) as f:
+                proof = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"MERKLE PROOF UNREADABLE path={path}: {exc}")
+            sys.exit(6)
+
+        try:
+            chain_seq = int(proof["chain_seq"])
+            leaf_hex = str(proof["leaf_hex"])
+            root_hex = str(proof["merkle_root"])
+            steps = proof["proof"]
+            if not isinstance(steps, list):
+                raise TypeError("proof.proof must be a list")
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"MERKLE PROOF MALFORMED path={path}: {exc}")
+            sys.exit(6)
+
+        entry = by_seq.get(chain_seq)
+        if entry is None:
+            print(
+                f"MERKLE PROOF UNMATCHED chain_seq={chain_seq}: "
+                f"no entry with that chain_seq in the loaded bundle(s) "
+                f"(path={path})"
+            )
+            sys.exit(6)
+
+        # Mastio bundles carry row_hash; legacy Court bundles may
+        # carry entry_hash. Accept either as long as it matches the
+        # proof's leaf_hex.
+        bundle_leaf = entry.get("row_hash") or entry.get("entry_hash")
+        if bundle_leaf is None:
+            print(
+                f"MERKLE PROOF UNMATCHED chain_seq={chain_seq}: "
+                f"bundle entry has no row_hash/entry_hash field"
+            )
+            sys.exit(6)
+        if str(bundle_leaf) != leaf_hex:
+            print(
+                f"MERKLE PROOF LEAF MISMATCH chain_seq={chain_seq}: "
+                f"bundle row_hash={bundle_leaf[:16]}... but proof "
+                f"leaf_hex={leaf_hex[:16]}... — either the proof was "
+                f"computed against a different audit_log or the bundle "
+                f"row has been tampered"
+            )
+            sys.exit(6)
+
+        try:
+            leaf_bytes = bytes.fromhex(leaf_hex)
+            root_bytes = bytes.fromhex(root_hex)
+            proof_steps = [
+                (bytes.fromhex(str(s["sibling_hex"])), str(s["position"]))
+                for s in steps
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"MERKLE PROOF MALFORMED hex content: {exc}")
+            sys.exit(6)
+
+        if not _merkle_verify_inclusion(leaf_bytes, proof_steps, root_bytes):
+            print(
+                f"MERKLE PROOF FAIL chain_seq={chain_seq}: the proof "
+                f"reconstructed root does NOT match the anchored root "
+                f"{root_hex[:16]}... — either the proof, the leaf, or "
+                f"the anchored root has been tampered"
+            )
+            sys.exit(6)
+
+        verified += 1
+
+    return verified
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
@@ -882,6 +1044,20 @@ def main() -> int:
             "dated. (default: 300)"
         ),
     )
+    ap.add_argument(
+        "--merkle-proof", action="append", default=[],
+        metavar="PROOF_JSON",
+        help=(
+            "Path to a Merkle inclusion proof JSON file emitted by "
+            "GET /v1/admin/audit/merkle/proof/{chain_seq} (ADR-037 "
+            "Phase 2). For every file, the verifier asserts (a) the "
+            "matching chain_seq entry exists in the loaded bundle(s), "
+            "(b) its row_hash equals the proof's leaf_hex, and "
+            "(c) the reconstructed Merkle root matches the proof's "
+            "anchored root. Pass the flag multiple times to verify a "
+            "batch of proofs in one run. Exit code 6 on any failure."
+        ),
+    )
     args = ap.parse_args()
 
     bundles: list[tuple[str, list[dict]]] = []
@@ -912,6 +1088,7 @@ def main() -> int:
         bundles.append((path, entries))
 
     cross_n = cross_reconcile(bundles)
+    merkle_n = verify_merkle_proofs(args.merkle_proof, bundles)
 
     # CISO-readable PASS summary. The line breaks below are deliberate
     # so the auditor's terminal output reads like a verdict, not a CSV.
@@ -927,6 +1104,8 @@ def main() -> int:
     )
     if cross_n:
         print(f"  {cross_n} cross-org peer row{'s' if cross_n != 1 else ''} reconciled")
+    if merkle_n:
+        print(f"  {merkle_n} Merkle inclusion proof{'s' if merkle_n != 1 else ''} verified")
     print("")
     print("  Every entry_hash matches the SHA-256 of its canonical row.")
     print("  No previous_hash → next entry_hash break detected.")
