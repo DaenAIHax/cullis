@@ -1098,7 +1098,7 @@ class _EnrollmentMixin:
         EC P-256 keypair for DPoP egress, submits the start request,
         polls for the admin decision, persists the identity-dir layout
         ``from_identity_dir`` reads (``agent.key`` + ``agent.crt`` +
-        ``dpop.key`` + ``meta.json``), and returns a runtime-ready
+        ``dpop.jwk`` + ``meta.json``), and returns a runtime-ready
         client. ``agent.crt`` carries the ADR-034 chain
         ``leaf || Mastio Intermediate`` server-side, so no separate
         ``ca-chain.pem`` is written by this factory.
@@ -1369,7 +1369,7 @@ class _EnrollmentMixin:
 
         agent_key_path = save_to_path / "agent.key"
         agent_crt_path = save_to_path / "agent.crt"
-        dpop_key_path = save_to_path / "dpop.key"
+        dpop_jwk_path = save_to_path / "dpop.jwk"
         meta_path = save_to_path / "meta.json"
 
         enroll_key_pem = enroll_priv.private_bytes(
@@ -1377,15 +1377,18 @@ class _EnrollmentMixin:
             format=_ser.PrivateFormat.PKCS8,
             encryption_algorithm=_ser.NoEncryption(),
         ).decode("ascii")
-        dpop_key_pem = dpop_priv.private_bytes(
-            encoding=_ser.Encoding.PEM,
-            format=_ser.PrivateFormat.PKCS8,
-            encryption_algorithm=_ser.NoEncryption(),
-        ).decode("ascii")
 
         _atomic_write(agent_key_path, enroll_key_pem, mode=0o600)
         _atomic_write(agent_crt_path, cert_pem, mode=0o644)
-        _atomic_write(dpop_key_path, dpop_key_pem, mode=0o600)
+        # B-7 follow-up (2026-05-25): persist DPoP material as the JSON
+        # JWK shape the rest of the SDK consumes (``DpopKey.load`` calls
+        # ``json.loads`` on this path; PKCS8 PEM here crashed
+        # ``from_identity_dir`` with a JSONDecodeError on the first
+        # egress call). ``DpopKey.save`` already does atomic-write +
+        # chmod 0600, so we reuse it instead of the local helper.
+        from cullis_sdk.dpop import DpopKey
+        dpop_key = DpopKey(dpop_priv, dpop_jwk, path=dpop_jwk_path)
+        dpop_key.save(dpop_jwk_path)
         _atomic_write(
             meta_path,
             _json.dumps(
@@ -1403,7 +1406,8 @@ class _EnrollmentMixin:
         log(
             "sdk",
             f"dashboard-approval enrollment complete: agent_id={agent_id} "
-            f"saved to {save_to_path}",
+            f"saved to {save_to_path} "
+            f"(agent.key, agent.crt, dpop.jwk, meta.json)",
         )
 
         # ── Step 10: hand off to from_identity_dir ────────────────
@@ -1413,12 +1417,13 @@ class _EnrollmentMixin:
         # ``agent.crt`` already carries ``leaf || Intermediate`` (the
         # server concatenated them in ``sign_external_pubkey``) so no
         # sibling ``ca-chain.pem`` is needed for the local-key login
-        # path to walk the chain back to the Org Root.
+        # path to walk the chain back to the Org Root. The DPoP key on
+        # disk is the JSON JWK shape ``DpopKey.load`` consumes.
         return cls.from_identity_dir(
             mastio_url,
             cert_path=agent_crt_path,
             key_path=agent_key_path,
-            dpop_key_path=None,  # dpop.key here is a PKCS8 PEM, not a JWK
+            dpop_key_path=dpop_jwk_path,
             ca_chain_path=ca_chain_path,
             verify_tls=verify_tls,
         )

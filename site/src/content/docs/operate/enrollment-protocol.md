@@ -8,7 +8,7 @@ updated: "2026-05-25"
 
 # Enrollment protocol (dashboard approval)
 
-**Who this is for**: a developer (or operator) bootstrapping a fresh agent identity into a community Mastio bundle without enterprise Connector tooling. The result is a local identity directory (`agent.key`, `agent.crt`, `dpop.key`, `meta.json`) that the SDK reads on every subsequent run. `agent.crt` carries the full ADR-034 chain (leaf + Mastio Intermediate) inline, so no separate chain file is needed.
+**Who this is for**: a developer (or operator) bootstrapping a fresh agent identity into a community Mastio bundle without enterprise Connector tooling. The result is a local identity directory (`agent.key`, `agent.crt`, `dpop.jwk`, `meta.json`) that the SDK reads on every subsequent run. `agent.crt` carries the full ADR-034 chain (leaf + Mastio Intermediate) inline, so no separate chain file is needed.
 
 ## 30-second TL;DR
 
@@ -60,9 +60,9 @@ After enrollment completes the identity directory looks like:
 
 ```
 ~/.cullis/agent-alice/
-├── agent.key       # PKCS8 PEM, 0600 — enrollment private key + signing key
-├── agent.crt       # PEM — leaf + Mastio Intermediate, ADR-034 chain inline
-├── dpop.key        # PKCS8 PEM, 0600 — runtime DPoP egress key
+├── agent.key       # PKCS8 PEM, 0600: enrollment private key + signing key
+├── agent.crt       # PEM: leaf + Mastio Intermediate, ADR-034 chain inline
+├── dpop.jwk        # JSON JWK, 0600: runtime DPoP egress key
 └── meta.json       # {agent_id, capabilities, enrolled_at, mastio_url}
 ```
 

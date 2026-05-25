@@ -12,8 +12,11 @@ Three invariants the tests pin:
 2. The poll path carries the ``X-Enrollment-Proof`` header signed with
    the original enrollment key over ``"enrollment-status:v1|<sid>"``.
 3. The identity-dir layout written under ``save_to/`` is exactly what
-   ``from_identity_dir`` expects (agent.key + agent.crt + ca-chain.pem +
-   dpop.key + meta.json), with 0600 perms on the two private-key files.
+   ``from_identity_dir`` expects (agent.key + agent.crt + dpop.jwk +
+   meta.json), with 0600 perms on the two private-key files. ``dpop.jwk``
+   is a JSON ``{"private_jwk": {...}}`` blob (B-7 regression pin),
+   not PKCS8 PEM, so ``DpopKey.load`` can decode it on the first
+   egress call.
 
 The Mastio side is faked via a small ``RequestRecorder`` that subs in
 for ``httpx.Client`` — no real network, no real CA, no real admin.
@@ -296,11 +299,11 @@ def test_happy_path_writes_identity_dir(
         (fake_mastio.session_id, "https://fake-mastio:9443/proxy/enrollments"),
     ]
 
-    # Identity-dir layout — exactly what from_identity_dir reads.
+    # Identity-dir layout, exactly what from_identity_dir reads.
     # B-4 follow-up: no ``ca-chain.pem`` here. The chain is inline in
     # ``agent.crt`` because the server's ``cert_pem`` already carries
     # ``leaf || Intermediate``.
-    for name in ("agent.key", "agent.crt", "dpop.key", "meta.json"):
+    for name in ("agent.key", "agent.crt", "dpop.jwk", "meta.json"):
         assert (save_to / name).is_file(), f"missing {name}"
     assert not (save_to / "ca-chain.pem").exists(), (
         "ca-chain.pem must NOT be written by the factory; cert_pem "
@@ -308,10 +311,31 @@ def test_happy_path_writes_identity_dir(
         "again triggers the from_identity_dir sibling auto-discovery "
         "which inflates the JWT x5c header and breaks chain verify."
     )
+    # B-7 regression pin: ``dpop.key`` (PKCS8 PEM) used to land here and
+    # crash ``DpopKey.load`` with JSONDecodeError on the first egress
+    # call. The factory now writes only ``dpop.jwk``.
+    assert not (save_to / "dpop.key").exists(), (
+        "dpop.key (PKCS8 PEM) must NOT be written; the SDK loader "
+        "expects the JSON JWK shape at dpop.jwk (B-7)."
+    )
 
     # Private-key files are 0600 (umask-resistant via os.chmod).
     assert (save_to / "agent.key").stat().st_mode & 0o777 == 0o600
-    assert (save_to / "dpop.key").stat().st_mode & 0o777 == 0o600
+    assert (save_to / "dpop.jwk").stat().st_mode & 0o777 == 0o600
+
+    # B-7 regression pin: ``dpop.jwk`` is the JSON shape ``DpopKey.load``
+    # consumes, namely ``{"private_jwk": {kty, crv, x, y, d}}``.
+    dpop_blob = json.loads((save_to / "dpop.jwk").read_text())
+    assert "private_jwk" in dpop_blob, (
+        "dpop.jwk must wrap the private JWK under the 'private_jwk' key"
+    )
+    priv_jwk = dpop_blob["private_jwk"]
+    assert priv_jwk["kty"] == "EC"
+    assert priv_jwk["crv"] == "P-256"
+    for field in ("x", "y", "d"):
+        assert field in priv_jwk and priv_jwk[field], (
+            f"private_jwk is missing the {field!r} member"
+        )
 
     # meta.json carries the fields the SDK expects.
     meta = json.loads((save_to / "meta.json").read_text())
@@ -333,6 +357,9 @@ def test_happy_path_writes_identity_dir(
     call = patched_http_and_runtime[0]
     assert call["cert_path"] == save_to / "agent.crt"
     assert call["key_path"] == save_to / "agent.key"
+    # B-7: the factory now hands the JSON JWK path down so DpopKey.load
+    # can actually decode it on the first egress call.
+    assert call["dpop_key_path"] == save_to / "dpop.jwk"
     assert call["mastio_url"] == "https://fake-mastio:9443"
 
 
