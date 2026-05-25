@@ -12,6 +12,61 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+## [v0.5.3] — Merkle audit anchoring + Rego policy engine + Postgres binding — 2026-05-25
+
+### Late shipping cascade (2026-05-25)
+
+- **`/admin/agents` atomic enrollment transaction** (#928). `INSERT
+  first` semantics: when the same agent ID is re-enrolled, the
+  primary-key constraint serialises duplicates at the DB layer
+  instead of clobbering signing keys mid-write. Removes the
+  `MASTIO_WORKERS=1` workaround previously needed to avoid the
+  multi-worker race on first enrol. Connection-shared `set_config`
+  for the audit trigger so the txn stays atomic across workers.
+
+- **`cert_chain_pem` emitted on agent enrol + SDK auto-discovers
+  sibling `ca-chain.pem`** (#929). The admin path now returns the
+  full chain (`leaf || Mastio Intermediate || Org Root`) in one
+  PEM blob, and `CullisClient.from_identity_dir` looks for a
+  sibling `ca-chain.pem` next to `agent.crt` when no explicit
+  `ca_bundle` is passed. Zero-boilerplate enrol → first MCP call.
+
+- **SDK lazy auto-login on first MCP call after
+  `from_identity_dir` / `from_enrollment`** (#927). Factory no
+  longer requires the caller to call `.login_via_proxy(...)` before
+  `chat_completion` / `list_mcp_tools`. The client mints its
+  Mastio session on demand. 270 regression scenarios cover all
+  five auto-login gotchas surfaced during the 2026-05-24 dogfood.
+
+- **`scripts/cullis-audit-verify.py --archive-*` flags** (#925) —
+  the offline verifier now also reads `audit_archive` rows
+  (Mastio enterprise / Court federation export format) so the
+  same tool covers both the live chain and the long-retention
+  archive. Inclusion proofs against the Merkle root land in the
+  same verification report.
+
+- **nginx — `/saml`, `/scim/v2`, `/admin` routes allowed through
+  the mTLS-required group** (#926). Prior nginx config only routed
+  the historical surface; the SAML SSO + SCIM provisioning + admin
+  bridge endpoints introduced by the audit hardening sprint were
+  silently 404'd by the sidecar. Smoke ephemera also dropped from
+  the image build context via `.dockerignore`.
+
+- **Smoke framework B1-B12 (`test/smoke/`)** (#931). Single-command
+  end-to-end dogfood stack: compose-managed Mastio + mock TSA +
+  twelve scenarios covering boot, admin bootstrap, agent enrol,
+  Rego policy, chat completion, MCP tool call, audit chain
+  integrity, RFC 3161 TSA anchor, offline verify, multi-worker
+  enrol race, Merkle anchor. 11/12 PASS on the cold-reader run
+  that gates this release.
+
+- **Bundle staging script `scripts/stage-mastio-bundle.sh`**
+  (#930). Reproducible builder for the GitHub Release tarball,
+  with an explicit file allowlist (no `cp -r`) so v0.5.2's
+  missing `_common-deploy-helpers.sh` regression cannot recur.
+  Quickstart copy on `packaging/mastio-bundle/README.md` rewritten
+  to match the actual one-liner customers paste.
+
 ### Mastio — audit chain TSA anchoring (tamper-evident vs operator + vendor)
 
 - **New lifespan watcher `audit_anchor_watcher`** — periodically
@@ -241,6 +296,8 @@ flow until the next `## ` heading.
   and the operator-side troubleshooting matrix (`POSTGRES_PASSWORD`
   missing, orphan SQLite guard, stuck Alembic advisory lock).
 
+[v0.5.3]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.3
+
 ## [Connector v0.5.2] — CRITICAL chat-history cross-user leak — 2026-05-20
 
 ### Security
@@ -380,6 +437,145 @@ flow until the next `## ` heading.
   Connector image without needing the operator to override the env.
 
 [Frontdesk bundle v0.2.10]: https://github.com/cullis-security/cullis/releases/tag/frontdesk-bundle-v0.2.10
+
+## [v0.5.2] — Pre-pilot audit hardening + dashboard router decomposition + post-Portkey pivot — 2026-05-22
+
+Backfilled 2026-05-25 (image was pushed at tag time but the CHANGELOG entry was
+deferred while the audit-hardening sprint kept landing follow-ups). The
+release shipped end-to-end on 2026-05-22 22:12 +02:00 (commit `f0902449`,
+PR #888); this entry catalogues the work that landed between
+`mastio-v0.5.1` and `mastio-v0.5.2` retrospectively.
+
+### Security — pre-pilot CISO sprint (1 CRIT + 16 HIGH + 5 BLOCKER closed)
+
+- **CRITICAL — Court CSR TOFU pubkey pin** (#832, F-A-201). The
+  Court principal-CSR endpoint now pins the public key on first
+  sight and refuses subsequent rotations that present a different
+  pubkey under the same principal ID. Removes a federation-takeover
+  vector flagged by the parallel-subagent audit.
+- **Refuse-to-start production gates** (#830, H4 sweep) — Mastio
+  + Court bundles now fail closed on boot when key safety knobs
+  (`VAULT_ALLOW_HTTP=1` in prod, missing `ADMIN_SECRET`,
+  `audit_tsa_backend=mock` in prod) are left at dev defaults. Pre-
+  fix the gates were fail-open warnings that silently degraded the
+  production posture.
+- **SSRF shared helper `assert_safe_outbound_url`** (#831). All
+  Mastio + Court outbound HTTP calls (PDP webhook, TSA, federation
+  push) now route through the same allowlist/private-net guard.
+- **Append-only audit triggers + hash v2** (#833). Mastio
+  `audit_log` rows are now protected by plpgsql / SQLite triggers
+  that reject UPDATE and DELETE at the DB layer; row hash v2
+  binds the chain header to the principal type and prevents the
+  `T1|` prefix smuggling vector.
+- **Court replication recomputes `entry_hash` from canonical
+  payload** (#834, F-A-401). The replication consumer no longer
+  trusts the producer-side hash; it re-derives from the canonical
+  JSON before appending, so a compromised producer cannot inject
+  rows that look chain-consistent.
+- **Dispute-grade TSA verify + background fail-deny** (#835).
+  Offline verifier now treats TSA timestamp tokens as authoritative
+  for the chain head ordering, and the in-process anchor watcher
+  marks runs as fail-deny when the TSA is unreachable.
+- **HTTPException detail leak sweep** (#836, F-A-306 / F-B-119 /
+  F-B-402). Every router that returned raw exception text in the
+  response body is now wrapped in `safe_detail()` so stack-trace
+  fragments and internal IDs no longer reach unauthenticated
+  callers.
+- **Connector atomic 0600 secret writes** (#838, F-B-401).
+  Connector token + key files are now written via `tempfile` +
+  `os.replace` under `umask 0o077`, never via streaming write to
+  the destination path.
+- **Court principal CSR refuses non-NIST EC curves** (#855,
+  F-A-102). Curves outside `secp256r1` / `secp384r1` / `secp521r1`
+  are now rejected at the signing edge.
+- **`/v1/guardian/inspect` routed through the mTLS-required
+  nginx group** (#874). Pre-fix the LLM guardian inspection path
+  was reachable on the public sidecar without client cert.
+- **MCP tool gate fails closed on empty `required_capability`**
+  (#858, F-A-304). A tool registered with an empty capability list
+  no longer short-circuits to allow; it now requires an explicit
+  bypass token from the operator.
+- **Caller-controlled audit `details` payload size cap** (#861,
+  F-A-410). Caps the JSON serialised size at 64 KiB so a malicious
+  agent cannot wedge the audit chain with megabyte-scale rows.
+- **Rate-limit on Connector login endpoints** (#862, F-A-208).
+- **Tool-call payload size + message count cap** (#863, F-A-303).
+- **`ADMIN_SECRET` required on production bundles** (#864,
+  F-A-507). `./deploy.sh` refuses to start the production
+  Postgres compose if `ADMIN_SECRET` is unset.
+
+### Connector — CRITICAL chat-history cross-user leak
+
+- **`/v1/conversations` cross-user leak** (#843). See the
+  `[Connector v0.5.2]` entry below for full root cause + fix
+  detail; the Mastio side of the bundle was bumped in lockstep
+  via PR #828 / #844. Defence-in-depth follow-up in #845 to
+  refuse the legacy `agent_id` fallback in Frontdesk multi-user
+  mode.
+
+### Mastio — dashboard router decomposition (closes F-B-201 + F-B-202)
+
+- **`mcp_proxy/dashboard/router.py` decomposed from 5106 LOC to
+  236 LOC** (#839 → #879, 13 PRs). Every Mastio + Court dashboard
+  surface now lives in its own `mcp_proxy/dashboard/sub_routers/`
+  module: auth, setup wizard, agents, badges, enrollments, key
+  rotation, PKI, vault, OIDC, audit, policies, tools, network,
+  users, settings, api_status. Sister-files on the Court side
+  cover orgs, org_onboard, org_seal, agents lifecycle, policies,
+  bindings, sessions, audit, rfq, agents_demo. 66/67 routes
+  extracted; only the bare-path `overview` stays inline (FastAPI
+  bare-path constraint).
+- **Court dashboard `agent-rotate-cert` + `upload-cert` fixed for
+  EC org CAs and path-converter shadowing** (#878). The legacy
+  god-object obscured a path conflict where `agents/<id>` shadowed
+  the rotate-cert sub-path on EC-only orgs.
+
+### Mastio — audit log surface
+
+- **Audit log now records tool parameters + result summary on
+  success** (#886). Pre-fix the chain only carried the policy
+  decision; the actual tool input/output was elsewhere. The
+  dashboard "tool call" detail view is now self-contained.
+- **Audit envelope + grouped CISO dashboard + chain-integrity
+  verify endpoint** (#887). Single export bundle (chain head +
+  signed payloads + TSA anchors) consumable by the standalone
+  `cullis-audit-verify.py`. CISO dashboard regroups by principal
+  and adds the chain-integrity status badge.
+
+### Docs + repo — Portkey-style pivot
+
+- **Pivot to Portkey-style public repo: Mastio + Python SDK only**
+  (#884). Internal-only modules (Connector, Frontdesk, Court,
+  agents-demo, sandbox, TS SDK, modern stack) moved to the
+  cullis-enterprise private mirror.
+- **Site cleanup + filtered navigation** (#885, #890-#892,
+  #895-#902). Drops legacy runbooks, Court references, integration
+  pages that no longer apply to the open-core surface.
+- **README + site repositioning** (#867, #880, #883). Replaces
+  unverified statistics with a pain narrative + three
+  primary-source quotes, tightens the frustrated-pilot
+  governance-layer angle.
+- **Repo hardened for outside reviewers** (#882). Drops dev-only
+  scripts, secrets templates, and contributor-private notes from
+  the public tree.
+
+### Demo / dogfood
+
+- **Three reference demo agents under Cullis governance** (#881):
+  KYC, Pitchbook, DORA. Run on the modern dogfood stack
+  introduced by PR #846.
+- **Modern dogfood stack — local smoke for the post-2026-02
+  surface** (#846). Single `./stack/smoke.sh` brings up Mastio,
+  the three demo agents, and walks the agent-to-agent flow.
+
+### Fixed
+
+- **Dockerfile no longer COPYs gitignored
+  `app/dashboard/templates/`** (#888). Tail of the pre-pivot
+  cleanup; the gitignored directory occasionally surfaced as an
+  empty layer in the image cache.
+
+[v0.5.2]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.2
 
 ## [v0.5.1] — Mastio bundle: `--upgrade` defaults to bundle refresh — 2026-05-20
 
