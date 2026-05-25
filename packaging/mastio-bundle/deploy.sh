@@ -1003,11 +1003,23 @@ fi
 PUBLIC_URL="$(grep -E '^MCP_PROXY_PROXY_PUBLIC_URL=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2-)"
 PUBLIC_URL="${PUBLIC_URL:-https://localhost:${PROXY_PORT}}"
 
+# Browser-friendly URL. On Linux hosts without Docker Desktop, host.docker.internal
+# is not resolvable from the host itself (browser/curl/wget fail with DNS error);
+# rewrite to localhost so the URL the operator clicks actually works. macOS/Windows
+# Docker Desktop, and Linux with Docker Desktop installed, both pin
+# host.docker.internal in /etc/hosts, so the rewrite is a no-op there.
+BROWSER_URL="$PUBLIC_URL"
+if [[ "$BROWSER_URL" == *"host.docker.internal"* ]] \
+   && [[ "$(uname -s)" == "Linux" ]] \
+   && ! grep -q "host.docker.internal" /etc/hosts 2>/dev/null; then
+    BROWSER_URL="${BROWSER_URL/host.docker.internal/localhost}"
+fi
+
 echo ""
 echo -e "${GREEN}${BOLD}Cullis Mastio deployed (${MODE}).${RESET}"
 echo ""
-echo -e "  ${BOLD}Dashboard${RESET}        ${GRAY}${PUBLIC_URL}/proxy/login${RESET}"
-echo -e "  ${BOLD}Health${RESET}           ${GRAY}${PUBLIC_URL}/health${RESET}"
+echo -e "  ${BOLD}Dashboard${RESET}        ${GRAY}${BROWSER_URL}/proxy/login${RESET}"
+echo -e "  ${BOLD}Health${RESET}           ${GRAY}${BROWSER_URL}/health${RESET}"
 if [[ -f "$ORG_CA_HOST" ]]; then
     echo -e "  ${BOLD}Org CA${RESET}           ${GRAY}./certs/org-ca.pem${RESET}"
     echo -e "                   ${GRAY}use as CULLIS_FRONTDESK_CA_BUNDLE_HOST when bringing up the Frontdesk bundle${RESET}"
@@ -1017,7 +1029,7 @@ SEED_PWD="$(grep -E '^MCP_PROXY_INITIAL_ADMIN_PASSWORD=' "$SCRIPT_DIR/proxy.env"
 
 if [[ "$MODE" == "development" ]]; then
     echo "  Next steps (development):"
-    echo "    1. Open ${PUBLIC_URL}/proxy/login"
+    echo "    1. Open ${BROWSER_URL}/proxy/login"
     echo "       (browser will warn — TLS is signed by your local Org CA,"
     echo "        not a public CA. Accept the self-signed warning.)"
     if [[ -n "$SEED_PWD" ]]; then
@@ -1028,7 +1040,7 @@ if [[ "$MODE" == "development" ]]; then
         echo "    3. Enroll agents via the Connector or paste an invite token"
     else
         echo "    2. First-boot setup: the dashboard will redirect to"
-        echo "         ${PUBLIC_URL}/proxy/register"
+        echo "         ${BROWSER_URL}/proxy/register"
         echo "       Pick the admin password there (typed once, never stored"
         echo "        on disk in plaintext or surfaced on stdout)."
         echo "    3. Enroll agents via the Connector or paste an invite token"
