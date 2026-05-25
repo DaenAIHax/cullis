@@ -123,6 +123,18 @@ services:
       MCP_PROXY_AUDIT_ANCHOR_TSA_URL: ${MCP_PROXY_AUDIT_ANCHOR_TSA_URL:-http://timestamp.digicert.com}
       MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS:-3600}
       MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS:-10}
+      # F-A-301 SSRF guard escape (C-3 dogfood 2026-05-25). Default-deny
+      # at the dashboard backend-save boundary refuses any URL that
+      # resolves into RFC 1918 / loopback / cloud-metadata. Two
+      # documented escapes live in proxy.env.example: a FQDN-scoped
+      # allowlist (recommended) and a global private-range opt-in
+      # (dev/sandbox). They MUST be forwarded explicitly here because
+      # docker compose --env-file only substitutes ${...} in this file;
+      # it does NOT auto-inject vars into the container. See
+      # site/src/content/docs/operate/internal-mcp-backends.md for the
+      # operator runbook + posture matrix.
+      MCP_PROXY_INTERNAL_HOST_ALLOWLIST:        ${MCP_PROXY_INTERNAL_HOST_ALLOWLIST:-}
+      MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: ${MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS:-0}
       MCP_PROXY_BROKER_URL:        ${MCP_PROXY_BROKER_URL:-}
       MCP_PROXY_BROKER_JWKS_URL:   ${MCP_PROXY_BROKER_JWKS_URL:-}
       MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}
