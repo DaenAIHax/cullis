@@ -46,6 +46,7 @@ client``.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -55,6 +56,15 @@ from cullis_sdk._logging import log
 
 if TYPE_CHECKING:
     from cullis_sdk.client import CullisClient
+
+
+def _now_iso() -> str:
+    """UTC ISO-8601 timestamp helper for ``meta.json`` provenance.
+
+    Kept module-level so the dashboard-approval factory does not have to
+    duplicate the timestamp shape used elsewhere in the SDK.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 class _EnrollmentMixin:
@@ -1057,6 +1067,354 @@ class _EnrollmentMixin:
 
         log("sdk", f"Loaded Connector identity {agent_id} from {identity_dir}")
         return instance
+
+    # ── B-2 dogfood fix — dashboard-approval enrollment (cold-reader path) ─
+
+    @classmethod
+    def enroll_via_dashboard_approval(
+        cls,
+        mastio_url: str,
+        *,
+        requester_name: str,
+        requester_email: str,
+        reason: str | None = None,
+        device_info: str | None = None,
+        save_to: "str | Path",
+        poll_interval_s: float = 5.0,
+        timeout_s: float = 600.0,
+        verify_tls: bool = True,
+        ca_chain_path: "str | Path | None" = None,
+        on_pending: "object | None" = None,
+    ) -> "CullisClient":
+        """Bootstrap an agent identity through the dashboard approval flow.
+
+        Wraps the Connector-protocol enrollment surface (``POST
+        /v1/enrollment/start`` → admin clicks Approve in the dashboard →
+        ``GET /v1/enrollment/{session_id}/status`` with the M-onb-1
+        proof-of-possession header) into a single zero-boilerplate
+        factory for community open-source agent developers.
+
+        The factory generates an EC P-256 enrollment keypair, a second
+        EC P-256 keypair for DPoP egress, submits the start request,
+        polls for the admin decision, persists the identity-dir layout
+        ``from_identity_dir`` reads (``agent.key`` + ``agent.crt`` +
+        ``ca-chain.pem`` + ``dpop.key`` + ``meta.json``), and returns a
+        runtime-ready client.
+
+        Args:
+            mastio_url: public base URL of the Mastio
+                (``https://mastio.example.com:9443``).
+            requester_name: human-readable name shown to the admin.
+            requester_email: contact email shown to the admin.
+            reason: optional free-form reason shown to the admin.
+            device_info: optional client/device info (OS, hostname, SDK
+                version). The Mastio stores it verbatim on the row and
+                displays it in the dashboard.
+            save_to: directory where the identity-dir layout is written.
+                Created if absent. Private-key files land at mode 0600.
+            poll_interval_s: seconds between status polls.
+            timeout_s: total seconds to wait for the admin to act
+                before raising ``TimeoutError``.
+            verify_tls: TLS server-cert verification toggle. The
+                operator-pinned CA via ``ca_chain_path`` is strongly
+                preferred over disabling verification.
+            ca_chain_path: optional PEM bundle pinning the Mastio CA.
+                Used both for the bootstrap fetches and threaded through
+                to the returned client. When ``None`` and the dashboard
+                approval response carried a ``cert_chain_pem`` field
+                the factory writes that chain to
+                ``save_to/ca-chain.pem`` and uses it instead.
+            on_pending: optional callable ``(session_id, dashboard_url)``
+                invoked once after ``start`` returns so a CLI / TUI can
+                surface "approve here" to the operator. Any exception
+                raised by the callback is caught and logged — it never
+                aborts the enrollment.
+
+        Raises:
+            ConnectionError: Mastio unreachable.
+            PermissionError: enrollment rejected by admin (the
+                ``rejection_reason`` from the dashboard is in the
+                exception message).
+            TimeoutError: admin did not act before ``timeout_s``
+                (the Mastio's TTL is 30 minutes; pick something
+                similar or shorter).
+            ValueError: cryptographic operation failed (proof signing,
+                base64url encode). Should not happen in normal use.
+
+        Example::
+
+            from cullis_sdk import CullisClient
+
+            client = CullisClient.enroll_via_dashboard_approval(
+                "https://mastio.example.com:9443",
+                requester_name="Alice Developer",
+                requester_email="alice@example.com",
+                reason="building an MCP agent for daily trading",
+                save_to="~/.cullis/agent-alice",
+                on_pending=lambda sid, url: print(
+                    f"Approve at: {url} (session={sid})"
+                ),
+            )
+            print(client.chat_completion("gpt-4o-mini", "hello"))
+        """
+        from cullis_sdk.client import _build_proxy_http_client, _check_insecure_tls
+
+        import base64 as _b64
+        import hashlib as _hashlib
+        import json as _json
+        import os as _os
+        import tempfile as _tempfile
+        import time as _time
+
+        from cryptography.hazmat.primitives import hashes as _hashes
+        from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+
+        def _b64url_nopad(data: bytes) -> str:
+            return _b64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+        _check_insecure_tls(verify_tls)
+
+        save_to_path = Path(save_to).expanduser()
+        save_to_path.mkdir(parents=True, exist_ok=True)
+
+        # ── Step 1: generate enrollment EC P-256 keypair ──────────
+        enroll_priv = _ec.generate_private_key(_ec.SECP256R1())
+        enroll_pub = enroll_priv.public_key()
+        pubkey_pem = enroll_pub.public_bytes(
+            encoding=_ser.Encoding.PEM,
+            format=_ser.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+
+        # ── Step 2: compute server-shape fingerprint ──────────────
+        # The Mastio computes SHA-256 over the DER SubjectPublicKeyInfo
+        # (see ``mcp_proxy.enrollment.service._pubkey_fingerprint``).
+        # PEM text vs DER is the #1 mismatch trap cold-readers hit.
+        pubkey_der = enroll_pub.public_bytes(
+            encoding=_ser.Encoding.DER,
+            format=_ser.PublicFormat.SubjectPublicKeyInfo,
+        )
+        fingerprint = _hashlib.sha256(pubkey_der).hexdigest()
+
+        # ── Step 3: sign pop_signature ────────────────────────────
+        # Domain-separated message: ``"enrollment-pop:v1|<hex-fp>"``.
+        # Verified server-side in ``service._verify_pop_signature``.
+        pop_message = f"enrollment-pop:v1|{fingerprint}".encode("utf-8")
+        pop_sig_der = enroll_priv.sign(pop_message, _ec.ECDSA(_hashes.SHA256()))
+        # The server's verify path calls ``EllipticCurvePublicKey.verify``
+        # which expects DER-encoded ECDSA; transmit base64url(DER) so
+        # decoding is symmetric to the RSA-PSS path.
+        pop_signature = _b64url_nopad(pop_sig_der)
+
+        # ── Step 4: DPoP keypair (egress JWK) ─────────────────────
+        dpop_priv = _ec.generate_private_key(_ec.SECP256R1())
+        dpop_nums = dpop_priv.public_key().public_numbers()
+        dpop_jwk = {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": _b64url_nopad(dpop_nums.x.to_bytes(32, "big")),
+            "y": _b64url_nopad(dpop_nums.y.to_bytes(32, "big")),
+        }
+
+        # ── Step 5: POST /v1/enrollment/start ─────────────────────
+        base = mastio_url.rstrip("/")
+        http = _build_proxy_http_client(
+            verify_tls=verify_tls, timeout=30.0,
+            ca_chain_path=ca_chain_path,
+        )
+        try:
+            try:
+                resp = http.post(
+                    f"{base}/v1/enrollment/start",
+                    json={
+                        "pubkey_pem": pubkey_pem,
+                        "requester_name": requester_name,
+                        "requester_email": requester_email,
+                        "reason": reason,
+                        "device_info": device_info,
+                        "dpop_jwk": dpop_jwk,
+                        "pop_signature": pop_signature,
+                        "principal_type": "agent",
+                    },
+                )
+            except httpx.ConnectError as exc:
+                raise ConnectionError(
+                    f"Mastio unreachable at {base}: {exc}",
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise ConnectionError(
+                    f"Mastio timed out during enrollment start: {exc}",
+                ) from exc
+            if resp.status_code != 201:
+                raise PermissionError(
+                    f"enrollment start failed (HTTP {resp.status_code}): "
+                    f"{resp.text[:500]}",
+                )
+            started = resp.json()
+            session_id = started["session_id"]
+
+            # ── Step 6: notify operator ───────────────────────────
+            if on_pending is not None:
+                try:
+                    on_pending(session_id, f"{base}/proxy/enrollments")
+                except Exception as exc:  # noqa: BLE001 — callback errors must not abort
+                    log("sdk", f"on_pending callback raised (ignored): {exc}")
+
+            # ── Step 7: pre-sign the proof header once ────────────
+            # The proof binds the session_id (non-replayable across
+            # sessions). We sign once and reuse for every poll.
+            proof_message = (
+                f"enrollment-status:v1|{session_id}".encode("utf-8")
+            )
+            proof_sig_der = enroll_priv.sign(
+                proof_message, _ec.ECDSA(_hashes.SHA256()),
+            )
+            proof_header = _b64url_nopad(proof_sig_der)
+
+            # ── Step 8: poll for admin decision ───────────────────
+            deadline = _time.monotonic() + timeout_s
+            status_url = f"{base}/v1/enrollment/{session_id}/status"
+            headers = {"X-Enrollment-Proof": proof_header}
+            approved: dict | None = None
+            while True:
+                if _time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"enrollment {session_id} not approved within "
+                        f"{timeout_s}s (Mastio TTL is 30 minutes; ask the "
+                        f"admin to approve at {base}/proxy/enrollments)",
+                    )
+                try:
+                    poll = http.get(status_url, headers=headers)
+                except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                    # Transient network — keep polling until the
+                    # deadline kicks in.
+                    log("sdk", f"poll transient error (will retry): {exc}")
+                    _time.sleep(poll_interval_s)
+                    continue
+                if poll.status_code == 429:
+                    # Rate-limited; respect the budget by widening the
+                    # interval for this iteration only.
+                    _time.sleep(max(poll_interval_s, 5.0))
+                    continue
+                if poll.status_code != 200:
+                    raise PermissionError(
+                        f"enrollment status poll failed "
+                        f"(HTTP {poll.status_code}): {poll.text[:500]}",
+                    )
+                body = poll.json()
+                status_value = body.get("status")
+                if status_value == "approved":
+                    if not body.get("cert_pem"):
+                        # Server accepted the proof header but the row
+                        # is half-populated — either an upgrade in
+                        # flight (cert_chain_pem retrofit) or the
+                        # ``detail`` hint path fired without our
+                        # awareness. Surface the server-side detail
+                        # so the failure mode is debuggable.
+                        raise ValueError(
+                            "enrollment approved but server returned "
+                            f"no cert_pem. detail={body.get('detail')!r}",
+                        )
+                    approved = body
+                    break
+                if status_value == "rejected":
+                    reject_msg = body.get("rejection_reason") or "(no reason)"
+                    raise PermissionError(
+                        f"enrollment {session_id} rejected by admin: "
+                        f"{reject_msg}",
+                    )
+                if status_value == "expired":
+                    raise TimeoutError(
+                        f"enrollment {session_id} expired before approval",
+                    )
+                # ``pending`` — keep polling.
+                _time.sleep(poll_interval_s)
+        finally:
+            http.close()
+
+        assert approved is not None  # narrow for type-checkers
+        agent_id = approved.get("agent_id") or ""
+        cert_pem = approved["cert_pem"]
+        cert_chain_pem = approved.get("cert_chain_pem")
+        capabilities = approved.get("capabilities") or []
+
+        # ── Step 9: persist identity-dir layout (atomic 0600) ────
+        # Pattern: ``tempfile.NamedTemporaryFile`` + ``os.replace``
+        # so a crash mid-write leaves either the old file or the
+        # fully-written new one, never a half-written secret. Mirrors
+        # the Connector's atomic 0600 helper.
+        def _atomic_write(target: Path, content: str, *, mode: int) -> None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with _tempfile.NamedTemporaryFile(
+                mode="w", dir=str(target.parent),
+                prefix=f".{target.name}.tmp-", delete=False,
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+                tmp.write(content)
+                tmp.flush()
+                _os.fsync(tmp.fileno())
+            _os.chmod(tmp_path, mode)
+            _os.replace(tmp_path, target)
+
+        agent_key_path = save_to_path / "agent.key"
+        agent_crt_path = save_to_path / "agent.crt"
+        dpop_key_path = save_to_path / "dpop.key"
+        ca_chain_dst_path = save_to_path / "ca-chain.pem"
+        meta_path = save_to_path / "meta.json"
+
+        enroll_key_pem = enroll_priv.private_bytes(
+            encoding=_ser.Encoding.PEM,
+            format=_ser.PrivateFormat.PKCS8,
+            encryption_algorithm=_ser.NoEncryption(),
+        ).decode("ascii")
+        dpop_key_pem = dpop_priv.private_bytes(
+            encoding=_ser.Encoding.PEM,
+            format=_ser.PrivateFormat.PKCS8,
+            encryption_algorithm=_ser.NoEncryption(),
+        ).decode("ascii")
+
+        _atomic_write(agent_key_path, enroll_key_pem, mode=0o600)
+        _atomic_write(agent_crt_path, cert_pem, mode=0o644)
+        _atomic_write(dpop_key_path, dpop_key_pem, mode=0o600)
+        if cert_chain_pem:
+            # Server-supplied ADR-033 chain (PR #929 sister-pattern).
+            # ``from_identity_dir`` auto-discovers this sibling and
+            # uses it for both the mTLS handshake and for the
+            # ``_cert_pem`` blob the local-key login path verifies.
+            _atomic_write(ca_chain_dst_path, cert_chain_pem, mode=0o644)
+        _atomic_write(
+            meta_path,
+            _json.dumps(
+                {
+                    "agent_id": agent_id,
+                    "capabilities": capabilities,
+                    "enrolled_at": _now_iso(),
+                    "mastio_url": mastio_url,
+                },
+                indent=2,
+            ),
+            mode=0o644,
+        )
+
+        log(
+            "sdk",
+            f"dashboard-approval enrollment complete: agent_id={agent_id} "
+            f"saved to {save_to_path}",
+        )
+
+        # ── Step 10: hand off to from_identity_dir ────────────────
+        # The factory auto-discovers ``ca-chain.pem`` and auto-populates
+        # the signing key + agent_id from the cert SAN, so the returned
+        # client is immediately ready for chat_completion /
+        # list_mcp_tools without additional setup.
+        return cls.from_identity_dir(
+            mastio_url,
+            cert_path=agent_crt_path,
+            key_path=agent_key_path,
+            dpop_key_path=None,  # dpop.key here is a PKCS8 PEM, not a JWK
+            ca_chain_path=ca_chain_path,
+            verify_tls=verify_tls,
+        )
 
     # ── ADR-021 PR4c — user-principal client (in-memory cert+key) ───
 

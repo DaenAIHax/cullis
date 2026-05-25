@@ -142,9 +142,25 @@ class EnrollmentStatusResponse(BaseModel):
     # Populated only when status == "approved"
     agent_id: str | None = None
     cert_pem: str | None = None
+    # ADR-033 full chain — leaf || Mastio Intermediate CA so strict mTLS
+    # clients (httpx, Python ssl, Go) can build ``leaf -> Intermediate ->
+    # Org Root`` without an out-of-band fetch. Mirrors the
+    # ``cert_chain_pem`` field shipped by ``POST /v1/admin/agents``
+    # (PR #929). Populated only when ``status == "approved"`` AND a valid
+    # ``X-Enrollment-Proof`` header was supplied.
+    cert_chain_pem: str | None = None
     capabilities: list[str] | None = None
     # Populated only when status == "rejected"
     rejection_reason: str | None = None
+    # B-2 dogfood fix (2026-05-25): when the caller polls after the
+    # admin has approved but did NOT pass the ``X-Enrollment-Proof``
+    # header, the sensitive fields (cert_pem, cert_chain_pem,
+    # agent_id, capabilities) stay nulled out, so a cold-reader SDK
+    # has nothing to hint at the proof-of-possession gate. ``detail``
+    # carries a human-readable instruction in that exact case. Always
+    # ``None`` outside the "approved-but-no-proof" combination so the
+    # field is invisible to the happy path.
+    detail: str | None = None
 
 
 class EnrollmentApproveRequest(BaseModel):
