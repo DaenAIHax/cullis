@@ -18,7 +18,7 @@ Banks, insurers, and other regulated organizations are starting to put AI agents
 
 Cullis sits underneath any agent stack (Claude Agent SDK, OpenAI Agents SDK, custom loops) and provides the three primitives a regulated deployment is missing: per-agent cryptographic identity bound to whoever or whatever authorized the agent, a policy decision point that runs before the LLM call lands, and a hash-chained append-only audit log that an external auditor can verify without trusting Cullis or your IT team.
 
-Cullis is LLM-agnostic by design. The embedded gateway routes to Anthropic, OpenAI, Gemini, or Ollama via LiteLLM, and an alternative AI gateway can be wired in as a sidecar. The identity, policy, and audit primitives stay the same.
+Cullis is LLM-agnostic by design. The embedded gateway is wired to Anthropic today; OpenAI, Gemini, and Ollama route through LiteLLM and are rolling out. An alternative AI gateway can be configured as a sidecar. The identity, policy, and audit primitives stay the same regardless of the provider.
 
 ---
 
@@ -34,7 +34,7 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 **Audit.** Every accepted action lands as a row in an append-only audit log, hash-chained per organization, optionally anchored to RFC 3161 TSA on a configurable cadence. The chain replays deterministically: an external auditor can verify it offline without holding any Cullis credentials.
 
-**Embedded AI gateway.** LiteLLM is bundled. Anthropic, OpenAI, Gemini, and Ollama work out of the box, and per-agent identity is propagated into every upstream call as part of the audit trail. The provider can be switched by env var without touching agent code.
+**Embedded AI gateway.** LiteLLM is bundled. Anthropic is wired out of the box (set `MCP_PROXY_ANTHROPIC_API_KEY` in `proxy.env`); OpenAI, Gemini, and Ollama are on the roadmap and currently return HTTP 501. Per-agent identity is propagated into every upstream call as part of the audit trail. The provider can be switched by env var without touching agent code.
 
 **MCP reverse proxy.** Mastio terminates MCP traffic from agents, applies the capability gate, propagates the agent identity into the tool call, and logs the result. Both stdio and HTTP transports are supported. Resources are declared per tool with explicit allowed-domain lists.
 
@@ -46,7 +46,10 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 `cullis-sdk` is the Python client an autonomous agent uses to talk to Mastio. It handles mTLS client cert presentation, DPoP signing, token refresh, and request retries, exposing a small surface that maps onto what an agent actually does: ask the LLM something, list the MCP tools it is allowed to call, call one, and let the audit trail accumulate underneath.
 
-The canonical entry point is `CullisClient.from_identity_dir(...)`, which takes the path to the leaf cert, the matching private key, and an optional DPoP private JWK that the SDK uses to sign each egress request. The cert and key are the credential. There is no shared API key to leak.
+Two entry points, depending on how the identity gets to the agent:
+
+- `CullisClient.from_enrollment(enroll_url)` is the quickstart path. The dashboard issues a one-shot enrollment URL; the SDK calls it, persists the credentials locally, generates a DPoP keypair, and returns a ready-to-use client. No file paths to wire up.
+- `CullisClient.from_identity_dir(mastio_url, cert_path=..., key_path=..., dpop_key_path=...)` is the production path. Cert + key are delivered out-of-band (BYOCA, KMS, systemd LoadCredential) and the SDK loads them from disk. The cert and key are the credential. There is no shared API key to leak.
 
 `chat_completion` and `chat_completion_stream` route through Mastio's `/v1/llm/chat` endpoint. The provider, the model, and the upstream API key are configured org-side, in the Mastio dashboard. The agent never sees the upstream key, and every prompt and response is audit-logged with the agent identity attached.
 
@@ -55,13 +58,10 @@ The canonical entry point is `CullisClient.from_identity_dir(...)`, which takes 
 ```python
 from cullis_sdk import CullisClient
 
-client = CullisClient.from_identity_dir(
-    "https://mastio.example.com:9443",
-    cert_path="./identity/agent.crt",
-    key_path="./identity/agent.key",
-    dpop_key_path="./identity/dpop.jwk",
-    agent_id="kyc-screener",
-    org_id="acme",
+# Paste the enrollment URL the dashboard showed you after "Enroll new agent".
+client = CullisClient.from_enrollment(
+    "https://localhost:9443/v1/enroll/enroll_kyc_screener_abc123",
+    verify_tls=False,  # self-signed Org CA on a laptop; pin ca_chain_path in prod
 )
 
 response = client.chat_completion({
@@ -82,22 +82,28 @@ result = client.call_mcp_tool(
 
 ## Quickstart
 
-Pull the Mastio bundle, deploy it, enroll an agent identity, install the SDK, run an agent loop. The Mastio bundle is a self-contained `docker compose` stack with first-boot Org CA minting, an admin account, and a dashboard.
+Pull the Mastio bundle, set an Anthropic key, enroll an agent, install the SDK, run an agent loop. The Mastio bundle is a self-contained `docker compose` stack with first-boot Org CA minting, an admin account, and a dashboard.
 
 ```bash
-# 1. Mastio
+# 1. Pull and deploy the Mastio bundle.
 curl -L https://github.com/cullis-security/cullis/releases/download/mastio-v0.5.2/cullis-mastio-bundle.tar.gz | tar xz
 cd cullis-mastio-bundle && ./deploy.sh
 
-# 2. Open https://localhost:9443/proxy/login, accept the self-signed TLS warning,
-#    create the admin account, mint an agent identity bundle from the dashboard,
-#    download the zip and unpack it into ./identity/.
+# 2. Enable chat by setting an Anthropic key in proxy.env, then restart.
+#    Chat returns HTTP 503 'provider_key_missing' until this is set;
+#    registry, MCP, and audit work regardless.
+echo 'MCP_PROXY_ANTHROPIC_API_KEY=sk-ant-...' >> proxy.env
+./deploy.sh --pull
 
-# 3. SDK
+# 3. Open https://localhost:9443/proxy/login, accept the self-signed TLS warning,
+#    create the admin account, go to Agents > Enroll new, and copy the one-shot
+#    enrollment URL the dashboard displays.
+
+# 4. Install the SDK.
 pip install cullis-sdk
 ```
 
-Then point your agent at the identity dir using the code example above. The first request lands as an audit row visible in the dashboard under `Audit`.
+Then run the agent loop with the enrollment URL you copied — see the code example above. The first request lands as an audit row visible in the dashboard under `Audit`.
 
 **Policies.** Open the dashboard's `Policies → Rego` tab and paste a Rego rule, or stay on the legacy `Built-in Rules` + `Tool Rules` tabs for simple allowlists. The Mastio compiles Rego on Save (~25 ms) and evaluates the WebAssembly bundle in-process on every decision (~0.2 ms p50). Two worked examples in [cullis.io/docs/operate/rego-policies](https://cullis.io/docs/operate/rego-policies).
 
