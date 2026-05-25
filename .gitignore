@@ -175,3 +175,11 @@ scripts/stress/*.log
 /docs/runbooks/frontdesk-shared-hardening.md
 /site/src/pages/insurance.astro
 /site/src/pages/download.astro
+
+# Dogfood stack symlink to sibling cullis-enterprise/legacy/ checkout,
+# populated by ./dogfood.sh setup. No trailing slash so the pattern
+# matches both a symlink (.dogfood -> ...) and a real directory.
+/.dogfood
+
+# Git worktree management dir, used to isolate parallel agent work.
+/.worktrees/
