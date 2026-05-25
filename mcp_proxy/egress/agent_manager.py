@@ -477,9 +477,30 @@ class AgentManager:
                 serialization.PublicFormat.SubjectPublicKeyInfo,
             )
             derived = hashlib.sha256(pubkey_der).hexdigest()[:16]
-            self._org_id = derived
-            await set_config("org_id", derived)
-            logger.info("Derived deterministic org_id=%s from Org CA public key", derived)
+            # D-9 multi-worker race: every uvicorn worker runs lifespan
+            # in parallel and would otherwise upsert its own derived
+            # org_id (one per candidate key), then sign an intermediate
+            # whose CN says one thing while a sibling worker exports a
+            # cert with a different CN. Atomically claim the org_id row
+            # — winner stamps it, losers adopt the winning value before
+            # building the cert subject. Mirrors the Intermediate CA
+            # winner-election pattern in ``_mint_mastio_ca``.
+            from mcp_proxy.db import set_config_if_absent
+            wrote_org_id = await set_config_if_absent("org_id", derived)
+            if wrote_org_id:
+                self._org_id = derived
+                logger.info(
+                    "Derived deterministic org_id=%s from Org CA public key",
+                    derived,
+                )
+            else:
+                winner_org_id = await get_config("org_id")
+                self._org_id = winner_org_id or self._org_id
+                logger.info(
+                    "Org CA derive race lost — adopted winner org_id=%s "
+                    "(this worker's candidate=%s discarded)",
+                    self._org_id, derived,
+                )
 
         subject = x509.Name([
             x509.NameAttribute(NameOID.COMMON_NAME, f"{self._org_id} CA"),
@@ -527,34 +548,56 @@ class AgentManager:
         ).decode()
         ca_cert_pem = ca_cert.public_bytes(serialization.Encoding.PEM).decode()
 
-        # Route through the KMS provider so enterprise backends (cloud
-        # KMS / Key Vault / Secrets Manager) get to persist this without
-        # touching agent_manager. The LocalKMSProvider default writes
-        # the encrypted PEM into ``pki_key_store`` under the Fernet
-        # at-rest envelope (three-tier PKI hardening, audit 2026-05-18).
+        # D-9 multi-worker race: at boot, every uvicorn worker runs
+        # lifespan in parallel. Without atomic persistence each worker
+        # would upsert its own ``org_ca_{key,cert}`` pair, leaving the
+        # nginx trust bundle pointing at one worker's root while a
+        # sibling worker signs the Mastio Intermediate (and therefore
+        # every agent leaf) with a different root — ECDSA verification
+        # of the leaf chain fails at the nginx mTLS boundary. The
+        # persist helper now uses ``set_config_if_absent`` on the dev
+        # fallback path (and provider-level atomicity on the encrypted
+        # KMS path); only the first writer's pair lands. Losers adopt
+        # the winning pair before any code signs leaves off the root.
+        # Mirrors the Intermediate CA pattern in ``_mint_mastio_ca``.
+        won = await self._persist_org_ca(ca_key_pem, ca_cert_pem)
+
         from mcp_proxy.kms import get_kms_provider
         from mcp_proxy.kms.pki_at_rest import pki_master_key_configured
-
         provider = get_kms_provider()
-        if provider.name == "local" and not pki_master_key_configured():
-            # Legacy dev/test path: keep the plaintext
-            # ``proxy_config.org_ca_key`` / ``org_ca_cert`` rows so
-            # ``/pki/ca.crt`` + bootstrap endpoints still serve. Validate
-            # _config refuses this in production.
-            logger.warning(
-                "MCP_PROXY_DB_ENCRYPTION_KEY not set, falling back to "
-                "legacy plaintext org_ca_{key,cert} rows in proxy_config. "
-                "Dev/test only.",
-            )
-            await set_config("org_ca_key", ca_key_pem)
-            await set_config("org_ca_cert", ca_cert_pem)
-        else:
-            await provider.store_org_ca(ca_key_pem, ca_cert_pem)
-            # The /pki/ca.crt endpoint still reads org_ca_cert from
-            # proxy_config for back-compat; write the cert (public
-            # material, no privacy concern) so legacy callers keep
-            # working. The private key NEVER lands in proxy_config.
-            await set_config("org_ca_cert", ca_cert_pem)
+        dev_fallback = provider.name == "local" and not pki_master_key_configured()
+
+        if not won:
+            # Another worker won the race. Re-read the persisted pair
+            # and adopt it as our in-memory state (the candidate we
+            # generated above is discarded, including its private key).
+            persisted_key_pem: str | None = None
+            persisted_cert_pem: str | None = None
+            try:
+                loaded = await provider.load_org_ca()
+                if loaded is not None:
+                    persisted_key_pem, persisted_cert_pem = loaded
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "post-mint Org CA KMS reload failed: %s — falling back "
+                    "to legacy proxy_config rows", exc,
+                )
+            if not persisted_key_pem or not persisted_cert_pem:
+                persisted_key_pem = await get_config("org_ca_key")
+                persisted_cert_pem = await get_config("org_ca_cert")
+            if persisted_key_pem and persisted_cert_pem:
+                ca_key = serialization.load_pem_private_key(
+                    persisted_key_pem.encode(), password=None,
+                )
+                ca_cert = x509.load_pem_x509_certificate(
+                    persisted_cert_pem.encode(),
+                )
+                ca_key_pem = persisted_key_pem
+                ca_cert_pem = persisted_cert_pem
+                logger.info(
+                    "Org CA generate race lost — adopted winning pair (CN=%s)",
+                    ca_cert.subject.rfc4514_string(),
+                )
 
         # Three-tier PKI hardening — cache only the cert at steady state
         # when the encrypted KMS path is active (the unseal helper can
@@ -563,7 +606,7 @@ class AgentManager:
         # private key cached so the immediate next call to
         # ``_mint_mastio_ca`` doesn't have to scaffold a fake unseal.
         self._org_ca_cert = ca_cert
-        if provider.name == "local" and not pki_master_key_configured():
+        if dev_fallback:
             # Dev fallback: keep the key in memory (matches pre-fix
             # behavior so existing tests + dev sandbox keep booting).
             self._org_ca_key = ca_key
@@ -1824,6 +1867,73 @@ class AgentManager:
         # winner signal we assume win-on-success and leave the
         # race-safe behaviour to the provider plugin.
         await provider.store_intermediate_ca(key_pem, cert_pem)
+        return True
+
+    async def _persist_org_ca(
+        self, key_pem: str, cert_pem: str,
+    ) -> bool:
+        """Race-safe persistence for the self-signed Org CA (D-9 cold-
+        reader dogfood 2026-05-25).
+
+        Returns ``True`` when this worker won the persistence race,
+        ``False`` when another worker had already persisted a pair
+        first and the caller should adopt the existing pair instead.
+
+        Dev-only fallback (no PKI at-rest master key, KMS=local): the
+        key+cert pair is bundled into a single JSON payload and
+        persisted atomically via ``set_config_if_absent`` on a sentinel
+        row ``org_ca_pair``. Coupling the pair into one INSERT closes
+        a race that two-separate-set_config_if_absent calls leave open
+        (worker A wins on the key row while worker B wins on the cert
+        row → split-brain pair on disk → ECDSA chain verification
+        failure at the nginx mTLS boundary). After the atomic claim,
+        both winners and losers write the *winner's* values back into
+        the legacy ``org_ca_key`` / ``org_ca_cert`` back-compat rows
+        (which the ``/pki/ca.crt`` endpoint + offline tooling still
+        read) — every worker converges on the same pair regardless of
+        race outcome. Production validate_config refuses to start
+        without the at-rest passphrase so this path is dev/test only.
+        """
+        from mcp_proxy.kms import get_kms_provider
+        from mcp_proxy.kms.pki_at_rest import pki_master_key_configured
+
+        provider = get_kms_provider()
+        if provider.name == "local" and not pki_master_key_configured():
+            logger.warning(
+                "MCP_PROXY_DB_ENCRYPTION_KEY not set, falling back to "
+                "legacy plaintext org_ca_{key,cert} rows in proxy_config. "
+                "Dev/test only.",
+            )
+            import json
+            from mcp_proxy.db import set_config, set_config_if_absent
+            pair_payload = json.dumps({"key": key_pem, "cert": cert_pem})
+            wrote = await set_config_if_absent("org_ca_pair", pair_payload)
+            if wrote:
+                # Winner — propagate to back-compat rows for the
+                # /pki/ca.crt reader and any offline tooling.
+                await set_config("org_ca_key", key_pem)
+                await set_config("org_ca_cert", cert_pem)
+                return True
+            # Loser — read the winner's pair and overwrite the back-
+            # compat rows with the canonical values. set_config is an
+            # upsert; multiple losers writing the same winning values
+            # idempotently converge.
+            winning_pair_json = await get_config("org_ca_pair")
+            if winning_pair_json:
+                winning = json.loads(winning_pair_json)
+                await set_config("org_ca_key", winning["key"])
+                await set_config("org_ca_cert", winning["cert"])
+            return False
+
+        # KMS providers (Vault / AWS-KMS / Azure-KV / etc) implement
+        # their own atomic-insert semantics under ``store_org_ca``;
+        # we assume win-on-success for the encrypted path and leave
+        # the race-safe behaviour to the provider plugin. The cert is
+        # still written race-safe to proxy_config for the back-compat
+        # readers.
+        await provider.store_org_ca(key_pem, cert_pem)
+        from mcp_proxy.db import set_config_if_absent
+        await set_config_if_absent("org_ca_cert", cert_pem)
         return True
 
     async def _mint_mastio_leaf(self, now: datetime) -> None:
