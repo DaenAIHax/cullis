@@ -8,13 +8,13 @@ updated: "2026-05-25"
 
 # Enrollment protocol (dashboard approval)
 
-**Who this is for**: a developer (or operator) bootstrapping a fresh agent identity into a community Mastio bundle without enterprise Connector tooling. The result is a local identity directory (`agent.key`, `agent.crt`, `ca-chain.pem`, `dpop.key`, `meta.json`) that the SDK reads on every subsequent run.
+**Who this is for**: a developer (or operator) bootstrapping a fresh agent identity into a community Mastio bundle without enterprise Connector tooling. The result is a local identity directory (`agent.key`, `agent.crt`, `dpop.key`, `meta.json`) that the SDK reads on every subsequent run. `agent.crt` carries the full ADR-034 chain (leaf + Mastio Intermediate) inline, so no separate chain file is needed.
 
 ## 30-second TL;DR
 
 1. Agent dev calls `POST /v1/enrollment/start` with a freshly-generated public key, a proof of possession over that key, and a public DPoP JWK. The server returns a `session_id`.
-2. Admin opens `https://<mastio>/proxy/enrollments` and clicks **Approve**. The server signs a leaf cert against the Org CA and pins the DPoP JKT to the row.
-3. Agent dev polls `GET /v1/enrollment/{session_id}/status` with an `X-Enrollment-Proof` header (signed over `enrollment-status:v1|<session_id>` using the original enrollment private key). The server releases `cert_pem` + `cert_chain_pem` + `agent_id` + `capabilities`.
+2. Admin opens `https://<mastio>/proxy/enrollments` and clicks **Approve**. The server signs a leaf cert against the Mastio Intermediate CA and pins the DPoP JKT to the row.
+3. Agent dev polls `GET /v1/enrollment/{session_id}/status` with an `X-Enrollment-Proof` header (signed over `enrollment-status:v1|<session_id>` using the original enrollment private key). The server releases `cert_pem` (already concatenated as leaf + Mastio Intermediate), `agent_id`, and `capabilities`.
 4. Agent dev writes the identity directory and starts calling `chat_completion`, `list_mcp_tools`, etc.
 
 The **proof header** is the M-onb-1 audit gate: without it, an attacker who guesses or steals a `session_id` cannot exfiltrate the issued cert. The gate is non-negotiable, but as of v0.5.4 the server returns a `detail` hint in the status response when the proof header is missing, so the path is discoverable from the wire.
@@ -61,11 +61,12 @@ After enrollment completes the identity directory looks like:
 ```
 ~/.cullis/agent-alice/
 ├── agent.key       # PKCS8 PEM, 0600 — enrollment private key + signing key
-├── agent.crt       # PEM — leaf cert signed by the Mastio Intermediate CA
-├── ca-chain.pem    # PEM — leaf || Intermediate, ADR-033 full chain
+├── agent.crt       # PEM — leaf + Mastio Intermediate, ADR-034 chain inline
 ├── dpop.key        # PKCS8 PEM, 0600 — runtime DPoP egress key
 └── meta.json       # {agent_id, capabilities, enrolled_at, mastio_url}
 ```
+
+The server-side `cert_pem` already concatenates `leaf || Mastio Intermediate` (see `sign_external_pubkey` in `mcp_proxy/egress/agent_manager.py`), so the factory writes that single blob to `agent.crt` and the local-key login path walks the chain back to the Org Root without a sibling file.
 
 Subsequent runs skip the dashboard dance entirely:
 
@@ -77,7 +78,7 @@ client = CullisClient.from_identity_dir(
 )
 ```
 
-`from_identity_dir` auto-discovers the `ca-chain.pem` sibling and assembles `fullchain.pem` automatically.
+`from_identity_dir` reads the chained `agent.crt`, signs JWT assertions whose `x5c` header carries both certs, and the broker validates the path to the Org Root.
 
 ## Curl + openssl (non-Python clients)
 
@@ -155,8 +156,8 @@ while true; do
     "https://mastio.example.com:9443/v1/enrollment/$SESSION_ID/status")
   STATUS=$(echo "$BODY" | jq -r .status)
   case "$STATUS" in
-    approved) echo "$BODY" | jq -r .cert_pem > agent.crt
-              echo "$BODY" | jq -r .cert_chain_pem > ca-chain.pem
+    approved) # cert_pem already carries leaf || Mastio Intermediate
+              echo "$BODY" | jq -r .cert_pem > agent.crt
               break ;;
     rejected) echo "rejected: $(echo "$BODY" | jq -r .rejection_reason)"
               exit 1 ;;

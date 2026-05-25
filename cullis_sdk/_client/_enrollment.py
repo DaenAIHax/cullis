@@ -1098,8 +1098,10 @@ class _EnrollmentMixin:
         EC P-256 keypair for DPoP egress, submits the start request,
         polls for the admin decision, persists the identity-dir layout
         ``from_identity_dir`` reads (``agent.key`` + ``agent.crt`` +
-        ``ca-chain.pem`` + ``dpop.key`` + ``meta.json``), and returns a
-        runtime-ready client.
+        ``dpop.key`` + ``meta.json``), and returns a runtime-ready
+        client. ``agent.crt`` carries the ADR-034 chain
+        ``leaf || Mastio Intermediate`` server-side, so no separate
+        ``ca-chain.pem`` is written by this factory.
 
         Args:
             mastio_url: public base URL of the Mastio
@@ -1120,10 +1122,11 @@ class _EnrollmentMixin:
                 preferred over disabling verification.
             ca_chain_path: optional PEM bundle pinning the Mastio CA.
                 Used both for the bootstrap fetches and threaded through
-                to the returned client. When ``None`` and the dashboard
-                approval response carried a ``cert_chain_pem`` field
-                the factory writes that chain to
-                ``save_to/ca-chain.pem`` and uses it instead.
+                to the returned client. Independent from the server-side
+                cert chain in ``agent.crt`` (the latter is the agent's
+                own leaf+intermediate for client-cert auth; this is the
+                operator-pinned Org Root used for verifying the Mastio's
+                server cert).
             on_pending: optional callable ``(session_id, dashboard_url)``
                 invoked once after ``start`` returns so a CLI / TUI can
                 surface "approve here" to the operator. Any exception
@@ -1306,11 +1309,10 @@ class _EnrollmentMixin:
                 if status_value == "approved":
                     if not body.get("cert_pem"):
                         # Server accepted the proof header but the row
-                        # is half-populated — either an upgrade in
-                        # flight (cert_chain_pem retrofit) or the
-                        # ``detail`` hint path fired without our
-                        # awareness. Surface the server-side detail
-                        # so the failure mode is debuggable.
+                        # is half-populated, or the ``detail`` hint
+                        # path fired without our awareness. Surface
+                        # the server-side detail so the failure mode
+                        # is debuggable.
                         raise ValueError(
                             "enrollment approved but server returned "
                             f"no cert_pem. detail={body.get('detail')!r}",
@@ -1334,8 +1336,17 @@ class _EnrollmentMixin:
 
         assert approved is not None  # narrow for type-checkers
         agent_id = approved.get("agent_id") or ""
+        # B-4 follow-up (2026-05-25): ``cert_pem`` already contains
+        # ``leaf || Mastio Intermediate`` because
+        # ``mcp_proxy/egress/agent_manager.py:sign_external_pubkey``
+        # (PR #816) concatenates the chain server-side before
+        # persisting the row. The server returns the chained PEM as
+        # ``cert_pem``, so the factory writes that verbatim to
+        # ``agent.crt`` without a separate ``ca-chain.pem`` companion.
+        # Writing a fabricated ``ca-chain.pem`` here used to trigger
+        # the ``from_identity_dir`` sibling auto-discovery and inflate
+        # the JWT x5c chain to 5 certs with a duplicated Intermediate.
         cert_pem = approved["cert_pem"]
-        cert_chain_pem = approved.get("cert_chain_pem")
         capabilities = approved.get("capabilities") or []
 
         # ── Step 9: persist identity-dir layout (atomic 0600) ────
@@ -1359,7 +1370,6 @@ class _EnrollmentMixin:
         agent_key_path = save_to_path / "agent.key"
         agent_crt_path = save_to_path / "agent.crt"
         dpop_key_path = save_to_path / "dpop.key"
-        ca_chain_dst_path = save_to_path / "ca-chain.pem"
         meta_path = save_to_path / "meta.json"
 
         enroll_key_pem = enroll_priv.private_bytes(
@@ -1376,12 +1386,6 @@ class _EnrollmentMixin:
         _atomic_write(agent_key_path, enroll_key_pem, mode=0o600)
         _atomic_write(agent_crt_path, cert_pem, mode=0o644)
         _atomic_write(dpop_key_path, dpop_key_pem, mode=0o600)
-        if cert_chain_pem:
-            # Server-supplied ADR-033 chain (PR #929 sister-pattern).
-            # ``from_identity_dir`` auto-discovers this sibling and
-            # uses it for both the mTLS handshake and for the
-            # ``_cert_pem`` blob the local-key login path verifies.
-            _atomic_write(ca_chain_dst_path, cert_chain_pem, mode=0o644)
         _atomic_write(
             meta_path,
             _json.dumps(
@@ -1403,10 +1407,13 @@ class _EnrollmentMixin:
         )
 
         # ── Step 10: hand off to from_identity_dir ────────────────
-        # The factory auto-discovers ``ca-chain.pem`` and auto-populates
-        # the signing key + agent_id from the cert SAN, so the returned
-        # client is immediately ready for chat_completion /
-        # list_mcp_tools without additional setup.
+        # ``from_identity_dir`` auto-populates the signing key + agent_id
+        # from the cert SAN, so the returned client is immediately ready
+        # for chat_completion / list_mcp_tools without additional setup.
+        # ``agent.crt`` already carries ``leaf || Intermediate`` (the
+        # server concatenated them in ``sign_external_pubkey``) so no
+        # sibling ``ca-chain.pem`` is needed for the local-key login
+        # path to walk the chain back to the Org Root.
         return cls.from_identity_dir(
             mastio_url,
             cert_path=agent_crt_path,

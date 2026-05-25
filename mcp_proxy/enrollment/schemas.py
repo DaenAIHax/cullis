@@ -139,27 +139,31 @@ class EnrollmentStartResponse(BaseModel):
 class EnrollmentStatusResponse(BaseModel):
     session_id: str
     status: Literal["pending", "approved", "rejected", "expired"]
-    # Populated only when status == "approved"
+    # Populated only when status == "approved". Under ADR-034 three-tier
+    # PKI hardening, ``cert_pem`` already concatenates
+    # ``leaf || Mastio Intermediate`` server-side (see
+    # ``mcp_proxy/egress/agent_manager.py:sign_external_pubkey``), so
+    # strict mTLS clients (httpx, Python ssl, Go) can build
+    # ``leaf -> Intermediate -> Org Root`` from this single field
+    # without an extra round-trip. No separate ``cert_chain_pem`` is
+    # emitted; B-4 dogfood (2026-05-25) showed that surfacing one
+    # produced ``leaf || Intermediate || Intermediate`` once the SDK
+    # auto-discovery layered the duplicate into the JWT x5c header,
+    # which the broker then rejected as ``x509 chain verification
+    # failed``.
     agent_id: str | None = None
     cert_pem: str | None = None
-    # ADR-033 full chain — leaf || Mastio Intermediate CA so strict mTLS
-    # clients (httpx, Python ssl, Go) can build ``leaf -> Intermediate ->
-    # Org Root`` without an out-of-band fetch. Mirrors the
-    # ``cert_chain_pem`` field shipped by ``POST /v1/admin/agents``
-    # (PR #929). Populated only when ``status == "approved"`` AND a valid
-    # ``X-Enrollment-Proof`` header was supplied.
-    cert_chain_pem: str | None = None
     capabilities: list[str] | None = None
     # Populated only when status == "rejected"
     rejection_reason: str | None = None
     # B-2 dogfood fix (2026-05-25): when the caller polls after the
     # admin has approved but did NOT pass the ``X-Enrollment-Proof``
-    # header, the sensitive fields (cert_pem, cert_chain_pem,
-    # agent_id, capabilities) stay nulled out, so a cold-reader SDK
-    # has nothing to hint at the proof-of-possession gate. ``detail``
-    # carries a human-readable instruction in that exact case. Always
-    # ``None`` outside the "approved-but-no-proof" combination so the
-    # field is invisible to the happy path.
+    # header, the sensitive fields (cert_pem, agent_id, capabilities)
+    # stay nulled out, so a cold-reader SDK has nothing to hint at the
+    # proof-of-possession gate. ``detail`` carries a human-readable
+    # instruction in that exact case. Always ``None`` outside the
+    # "approved-but-no-proof" combination so the field is invisible to
+    # the happy path.
     detail: str | None = None
 
 

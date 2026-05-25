@@ -20,16 +20,27 @@ for ``httpx.Client`` — no real network, no real CA, no real admin.
 ``CullisClient.from_identity_dir`` is also stubbed so we don't have to
 parse a real cert SAN; the test only cares about the on-disk layout and
 the kwargs forwarded to the runtime constructor.
+
+B-4 follow-up (2026-05-25): the fake Mastio returns ``cert_pem`` as a
+2-cert PEM (``leaf || Intermediate``) mirroring the real server, where
+``mcp_proxy/egress/agent_manager.py:sign_external_pubkey`` already
+concatenates the chain before persisting the row. The factory writes
+that to ``agent.crt`` verbatim; no separate ``ca-chain.pem`` is written
+because doing so used to duplicate the Intermediate via the
+``from_identity_dir`` sibling auto-discovery and break x5c verification.
 """
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import hashlib
 import json
 
 import pytest
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -39,28 +50,83 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def _mint_fake_leaf_cert() -> str:
-    """Build a syntactically valid PEM certificate the factory persists.
+def _mint_fake_chained_cert() -> str:
+    """Build a 2-cert PEM mirroring the real server's ``cert_pem``.
 
-    The factory just writes ``cert_pem`` to ``agent.crt`` verbatim; no
-    parsing happens inside the factory itself (``from_identity_dir`` is
-    stubbed). A blob recognisable as ``-----BEGIN CERTIFICATE-----`` is
-    enough for the layout assertions below.
+    ``mcp_proxy/egress/agent_manager.py:sign_external_pubkey`` (PR #816,
+    ADR-034 three-tier hardening) concatenates the leaf with the Mastio
+    Intermediate before persisting the row, so what the SDK reads off
+    the wire is always ``leaf || Intermediate``. The B-4 fix is that
+    the factory writes this verbatim to ``agent.crt`` without
+    duplicating the Intermediate into a separate ``ca-chain.pem``.
+
+    Generates Org Root → Mastio Intermediate (signed by Root) → Leaf
+    (signed by Intermediate) so the resulting blob can stand in for the
+    real server output for layout + count assertions.
     """
-    return (
-        "-----BEGIN CERTIFICATE-----\n"
-        "FAKE-LEAF-FOR-DASHBOARD-APPROVAL-TEST\n"
-        "-----END CERTIFICATE-----\n"
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    org_root_key = ec.generate_private_key(ec.SECP256R1())
+    org_root_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Test Org Root CA")],
+    )
+    org_root_cert = (
+        x509.CertificateBuilder()
+        .subject_name(org_root_name)
+        .issuer_name(org_root_name)
+        .public_key(org_root_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - _dt.timedelta(days=1))
+        .not_valid_after(now + _dt.timedelta(days=365))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=1), critical=True,
+        )
+        .sign(org_root_key, hashes.SHA256())
     )
 
-
-def _mint_fake_chain_cert() -> str:
-    """Concatenated leaf || Intermediate, as PR #929's admin path emits."""
-    return _mint_fake_leaf_cert() + (
-        "-----BEGIN CERTIFICATE-----\n"
-        "FAKE-INTERMEDIATE-MASTIO-CA\n"
-        "-----END CERTIFICATE-----\n"
+    mastio_int_key = ec.generate_private_key(ec.SECP256R1())
+    mastio_int_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Test Mastio Intermediate CA")],
     )
+    mastio_int_cert = (
+        x509.CertificateBuilder()
+        .subject_name(mastio_int_name)
+        .issuer_name(org_root_name)
+        .public_key(mastio_int_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - _dt.timedelta(days=1))
+        .not_valid_after(now + _dt.timedelta(days=180))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=0), critical=True,
+        )
+        .sign(org_root_key, hashes.SHA256())
+    )
+
+    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    leaf_cert = (
+        x509.CertificateBuilder()
+        .subject_name(
+            x509.Name(
+                [x509.NameAttribute(NameOID.COMMON_NAME, "acme::test-agent")],
+            ),
+        )
+        .issuer_name(mastio_int_name)
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - _dt.timedelta(days=1))
+        .not_valid_after(now + _dt.timedelta(days=30))
+        .add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True,
+        )
+        .sign(mastio_int_key, hashes.SHA256())
+    )
+
+    leaf_pem = leaf_cert.public_bytes(serialization.Encoding.PEM).decode()
+    int_pem = mastio_int_cert.public_bytes(serialization.Encoding.PEM).decode()
+    # The server emits leaf || Intermediate. Org Root is the trust
+    # anchor and stays off the wire.
+    _ = org_root_cert  # silence linter; kept for documentation
+    return leaf_pem + int_pem
 
 
 class _FakeResponse:
@@ -87,8 +153,9 @@ class _FakeMastio:
         self.posts: list[tuple[str, dict, dict]] = []
         self.gets: list[tuple[str, dict]] = []
         self.approved: bool = False
-        self.cert_pem = _mint_fake_leaf_cert()
-        self.cert_chain_pem = _mint_fake_chain_cert()
+        # B-4 follow-up: ``cert_pem`` is the 2-cert chain
+        # ``leaf || Intermediate`` server-side, mirrored here.
+        self.cert_pem = _mint_fake_chained_cert()
         self.agent_id = "acme::test-agent"
         self.last_pubkey_pem: str | None = None
 
@@ -137,8 +204,10 @@ class _FakeMastio:
                     "session_id": self.session_id,
                     "status": "approved",
                     "agent_id": self.agent_id,
+                    # B-4 follow-up: cert_pem already carries the
+                    # full ``leaf || Intermediate`` chain. The server
+                    # no longer emits a separate ``cert_chain_pem``.
                     "cert_pem": self.cert_pem,
-                    "cert_chain_pem": self.cert_chain_pem,
                     "capabilities": ["llm.chat"],
                 },
             )
@@ -228,8 +297,17 @@ def test_happy_path_writes_identity_dir(
     ]
 
     # Identity-dir layout — exactly what from_identity_dir reads.
-    for name in ("agent.key", "agent.crt", "ca-chain.pem", "dpop.key", "meta.json"):
+    # B-4 follow-up: no ``ca-chain.pem`` here. The chain is inline in
+    # ``agent.crt`` because the server's ``cert_pem`` already carries
+    # ``leaf || Intermediate``.
+    for name in ("agent.key", "agent.crt", "dpop.key", "meta.json"):
         assert (save_to / name).is_file(), f"missing {name}"
+    assert not (save_to / "ca-chain.pem").exists(), (
+        "ca-chain.pem must NOT be written by the factory; cert_pem "
+        "already carries the chain and writing the same intermediate "
+        "again triggers the from_identity_dir sibling auto-discovery "
+        "which inflates the JWT x5c header and breaks chain verify."
+    )
 
     # Private-key files are 0600 (umask-resistant via os.chmod).
     assert (save_to / "agent.key").stat().st_mode & 0o777 == 0o600
@@ -242,9 +320,14 @@ def test_happy_path_writes_identity_dir(
     assert meta["mastio_url"] == "https://fake-mastio:9443"
     assert "enrolled_at" in meta
 
-    # cert.crt is the leaf-only cert; ca-chain.pem is the full chain.
-    assert (save_to / "agent.crt").read_text() == fake_mastio.cert_pem
-    assert (save_to / "ca-chain.pem").read_text() == fake_mastio.cert_chain_pem
+    # agent.crt is the server-side chain verbatim, exactly two PEM
+    # blocks (leaf + intermediate). B-4 regression pin: if the SDK
+    # ever re-introduces a separate ca-chain.pem write or
+    # ``from_identity_dir`` starts duplicating the chain into _cert_pem
+    # again, this count will jump and surface the bug at test time.
+    agent_crt = (save_to / "agent.crt").read_text()
+    assert agent_crt == fake_mastio.cert_pem
+    assert agent_crt.count("-----BEGIN CERTIFICATE-----") == 2
 
     # from_identity_dir was called with the persisted paths.
     call = patched_http_and_runtime[0]
@@ -501,30 +584,36 @@ def test_on_pending_callback_exception_does_not_abort(
     assert (tmp_path / "agent-id" / "agent.crt").is_file()
 
 
-# ── cert_chain_pem fallback ───────────────────────────────────────────
+# ── B-4 regression: stray cert_chain_pem from older Mastio is ignored ─
 
 
-def test_missing_cert_chain_pem_skips_ca_chain_file(
+def test_stray_cert_chain_pem_field_is_ignored(
     tmp_path, fake_mastio, patched_http_and_runtime,
 ):
-    """Legacy two-tier Mastio (no Intermediate loaded) → no
-    cert_chain_pem in the response. The factory must NOT write a
-    half-baked ca-chain.pem or crash."""
+    """If an older Mastio still emits a separate ``cert_chain_pem``
+    field (pre-B-4 servers), the SDK must ignore it and never write a
+    ``ca-chain.pem`` file. Writing one would re-trigger the duplicate-
+    intermediate bug via the ``from_identity_dir`` sibling auto-
+    discovery."""
     from cullis_sdk import CullisClient
 
     fake_mastio.approved = True
-    fake_mastio.cert_chain_pem = None
-    # Re-wire .get to drop the field entirely (mirror what the server
-    # does when ``_build_cert_chain_pem`` returns None).
     original_get = fake_mastio.get
 
-    def _no_chain_get(url, *, headers=None, **_):
+    def _legacy_get(url, *, headers=None, **_):
         resp = original_get(url, headers=headers, **_)
         body = dict(resp.json())
-        body.pop("cert_chain_pem", None)
+        if body.get("status") == "approved" and body.get("cert_pem"):
+            # Simulate a pre-B-4 Mastio still emitting the dead field.
+            body["cert_chain_pem"] = (
+                body["cert_pem"]
+                + "-----BEGIN CERTIFICATE-----\n"
+                  "EXTRA-INTERMEDIATE-IF-FACTORY-WERE-DUMB\n"
+                  "-----END CERTIFICATE-----\n"
+            )
         return _FakeResponse(resp.status_code, body)
 
-    fake_mastio.get = _no_chain_get  # type: ignore[assignment]
+    fake_mastio.get = _legacy_get  # type: ignore[assignment]
 
     CullisClient.enroll_via_dashboard_approval(
         "https://fake-mastio:9443",
@@ -537,3 +626,6 @@ def test_missing_cert_chain_pem_skips_ca_chain_file(
 
     assert (tmp_path / "agent-id" / "agent.crt").is_file()
     assert not (tmp_path / "agent-id" / "ca-chain.pem").exists()
+    # The 2-cert chain stays intact in agent.crt; nothing is appended.
+    agent_crt = (tmp_path / "agent-id" / "agent.crt").read_text()
+    assert agent_crt.count("-----BEGIN CERTIFICATE-----") == 2

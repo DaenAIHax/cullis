@@ -94,34 +94,6 @@ def _require_agent_manager(request: Request):
     return mgr
 
 
-def _build_cert_chain_pem(request: Request, leaf_cert_pem: str | None) -> str | None:
-    """Best-effort construct ``cert_chain_pem`` = leaf || Intermediate CA.
-
-    ADR-033 three-tier PKI hardening: strict mTLS clients need the
-    Mastio Intermediate on the wire to build
-    ``leaf -> Intermediate -> Org Root``. Mirrors the
-    ``cert_chain_pem`` field emitted by ``POST /v1/admin/agents``
-    (PR #929) so the dashboard-approval path is at parity.
-
-    Returns ``None`` when the leaf is missing or the Mastio
-    Intermediate is not loaded (legacy two-tier deploys). Never raises
-    — the caller treats ``None`` as "use cert_pem alone".
-    """
-    if not leaf_cert_pem:
-        return None
-    mgr = getattr(request.app.state, "agent_manager", None)
-    if mgr is None:
-        return None
-    mastio_ca_cert = getattr(mgr, "_mastio_ca_cert", None)
-    if mastio_ca_cert is None:
-        return None
-    try:
-        from cryptography.hazmat.primitives import serialization as _ser
-        return leaf_cert_pem + mastio_ca_cert.public_bytes(_ser.Encoding.PEM).decode()
-    except Exception:  # noqa: BLE001 — never break the status endpoint on chain build
-        return None
-
-
 # ── Connector-facing (unauthenticated, keyed by session_id) ──────────────
 
 
@@ -315,15 +287,17 @@ async def enrollment_status(
 
     if record["status"] == "approved" and has_valid_proof:
         response.agent_id = record["agent_id_assigned"]
+        # B-4 follow-up (2026-05-25): ``cert_pem`` already carries the
+        # full chain ``leaf || Mastio Intermediate``. Under ADR-034 the
+        # AgentManager's ``sign_external_pubkey`` (PR #816,
+        # ``mcp_proxy/egress/agent_manager.py``) concatenates the
+        # Intermediate onto the leaf before persisting the row, so
+        # the cert_pem read here is already the ADR-033 chain. Emitting
+        # a separate ``cert_chain_pem`` field that re-appended the
+        # Intermediate produced ``leaf || Intermediate || Intermediate``
+        # which the SDK then fanned out into the JWT x5c header and the
+        # server rejected with ``x509 chain verification failed``.
         response.cert_pem = record["cert_pem"]
-        # PR #929 sister-pattern: emit the ADR-033 full chain
-        # (leaf || Mastio Intermediate) so strict mTLS stacks build
-        # ``leaf -> Intermediate -> Org Root`` without an OOB fetch.
-        # Computed on-the-fly from the agent_manager's loaded
-        # Intermediate CA cert rather than persisted on
-        # ``pending_enrollments`` (no schema bump needed). Legacy
-        # two-tier deploys without an Intermediate keep this NULL.
-        response.cert_chain_pem = _build_cert_chain_pem(request, record["cert_pem"])
         caps_raw = record.get("capabilities_assigned") or "[]"
         try:
             response.capabilities = json.loads(caps_raw)
@@ -334,7 +308,7 @@ async def enrollment_status(
     elif record["status"] == "approved" and not has_valid_proof:
         # B-2 dogfood fix: surface the proof-header requirement so a
         # cold-reader SDK / curl user has a clue what to send next.
-        # The sensitive fields stay nulled out — this only adds a hint
+        # The sensitive fields stay nulled out; this only adds a hint
         # text, no PoP gate weakening (M-onb-1 audit).
         response.detail = (
             "Proof header X-Enrollment-Proof required. Sign "

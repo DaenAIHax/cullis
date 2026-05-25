@@ -10,10 +10,10 @@ read the router source bounced silently.
 The fix populates an optional ``detail`` field in that exact
 "approved-but-no-proof" combination, pointing the caller at the proof
 header mechanism + the doc page. The M-onb-1 audit gate stays intact:
-``cert_pem`` / ``cert_chain_pem`` / ``agent_id`` / ``capabilities`` are
-still nulled out without a valid proof.
+``cert_pem`` / ``agent_id`` / ``capabilities`` are still nulled out
+without a valid proof.
 
-These tests verify both halves on a live FastAPI app — the route
+These tests verify both halves on a live FastAPI app: the route
 behaviour AND the schema field declaration.
 """
 from __future__ import annotations
@@ -50,13 +50,15 @@ def test_status_response_carries_optional_detail_field() -> None:
     assert fields["detail"].default is None
 
 
-def test_status_response_includes_cert_chain_pem() -> None:
-    """PR #929 sister-pattern: the dashboard-approval path must also
-    surface ``cert_chain_pem`` so strict mTLS clients (httpx, Go) can
-    build ``leaf -> Intermediate -> Org Root``."""
+def test_status_response_does_not_carry_cert_chain_pem() -> None:
+    """B-4 follow-up (2026-05-25): ``cert_pem`` already concatenates
+    ``leaf || Mastio Intermediate`` server-side, so there is no
+    separate ``cert_chain_pem`` field on the status response. Pinning
+    the absence keeps a future schema sweep from re-introducing the
+    duplicated-intermediate bug that broke ``from_identity_dir``
+    sibling auto-discovery."""
     fields = EnrollmentStatusResponse.model_fields
-    assert "cert_chain_pem" in fields
-    assert fields["cert_chain_pem"].default is None
+    assert "cert_chain_pem" not in fields
 
 
 # ── Route behaviour: detail fires only in the "approved-no-proof" combo ─
@@ -87,9 +89,9 @@ async def proxy_db(tmp_path, monkeypatch):
 
 def _make_app() -> FastAPI:
     """Bare app with only the enrollment router mounted. The status
-    route doesn't depend on ``agent_manager`` so no stub is required
-    (``_build_cert_chain_pem`` tolerates a missing manager by returning
-    ``None``)."""
+    route doesn't depend on ``agent_manager`` after the B-4 cleanup,
+    so no stub is required: ``cert_pem`` is read straight off the
+    pending_enrollments row."""
     app = FastAPI()
     app.include_router(enrollment_router)
     return app
@@ -171,9 +173,11 @@ async def test_approved_without_proof_returns_detail_hint(proxy_db):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "approved"
-    # Sensitive fields stay nulled — PoP gate unchanged.
+    # Sensitive fields stay nulled — PoP gate unchanged. B-4 follow-up:
+    # ``cert_chain_pem`` field is removed entirely; verify it's absent
+    # so the schema sweep doesn't drift back.
     assert body["cert_pem"] is None
-    assert body["cert_chain_pem"] is None
+    assert "cert_chain_pem" not in body
     assert body["agent_id"] is None
     assert body["capabilities"] is None
     # Hint is populated and includes the canonical message string + the
