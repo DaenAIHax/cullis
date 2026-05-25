@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cullis-agent-sdk"
+name = "cullis-sdk"
 version = "0.1.0"
-description = "Python SDK for Cullis — federated agent trust broker"
+description = "Python SDK for Cullis, federated agent trust broker"
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.24.0",
@@ -73,20 +73,7 @@ webauthn = [
 ]
 
 [project.scripts]
-cullis-connector = "cullis_connector.cli:main"
-# Thin agent-targeted alias for send/inbox/health. Talks HTTP to the
-# loopback Ambassador on the Connector daemon — no SDK or crypto here.
-cullis = "cullis_connector.cli:cullis_main"
 cullis-proxy = "mcp_proxy.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["cullis_sdk", "cullis_connector"]
-
-[tool.hatch.build.targets.wheel.shared-data]
-# Ship the dashboard templates + static assets alongside the Python code.
-# Without this the PyInstaller bundle (Day 3) misses Jinja templates and
-# the pip install misses the stylesheet.
-
-[tool.hatch.build.targets.wheel.force-include]
-"cullis_connector/templates" = "cullis_connector/templates"
-"cullis_connector/static" = "cullis_connector/static"
+packages = ["cullis_sdk"]
