@@ -106,6 +106,8 @@ def _validate_endpoint_url(url: str) -> str:
     sandbox stacks reaching MCP servers on the docker bridge keep
     working.
     """
+    from urllib.parse import urlparse
+
     from mcp_proxy.utils.url_safety import (
         UnsafeUrlError,
         assert_safe_outbound_url,
@@ -119,7 +121,27 @@ def _validate_endpoint_url(url: str) -> str:
     try:
         assert_safe_outbound_url(url, allow_private=allow_private)
     except UnsafeUrlError as exc:
-        raise HTTPException(status_code=400, detail=f"endpoint_url: {exc}") from exc
+        # C-3 dogfood 2026-05-25: the bare ``400: endpoint_url: …`` left
+        # operators grepping the source for the two escape knobs. Surface
+        # both legitimate escape paths inline (FQDN-scoped allowlist
+        # preferred for CISO posture, global allow_private_ips as the
+        # dev/sandbox sledgehammer). Default-deny is preserved — this
+        # only changes the error message.
+        suggested_fqdn = (urlparse(url).hostname or "").strip() or "<your-mcp-fqdn>"
+        detail = (
+            f"endpoint_url is blocked by the SSRF guard: {exc}.\n"
+            "\n"
+            "If this backend is an internal MCP server you trust, allow it explicitly:\n"
+            f"  - Recommended (FQDN-scoped): add '{suggested_fqdn}' to "
+            "MCP_PROXY_INTERNAL_HOST_ALLOWLIST\n"
+            "    (comma-separated FQDNs), then restart the Mastio.\n"
+            "  - Or (dev/sandbox, opens all RFC 1918): set "
+            "MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=1,\n"
+            "    then restart the Mastio.\n"
+            "\n"
+            "Docs: https://cullis.io/docs/operate/internal-mcp-backends"
+        )
+        raise HTTPException(status_code=400, detail=detail) from exc
     return url
 
 
