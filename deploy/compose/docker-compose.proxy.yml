@@ -57,6 +57,12 @@ services:
       MCP_PROXY_AUDIT_ANCHOR_TSA_URL: ${MCP_PROXY_AUDIT_ANCHOR_TSA_URL:-http://timestamp.digicert.com}
       MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_INTERVAL_SECONDS:-3600}
       MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS: ${MCP_PROXY_AUDIT_ANCHOR_TSA_TIMEOUT_SECONDS:-10}
+      # See packaging/mastio-bundle/docker-compose.yml for the rationale
+      # (C-3 dogfood 2026-05-25): docker compose does not auto-inject
+      # env vars into the container, so the SSRF guard escape knobs must
+      # be forwarded explicitly here too.
+      MCP_PROXY_INTERNAL_HOST_ALLOWLIST:        ${MCP_PROXY_INTERNAL_HOST_ALLOWLIST:-}
+      MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: ${MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS:-0}
       # Broker uplink — empty by default in standalone. The shared-broker
       # override fills these with the in-compose service name; production
       # federated deploys set them via proxy.env.
