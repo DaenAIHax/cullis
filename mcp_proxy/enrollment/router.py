@@ -287,6 +287,16 @@ async def enrollment_status(
 
     if record["status"] == "approved" and has_valid_proof:
         response.agent_id = record["agent_id_assigned"]
+        # B-4 follow-up (2026-05-25): ``cert_pem`` already carries the
+        # full chain ``leaf || Mastio Intermediate``. Under ADR-034 the
+        # AgentManager's ``sign_external_pubkey`` (PR #816,
+        # ``mcp_proxy/egress/agent_manager.py``) concatenates the
+        # Intermediate onto the leaf before persisting the row, so
+        # the cert_pem read here is already the ADR-033 chain. Emitting
+        # a separate ``cert_chain_pem`` field that re-appended the
+        # Intermediate produced ``leaf || Intermediate || Intermediate``
+        # which the SDK then fanned out into the JWT x5c header and the
+        # server rejected with ``x509 chain verification failed``.
         response.cert_pem = record["cert_pem"]
         caps_raw = record.get("capabilities_assigned") or "[]"
         try:
@@ -295,6 +305,19 @@ async def enrollment_status(
             response.capabilities = []
     elif record["status"] == "rejected" and has_valid_proof:
         response.rejection_reason = record["rejection_reason"]
+    elif record["status"] == "approved" and not has_valid_proof:
+        # B-2 dogfood fix: surface the proof-header requirement so a
+        # cold-reader SDK / curl user has a clue what to send next.
+        # The sensitive fields stay nulled out; this only adds a hint
+        # text, no PoP gate weakening (M-onb-1 audit).
+        response.detail = (
+            "Proof header X-Enrollment-Proof required. Sign "
+            f"'{_ENROLLMENT_STATUS_PROOF_DOMAIN}|{session_id}' "
+            "(ECDSA-SHA256 or RSA-PSS depending on enrollment key type), "
+            "base64url-encode without padding, and pass as "
+            "X-Enrollment-Proof header. See "
+            "docs/operate/enrollment-protocol.md."
+        )
     return response
 
 
