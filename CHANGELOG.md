@@ -12,6 +12,15 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+## [v0.5.4.1] — Cold-reader polish patch — 2026-05-26
+
+Three confidence-killer bug fixes between v0.5.4 release this morning and the public Show HN announce this evening:
+
+- **A-1** dashboard PKI page rendered `Key Size: RSA-256` on the Org CA which is EC P-256 (#944). The `f"RSA-{key_size}"` formatter was wrong for any non-RSA key; `key.key_size` returns the bit-size for every key family (256 for P-256, 4096 for RSA-4096). The new `_format_key_algorithm()` helper inspects the public-key class and renders `EC P-256` (or P-384, P-521) for EC keys and `RSA-{bits}` for RSA keys. Same helper used by the `ca.rotate` audit detail (was hard-coded `RSA-4096`).
+- **A-9** dashboard agent detail rendered `CERTIFICATE: No cert` for agents whose cert was valid and verifiable via mTLS (#944). The template was checking `agent.cert_thumbprint` but `_agent_row_to_dict()` never populated that key (no DB column, derive-from-PEM only). The route now passes a parsed `cert_summary` dict (CN, SHA-256 fingerprint, not-after) and the template renders a 3-column grid under the `Issued` badge.
+- **D-8** `client.chat_completion(model=..., messages=...)` raised `TypeError` because the SDK accepted only a dict argument (#943). Cold-readers familiar with the OpenAI / Anthropic SDK pattern hit this on the first call. Signature now accepts either form (dict OR kwargs), routes both to the same downstream egress call, raises on the ambiguous "both at once" combo. 4 new unit tests pin the behaviour.
+
+No other changes from v0.5.4.
 ## [v0.5.4] — Cold-reader dogfood cascade (PKI race + SDK enrol factory + DPoP htu binding) — 2026-05-26
 
 The 2026-05-25 cold-reader dogfood on a fresh-install Mastio bundle exposed six blocking gaps between the operator handing the bundle to a developer and the developer's first chat reply. Five close in v0.5.4 so the open-source path is green end-to-end: `tar xz | ./deploy.sh | SDK enrol | chat reply` on a vanilla Linux laptop, without manually editing `proxy.env`.
@@ -329,6 +338,7 @@ The 2026-05-25 cold-reader dogfood on a fresh-install Mastio bundle exposed six 
   and the operator-side troubleshooting matrix (`POSTGRES_PASSWORD`
   missing, orphan SQLite guard, stuck Alembic advisory lock).
 
+[v0.5.4.1]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.4.1
 [v0.5.4]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.4
 [v0.5.3]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.3
 
