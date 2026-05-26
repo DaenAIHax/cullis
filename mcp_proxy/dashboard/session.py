@@ -1,9 +1,9 @@
 """
-Dashboard session management — HMAC-SHA256 signed cookies + bcrypt admin password.
+Dashboard session management, HMAC-SHA256 signed cookies + bcrypt admin password.
 
 Single role for the MCP Proxy dashboard: admin.
 The session is stored in a signed cookie (HMAC-SHA256). No server-side
-session store needed — the cookie contains the role and CSRF token,
+session store needed, the cookie contains the role and CSRF token,
 verified on every request.
 
 The admin password is hashed with bcrypt and stored in proxy_config under
@@ -13,7 +13,18 @@ sets it; from then on /proxy/login verifies it before issuing a session.
 CSRF protection: a per-session token is embedded in the cookie and must
 be present as a hidden form field on every state-changing POST request.
 Login and register are pre-session and therefore CSRF-exempt.
+
+Cookie wire format (D-6 cold-reader fix):
+    base64url(json_payload) + "." + hex_hmac_sha256
+
+The base64url alphabet (``[A-Za-z0-9_-]``) is RFC 6265 cookie-octet safe,
+so Starlette emits the value unquoted and unescaped. Python ``requests``,
+``httpx`` and ``curl`` all round-trip it cleanly. The legacy format
+(``json_payload + "." + signature``) is still accepted on read so a
+worker upgrade does not invalidate every live admin session.
 """
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -136,22 +147,76 @@ def _get_secret() -> str:
     return _auto_key
 
 
+def _b64url_encode(raw: bytes) -> str:
+    """RFC 4648 §5 base64url, no padding, ASCII str output."""
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(token: str) -> bytes:
+    """Inverse of ``_b64url_encode``; raises ``binascii.Error`` on garbage."""
+    pad = "=" * (-len(token) % 4)
+    return base64.urlsafe_b64decode(token + pad)
+
+
 def _sign(payload: str) -> str:
+    """Encode + sign the payload, emit a cookie-octet-safe value.
+
+    Wire format: ``base64url(payload_bytes).hex(hmac_sha256)``. Both
+    halves use only characters from the RFC 6265 cookie-octet set, so
+    Starlette ships the cookie unquoted and Python ``requests`` /
+    ``httpx`` / ``curl`` round-trip the value without re-quoting it
+    (the D-6 cold-reader bug, see module docstring).
+    """
     secret = _get_secret()
-    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{sig}"
+    encoded = _b64url_encode(payload.encode("utf-8"))
+    sig = hmac.new(secret.encode(), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{encoded}.{sig}"
 
 
 def _verify(cookie_value: str) -> str | None:
-    """Verify signature and return payload string, or None if invalid."""
+    """Verify signature and return the JSON payload string.
+
+    Accepts both wire formats:
+      * **new (D-6)** ``base64url(payload).hex_sig`` — emitted on every
+        fresh login. The HMAC is computed over the base64url-encoded
+        payload bytes, which keeps the comparison constant-time and
+        avoids re-encoding ambiguity.
+      * **legacy** ``raw_json.hex_sig`` — pre-D-6 cookies. The HMAC was
+        computed over the raw JSON; verified as-is so live sessions
+        survive the upgrade. Detected by the first byte being ``{`` (a
+        character outside the base64url alphabet, so disambiguation is
+        unambiguous and we cannot accidentally HMAC-verify a tampered
+        legacy cookie against the new path).
+
+    Returns the decoded JSON payload string on success, ``None`` on any
+    failure (malformed, bad signature, garbage base64).
+    """
     if "." not in cookie_value:
         return None
-    payload, sig = cookie_value.rsplit(".", 1)
+    head, sig = cookie_value.rsplit(".", 1)
+    if not head or not sig:
+        return None
     secret = _get_secret()
-    expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    # Legacy path: payload was raw JSON. Detect by leading ``{`` which
+    # cannot appear in the base64url alphabet, so the discriminator is
+    # collision-free.
+    if head.startswith("{"):
+        expected = hmac.new(secret.encode(), head.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        return head
+
+    # New path: payload is base64url(json_bytes). HMAC was computed
+    # over the encoded form so we don't have to decode before
+    # comparing.
+    expected = hmac.new(secret.encode(), head.encode("ascii"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
-    return payload
+    try:
+        return _b64url_decode(head).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
 
 
 def get_session(request: Request) -> ProxyDashboardSession:
