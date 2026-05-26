@@ -227,6 +227,52 @@ async def agents_create(request: Request):
     ))
 
 
+def _summarise_agent_cert(cert_pem: str | None) -> dict | None:
+    """Parse the agent's stored cert PEM into a small dashboard summary.
+
+    Returns ``None`` when ``cert_pem`` is missing or the cert cannot be
+    parsed — callers treat that as "no cert" and render the empty
+    state. When the cert parses, the returned dict carries enough for
+    the operator to confirm at a glance which cert is bound to the
+    agent: SHA-256 thumbprint hex, CN, SHA-256 fingerprint colon-form,
+    not-after timestamp (UTC, ISO-8601 truncated to seconds).
+
+    A-9 root cause: ``_agent_row_to_dict`` never populated
+    ``cert_thumbprint`` (no column for it on ``internal_agents``), so
+    the template's ``{% if agent.cert_thumbprint %}`` was always
+    falsy and the page rendered "No cert" even for agents whose
+    handshake worked. We derive the thumbprint on-the-fly from the
+    ``cert_pem`` column instead.
+    """
+    if not cert_pem:
+        return None
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.x509.oid import NameOID
+
+        cert = x509.load_pem_x509_certificate(cert_pem.encode())
+        cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        cn = cn_attrs[0].value if cn_attrs else ""
+        # SHA-256 fingerprint in colon-separated upper-hex (the form
+        # ``openssl x509 -fingerprint -sha256`` prints) so an operator
+        # can grep it against a CA-side audit line.
+        fp_bytes = cert.fingerprint(hashes.SHA256())
+        fingerprint = ":".join(f"{b:02X}" for b in fp_bytes)
+        # Plain SHA-256 hex for the existing template title= attribute
+        # and the "short" 24-char preview the page already renders.
+        thumbprint = fp_bytes.hex()
+        not_after = cert.not_valid_after_utc.isoformat()[:19]
+        return {
+            "thumbprint": thumbprint,
+            "fingerprint_sha256": fingerprint,
+            "subject_cn": cn,
+            "not_after": not_after,
+        }
+    except Exception:
+        return None
+
+
 @router.get("/agents/{agent_id:path}", response_class=HTMLResponse)
 async def agent_detail_page(request: Request, agent_id: str):
     session = require_login(request)
@@ -239,6 +285,17 @@ async def agent_detail_page(request: Request, agent_id: str):
     agent = await get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    # A-9: derive the cert summary from the stored PEM so the template
+    # can switch on a real signal instead of the never-populated
+    # ``cert_thumbprint`` field. Expose it under
+    # ``agent['cert_thumbprint']`` for back-compat with the existing
+    # template + a new ``agent['cert_summary']`` dict for the
+    # parsed-cert detail panel.
+    cert_summary = _summarise_agent_cert(agent.get("cert_pem"))
+    if cert_summary is not None:
+        agent["cert_thumbprint"] = cert_summary["thumbprint"]
+        agent["cert_summary"] = cert_summary
 
     # Fetch recent audit entries for this agent
     from sqlalchemy import text

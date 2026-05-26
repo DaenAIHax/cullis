@@ -26,6 +26,7 @@ import pathlib
 from datetime import datetime, timezone
 
 from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -52,6 +53,43 @@ templates = build_templates(_TEMPLATE_DIR)
 router = APIRouter(tags=["dashboard-pki"])
 
 
+# Map the OpenSSL/cryptography curve names to the user-friendly labels
+# that operators actually recognise on a CA cert ("P-256" instead of
+# "SECP256R1"). Unknown curves fall back to the uppercased curve name so
+# we never render an empty string.
+_EC_CURVE_LABELS: dict[str, str] = {
+    "secp256r1": "P-256",
+    "secp384r1": "P-384",
+    "secp521r1": "P-521",
+}
+
+
+def _format_key_algorithm(cert: x509.Certificate) -> str:
+    """Render the cert's public-key family + size for the PKI page.
+
+    The Org CA is EC P-256 since ADR-031, but the page used to
+    concatenate ``RSA-{key_size}`` unconditionally, producing the
+    nonsense label ``RSA-256`` on an EC cert. Branch on the actual
+    public-key object so EC and RSA each render correctly, and keep
+    a permissive fallback for anything else (DSA, Ed25519, …) so we
+    never blow up the dashboard over a label.
+    """
+    pubkey = cert.public_key()
+    # ``cert.public_key()`` always returns a *public* key, but accept
+    # the private-key types too so the helper stays useful if a caller
+    # ever passes the key directly (e.g. fresh ``generate_org_ca``
+    # output before the cert is written back to config).
+    if isinstance(pubkey, (ec.EllipticCurvePublicKey, ec.EllipticCurvePrivateKey)):
+        curve_name = pubkey.curve.name.lower()
+        label = _EC_CURVE_LABELS.get(curve_name, curve_name.upper())
+        return f"EC {label}"
+    if isinstance(pubkey, (rsa.RSAPublicKey, rsa.RSAPrivateKey)):
+        return f"RSA-{pubkey.key_size}"
+    # Unknown family — surface the class name so the operator at least
+    # sees something deterministic instead of "RSA-N/A".
+    return type(pubkey).__name__
+
+
 @router.get("/pki", response_class=HTMLResponse)
 async def pki_page(request: Request):
     session = require_login(request)
@@ -74,7 +112,6 @@ async def pki_page(request: Request):
                 is_ca = bc.value.ca
             except x509.ExtensionNotFound:
                 is_ca = False
-            key_size = cert.public_key().key_size if hasattr(cert.public_key(), "key_size") else "N/A"
             ca = {
                 "subject_cn": cn_attrs[0].value if cn_attrs else "N/A",
                 "organization": org_attrs[0].value if org_attrs else "N/A",
@@ -82,7 +119,7 @@ async def pki_page(request: Request):
                 "valid_from": cert.not_valid_before_utc.isoformat()[:19],
                 "valid_until": cert.not_valid_after_utc.isoformat()[:19],
                 "is_ca": is_ca,
-                "key_size": f"RSA-{key_size}" if isinstance(key_size, int) else key_size,
+                "key_size": _format_key_algorithm(cert),
                 "cert_pem": ca_cert_pem,
             }
         except Exception as exc:
@@ -189,11 +226,20 @@ async def pki_rotate_ca(request: Request):
     await set_config("org_ca_cert", cert_pem)
     await set_config("org_ca_key", key_pem)
 
+    # Render the new CA's algorithm label from the freshly minted cert so
+    # the audit trail tracks whatever ``generate_org_ca`` actually
+    # produced (ADR-031 = EC P-256). The legacy ``RSA-4096`` literal
+    # here was already wrong post-ADR-031 even before A-1 surfaced it.
+    try:
+        _new_ca_cert = x509.load_pem_x509_certificate(cert_pem.encode())
+        _new_ca_algo = _format_key_algorithm(_new_ca_cert)
+    except Exception:
+        _new_ca_algo = "unknown"
     await log_audit(
         agent_id="admin",
         action="ca.rotate",
         status="success",
-        detail=f"org_id={org_id}, new self-signed RSA-4096. All agent certs need re-issue.",
+        detail=f"org_id={org_id}, new self-signed {_new_ca_algo}. All agent certs need re-issue.",
     )
 
     # Store in Vault if configured
