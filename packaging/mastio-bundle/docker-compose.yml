@@ -134,7 +134,7 @@ services:
       # site/src/content/docs/operate/internal-mcp-backends.md for the
       # operator runbook + posture matrix.
       MCP_PROXY_INTERNAL_HOST_ALLOWLIST:        ${MCP_PROXY_INTERNAL_HOST_ALLOWLIST:-}
-      MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: ${MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS:-0}
+      MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: ${MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS:-1}
       MCP_PROXY_BROKER_URL:        ${MCP_PROXY_BROKER_URL:-}
       MCP_PROXY_BROKER_JWKS_URL:   ${MCP_PROXY_BROKER_JWKS_URL:-}
       MCP_PROXY_PDP_URL:           ${MCP_PROXY_PDP_URL:-http://mcp-proxy:9100/pdp/policy}

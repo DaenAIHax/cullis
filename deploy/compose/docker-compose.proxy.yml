@@ -62,7 +62,7 @@ services:
       # env vars into the container, so the SSRF guard escape knobs must
       # be forwarded explicitly here too.
       MCP_PROXY_INTERNAL_HOST_ALLOWLIST:        ${MCP_PROXY_INTERNAL_HOST_ALLOWLIST:-}
-      MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: ${MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS:-0}
+      MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS: ${MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS:-1}
       # Broker uplink — empty by default in standalone. The shared-broker
       # override fills these with the in-compose service name; production
       # federated deploys set them via proxy.env.

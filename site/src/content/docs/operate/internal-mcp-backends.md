@@ -3,16 +3,23 @@ title: "Internal MCP backends (SSRF guard escape)"
 description: "Allow the Mastio to register MCP backends on a private network (Docker bridge, on-prem) without disabling the SSRF defence. FQDN-scoped allowlist preferred; global private-range escape as a dev/sandbox fallback."
 category: "Operate"
 order: 6
-updated: "2026-05-25"
+updated: "2026-05-26"
 ---
 
 # Internal MCP backends (SSRF guard escape)
 
-**Who this is for**: an operator registering an MCP backend whose endpoint URL points at a private (RFC 1918), loopback, or Docker-bridge address — for example, a sibling `mcp-pitchbook` container on the same compose network, or an on-prem `internal-mcp.corp.example` that resolves to `10.20.30.40`. By default the Mastio refuses these, by design.
+**Who this is for**: an operator registering an MCP backend whose endpoint URL points at a private (RFC 1918), loopback, or Docker-bridge address — for example, a sibling `mcp-pitchbook` container on the same compose network, or an on-prem `internal-mcp.corp.example` that resolves to `10.20.30.40`.
+
+**Default by bundle**:
+
+- **Community bundle** ships `MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=1` in `proxy.env.example`. RFC 1918 + loopback addresses are accepted out-of-the-box — the docker-compose-with-sibling-MCP-container scenario is the primary use case, so the first-run experience is smooth. Cloud-metadata (`169.254/16`) and CGNAT (`100.64/10`) stay blocked regardless.
+- **Enterprise bundle** ships the same knob set to `0`. The primary scenario there is cloud-hosted with externally-routable backends, so a private-range URL is almost always a misconfiguration or an IMDS attempt. You will see the HTTP 400 below the first time you register an internal backend, and you opt in explicitly via Option A or B.
+
+If you are on the community bundle and want to tighten posture (e.g. running on a cloud VPS with externally-routable MCP backends only), flip `MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=0` in `proxy.env` and adopt Option A.
 
 ## The error you hit
 
-In the dashboard, **Backends → Save**, you see HTTP 400 with a message like:
+When the SSRF guard is in default-deny mode (enterprise bundle, or community bundle with the knob explicitly flipped to `0`), in the dashboard **Backends → Save**, you see HTTP 400 with a message like:
 
 ```
 endpoint_url is blocked by the SSRF guard: hostname 'mcp-pitchbook' resolves to
@@ -55,14 +62,14 @@ Then:
 
 Re-open the dashboard, **Backends → Save** the same `http://mcp-pitchbook:8080` URL — green.
 
-## Option B — Global private-range escape (dev / sandbox only)
+## Option B — Global private-range escape (community bundle default)
 
-`MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=1` opens up the entire RFC 1918 + loopback range. Any URL the admin types is accepted as long as it is not in the cloud-metadata or CGNAT family.
+`MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=1` opens up the entire RFC 1918 + loopback range. Any URL the admin types is accepted as long as it is not in the cloud-metadata or CGNAT family. This is the **community bundle default**, on the assumption that the primary scenario is a single docker-compose stack the operator controls end-to-end.
 
 Trade-offs:
 
-- **Pros**: zero per-backend config; a single-tenant dev stack where you control every container on the bridge just works.
-- **Cons**: an admin (or a leaked admin session) can register **any** internal address as an MCP backend. Not defensible in a regulated production deploy.
+- **Pros**: zero per-backend config; a single-tenant dev or on-prem-LAN stack where you control every container on the bridge just works.
+- **Cons**: an admin (or a leaked admin session) can register **any** internal address as an MCP backend. Not defensible in a regulated production deploy — the enterprise bundle therefore ships with this knob off.
 
 Compose snippet:
 
@@ -76,9 +83,10 @@ Restart the same way (`./deploy.sh --upgrade`).
 
 | Deployment | Recommendation |
 |---|---|
-| Single-tenant dev / hack day / laptop demo | **B** is fine. |
-| Pilot with a CISO in the room | **A**. Name every backend you trust; let the dashboard reject the rest. |
-| Production on-prem / cloud | **A**, full stop. The audit trail of which hostnames were added (and when) lives in your config management; `B` leaves no per-backend record. |
+| Single-tenant dev / hack day / laptop demo (community bundle) | **B**, which is the community bundle default. No action needed. |
+| On-prem LAN, one operator, MCP backends are sibling containers (community bundle) | **B** is fine. The community bundle default already covers you. |
+| Pilot with a CISO in the room (community bundle, hardened) | Flip `MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS=0` and adopt **A**. Name every backend you trust; let the dashboard reject the rest. |
+| Production on-prem / cloud (enterprise bundle) | **A**, full stop. The enterprise bundle already ships default-deny; you add hostnames you trust. The audit trail of which hostnames were added (and when) lives in your config management; `B` leaves no per-backend record. |
 | Mixed (dev compose + real internal backend) | **A** for the real backend; spin a separate dev compose stack with `B` for sandbox experimentation. |
 
 ## What stays blocked either way

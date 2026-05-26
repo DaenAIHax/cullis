@@ -25,6 +25,7 @@ Polish on `main` accumulating for the next minor (target v0.5.5, mid next week).
 ### Bundle
 
 - **`deploy.sh --wipe-data` actually wipes the bind-mounted dirs** (#949, D-10). The host-side `compgen -G` empty-check short-circuited the busybox wipe because the data dir is mode 0700 owned by uid 10001 post init-permissions, so the operator's host uid saw the dir as "empty" even when `mcp_proxy.db` was inside. Removed the compgen probe.
+- **Community bundle `MCP_PROXY_POLICY_WEBHOOK_ALLOW_PRIVATE_IPS` default flipped to `1`** (C-3 tier-aware fix). `proxy.env.example` and the compose fallback in both `packaging/mastio-bundle/docker-compose.yml` and `deploy/compose/docker-compose.proxy.yml` now ship `1` instead of `0`. The first-Save-of-an-MCP-backend HTTP 400 (resolves to RFC 1918) no longer hits every cold-reader of the community bundle out of the box, since the primary scenario for the community release is docker-compose with sibling MCP-backend containers on the bridge network. Cloud-metadata (`169.254/16`) and CGNAT (`100.64/10`) stay blocked at the helper level regardless of this knob (`mcp_proxy/utils/url_safety.py:80-83`); the IMDS attack surface is not re-openable from `proxy.env`. The enterprise bundle keeps default-deny because its primary scenario is cloud-hosted with externally-routable backends. Runbook `site/src/content/docs/operate/internal-mcp-backends.md` updated to describe the per-bundle default + posture matrix.
 
 ### Enrollment
 
