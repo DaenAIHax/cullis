@@ -122,7 +122,7 @@
     </div>
 
     <!-- Table -->
-    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-hidden backdrop-blur-sm">
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-x-auto backdrop-blur-sm">
         <table class="w-full">
             <thead>
                 <tr class="border-b border-gray-800/60">
@@ -138,16 +138,19 @@
             </thead>
             <tbody class="divide-y divide-gray-800/40">
                 {% for u in users %}
-                <tr class="table-row-hover transition-colors align-top">
+                <tr class="table-row-hover transition-colors align-top cursor-pointer"
+                    tabindex="0"
+                    onclick="window.location='/proxy/users/{{ u.principal_id|urlencode }}'"
+                    onkeydown="if(event.key==='Enter'){window.location='/proxy/users/{{ u.principal_id|urlencode }}'}">
                     <td class="px-5 py-4">
-                        <a href="/proxy/users/{{ u.principal_id|urlencode }}" class="text-sm text-white hover:text-accent-400 transition-colors">
+                        <span class="text-sm text-white">
                             {{ u.display_name or u.user_name }}
-                        </a>
+                        </span>
                         {% if u.display_name %}
                         <div class="text-[11px] text-gray-500 font-mono">{{ u.user_name }}</div>
                         {% endif %}
                     </td>
-                    <td class="px-5 py-4">
+                    <td class="px-5 py-4" onclick="event.stopPropagation()">
                         <code class="text-[11px] font-mono text-accent-400/80 break-all" title="{{ u.principal_id }}">
                             {{ u.principal_id }}
                         </code>
@@ -212,30 +215,22 @@
                     <td class="px-5 py-4 text-xs text-gray-500 font-mono whitespace-nowrap">
                         {{ u.created_at[:19] if u.created_at else '—' }}
                     </td>
-                    <td class="px-5 py-4">
-                        <div class="flex items-center gap-2">
-                            <a href="/proxy/users/{{ u.principal_id|urlencode }}"
-                               class="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider border border-gray-700 text-gray-400 rounded hover:bg-gray-800 hover:text-white transition-colors">
-                                Details
-                            </a>
-                            {# Inline delete — was only reachable from
-                               the per-user detail page before; the
-                               list lacked any action other than
-                               Details, so an admin who wanted to clean
-                               up a batch of pre-seeded rows had to
-                               drill into each one separately. Confirm
-                               dialog stays as the brake. #}
-                            <form method="post"
-                                  action="/proxy/users/{{ u.principal_id|urlencode }}/delete"
-                                  onsubmit="return confirm('Delete user {{ u.user_name }}? This wipes the principal row on the Mastio + the credential on the canale. Cannot be undone.')"
-                                  class="inline">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <button type="submit"
-                                        class="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider border border-red-900/40 text-red-400/70 rounded hover:bg-red-500/10 hover:text-red-400 transition-colors">
-                                    Delete
-                                </button>
-                            </form>
-                        </div>
+                    <td class="px-5 py-4" onclick="event.stopPropagation()">
+                        {# Delete stays as inline action so an admin can
+                           clean up a batch of pre-seeded rows without
+                           drilling into each detail page. Confirm dialog
+                           is the brake. Details link removed: the whole
+                           row navigates to the detail page now. #}
+                        <form method="post"
+                              action="/proxy/users/{{ u.principal_id|urlencode }}/delete"
+                              onsubmit="return confirm('Delete user {{ u.user_name }}? This wipes the principal row on the Mastio + the credential on the canale. Cannot be undone.')"
+                              class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit"
+                                    class="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider border border-red-900/40 text-red-400/70 rounded hover:bg-red-500/10 hover:text-red-400 transition-colors">
+                                Delete
+                            </button>
+                        </form>
                     </td>
                 </tr>
                 {% endfor %}

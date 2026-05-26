@@ -139,12 +139,15 @@
       form auto-submits on change — no separate save button needed.
     #}
     {% macro agent_row(agent, csrf_token) %}
-    <tr class="table-row-hover transition-colors">
+    <tr class="table-row-hover transition-colors cursor-pointer"
+        tabindex="0"
+        onclick="window.location='/proxy/agents/{{ agent.agent_id }}'"
+        onkeydown="if(event.key==='Enter'){window.location='/proxy/agents/{{ agent.agent_id }}'}">
         <td class="px-5 py-4">
             <span class="text-xs font-mono text-gray-400" title="{{ agent.agent_id }}">{{ agent.agent_id }}</span>
         </td>
         <td class="px-5 py-4">
-            <a href="/proxy/agents/{{ agent.agent_id }}" class="text-sm text-white hover:text-accent-400 transition-colors">{{ agent.display_name }}</a>
+            <span class="text-sm text-white">{{ agent.display_name }}</span>
         </td>
         <td class="px-5 py-4">
             {% set dev = agent.device_info | parse_device %}
@@ -194,7 +197,7 @@
             </span>
             {% endif %}
         </td>
-        <td class="px-5 py-4">
+        <td class="px-5 py-4" onclick="event.stopPropagation()">
             {% set _reach = agent.reach | default('both') %}
             <form method="post" action="/proxy/agents/{{ agent.agent_id }}/reach" class="inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -208,12 +211,6 @@
             </form>
         </td>
         <td class="px-5 py-4 text-xs text-gray-500 font-mono whitespace-nowrap">{{ agent.created_at[:19] }}</td>
-        <td class="px-5 py-4">
-            <a href="/proxy/agents/{{ agent.agent_id }}"
-               class="px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider border border-gray-700 text-gray-400 rounded hover:bg-gray-800 hover:text-white transition-colors">
-                Details
-            </a>
-        </td>
     </tr>
     {% endmacro %}
 
@@ -228,13 +225,12 @@
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Certificate</th>
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider" title="Who this agent can talk to: Local (same-org only), Federated (other orgs only), Both. Changes publish/unpublish on the Court.">Reach</th>
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Created</th>
-            <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Actions</th>
         </tr>
     </thead>
     {% endmacro %}
 
     <!-- Federated agents table (reach in {cross, both}) -->
-    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-hidden backdrop-blur-sm mb-10">
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-x-auto backdrop-blur-sm mb-10">
         <table class="w-full">
             {{ agents_thead() }}
             <tbody class="divide-y divide-gray-800/40">
@@ -243,7 +239,7 @@
                 {% endfor %}
                 {% if not federated_agents %}
                 <tr>
-                    <td colspan="9" class="px-5 py-10 text-center">
+                    <td colspan="8" class="px-5 py-10 text-center">
                         <p class="text-sm text-gray-600">No federated agents on this proxy yet</p>
                         <p class="text-xs text-gray-700 mt-1">
                             Flip a local agent's <span class="text-gray-500">Reach</span> to
@@ -268,7 +264,7 @@
         </div>
     </div>
 
-    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-hidden backdrop-blur-sm">
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-x-auto backdrop-blur-sm">
         <table class="w-full">
             {{ agents_thead() }}
             <tbody class="divide-y divide-gray-800/40">
@@ -277,7 +273,7 @@
                 {% endfor %}
                 {% if not local_agents and not federated_agents %}
                 <tr>
-                    <td colspan="9" class="px-5 py-16 text-center">
+                    <td colspan="8" class="px-5 py-16 text-center">
                         <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                         <p class="text-sm text-gray-600">No agents registered</p>
                         <p class="text-xs text-gray-700 mt-1">Create an agent to get started with the Mastio.</p>
@@ -285,7 +281,7 @@
                 </tr>
                 {% elif not local_agents %}
                 <tr>
-                    <td colspan="9" class="px-5 py-10 text-center">
+                    <td colspan="8" class="px-5 py-10 text-center">
                         <p class="text-sm text-gray-600">No local-only agents</p>
                         <p class="text-xs text-gray-700 mt-1">
                             All of your agents are exposed cross-org. Flip an agent's Reach
