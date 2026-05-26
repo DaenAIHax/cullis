@@ -202,6 +202,24 @@ if [[ -n "$INITIAL_ADMIN_PASSWORD" ]]; then
     echo "MCP_PROXY_INITIAL_ADMIN_PASSWORD=${INITIAL_ADMIN_PASSWORD}" >> "$OUT"
 fi
 
+# Stamp the bundle version into proxy.env so the running container can
+# self-report and the dashboard update banner has a real baseline to
+# compare against the GitHub releases API. Without this the compose
+# fallback (``${CULLIS_MASTIO_VERSION:-unknown}``) bites: MCP_PROXY_VERSION
+# arrives as "unknown" and version_check.py concludes "update available"
+# against any non-empty latest. The VERSION file is written by
+# ``scripts/stage-mastio-bundle.sh`` at release-staging time.
+if [[ -f "$PROJECT_DIR/VERSION" ]]; then
+    BUNDLE_VERSION="$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")"
+    if [[ -n "$BUNDLE_VERSION" ]]; then
+        # Strip any pre-existing line (comment or otherwise) before
+        # appending so re-runs stay idempotent.
+        sed -i.bak '/^#*[[:space:]]*CULLIS_MASTIO_VERSION=/d' "$OUT"
+        rm -f "${OUT}.bak"
+        echo "CULLIS_MASTIO_VERSION=${BUNDLE_VERSION}" >> "$OUT"
+    fi
+fi
+
 ok "Wrote ${OUT}"
 echo ""
 echo -e "  ${BOLD}MCP_PROXY_ADMIN_SECRET${RESET}            ${GRAY}${ADMIN_SECRET:0:8}…${RESET}"
