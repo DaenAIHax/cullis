@@ -23,6 +23,7 @@ sub-router because the Mastio surface is simpler than Court's.
 from __future__ import annotations
 
 import logging
+from sqlalchemy.exc import IntegrityError
 import pathlib
 
 from fastapi import APIRouter, HTTPException, Request
@@ -185,7 +186,12 @@ async def agents_create(request: Request):
 
         agent_info, _key_pem = await mgr.create_agent(agent_name, display_name, capabilities)
         agent_id = agent_info["agent_id"]
-    except Exception as exc:
+    except IntegrityError:
+        # Most common path: admin submitted an agent_name that already
+        # exists. The UNIQUE constraint on internal_agents.agent_id is
+        # the brake. Surface a user-friendly hint instead of leaking
+        # the raw SQL exception (which also contains the cert PEM in
+        # parameters; see CLAUDE.md "Mai esporre stack trace").
         agents = await list_agents()
         _org_status = await get_config("org_status") or ""
         _has_ca = bool(await get_config("org_ca_cert"))
@@ -195,7 +201,32 @@ async def agents_create(request: Request):
             agents=agents,
             org_status=_org_status,
             has_ca=_has_ca,
-            error=f"Failed to create agent: {exc}",
+            error=(
+                f"Agent name '{agent_name}' is already taken in this org. "
+                f"Pick a different name, or delete the existing agent first."
+            ),
+            new_agent_id=None,
+        ))
+    except Exception:
+        # Defensive catch-all: log the full stack for the operator
+        # (via uvicorn stderr / docker logs) but show only a generic
+        # error to the dashboard. Never interpolate ``exc`` into the
+        # response body — SQLAlchemy IntegrityError ``str(exc)`` already
+        # bit us once with the cert PEM in parameters.
+        _log.exception("agent.create failed for agent_id=%s", agent_name)
+        agents = await list_agents()
+        _org_status = await get_config("org_status") or ""
+        _has_ca = bool(await get_config("org_ca_cert"))
+        return templates.TemplateResponse("agents.html", _ctx(
+            request, session,
+            active="agents",
+            agents=agents,
+            org_status=_org_status,
+            has_ca=_has_ca,
+            error=(
+                "Failed to create the agent. Check the Mastio container "
+                "logs for the underlying cause."
+            ),
             new_agent_id=None,
         ))
 
