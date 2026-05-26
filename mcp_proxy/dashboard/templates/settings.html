@@ -11,6 +11,24 @@
     <div class="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded text-sm text-emerald-400">{{ success }}</div>
     {% endif %}
 
+    <!-- Initial setup wizard card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Initial setup wizard
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Re-run the broker uplink + organisation-details wizard. Standalone deployments do not need this after first boot;
+                it lives here for operators who want to revisit the choices made at install time or attach a Court federation.
+            </p>
+        </div>
+        <a href="/proxy/setup"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            Open setup wizard
+        </a>
+    </div>
+
     <!-- OIDC card -->
     <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
         <div class="mb-5">
