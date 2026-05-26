@@ -148,8 +148,17 @@ async def save(request: Request, provider: str) -> RedirectResponse:
 
     try:
         cleaned = validate_creds(p, inbound)
-    except InvalidCredentialsError as exc:
-        # Re-render the page with the error inline.
+    except InvalidCredentialsError:
+        # InvalidCredentialsError messages can echo admin-supplied values
+        # (api_base URLs, header dicts, raw key prefixes) back into the
+        # HTML body. Even though the admin typed them in, rendering them
+        # untrusted into the page makes the form a self-XSS trampoline
+        # and obscures upstream stack frames the validator may have
+        # captured. Surface a generic hint instead and log the full text.
+        _log.exception(
+            "ai_provider upsert rejected by validate_creds: provider=%s",
+            p,
+        )
         providers = await _all_providers_view()
         return templates.TemplateResponse(
             "ai_providers.html",
@@ -157,9 +166,34 @@ async def save(request: Request, provider: str) -> RedirectResponse:
                 request, session,
                 providers=providers,
                 error_provider=p,
-                error=str(exc),
+                error=(
+                    f"Credentials for provider {p!r} were rejected. "
+                    "Check required fields are filled and that api_base "
+                    "(if any) is an HTTPS URL on the allow-list, then "
+                    "consult the Mastio container logs for the exact "
+                    "validator reason."
+                ),
             ),
             status_code=400,
+        )
+    except Exception:
+        _log.exception(
+            "ai_provider upsert crashed during validate_creds: provider=%s",
+            p,
+        )
+        providers = await _all_providers_view()
+        return templates.TemplateResponse(
+            "ai_providers.html",
+            _ctx(
+                request, session,
+                providers=providers,
+                error_provider=p,
+                error=(
+                    "Failed to save provider credentials. Check the "
+                    "Mastio container logs and try again."
+                ),
+            ),
+            status_code=500,
         )
 
     updated_by = (

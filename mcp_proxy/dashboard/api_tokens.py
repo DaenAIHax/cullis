@@ -98,10 +98,36 @@ async def create_api_token(
             scope_providers=scope_list,
             expires_at=clean_expiry,
         )
-    except ValueError as exc:
+    except ValueError:
+        # mint_user_api_token raises ValueError for unknown principal /
+        # bad scope / malformed expiry. The exception text can carry the
+        # full SQLAlchemy parameter dict on driver fall-through; surface
+        # a generic action-oriented hint instead and log the full text.
+        _log.exception(
+            "api_token.mint rejected: principal=%s label=%s",
+            principal_id, clean_label,
+        )
         return _back_to_user(
             principal_id,
-            f"token_error={quote(str(exc))}",
+            "token_error="
+            + quote(
+                "Failed to mint API token. Verify the user exists, the "
+                "label is unique, and the expiry date is valid; the "
+                "Mastio container logs carry the exact reason."
+            ),
+        )
+    except Exception:
+        _log.exception(
+            "api_token.mint crashed: principal=%s label=%s",
+            principal_id, clean_label,
+        )
+        return _back_to_user(
+            principal_id,
+            "token_error="
+            + quote(
+                "Failed to mint API token. Check the Mastio container "
+                "logs and try again."
+            ),
         )
 
     await log_audit(

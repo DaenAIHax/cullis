@@ -159,9 +159,19 @@ async def rotate_mastio_ca(
             ),
         ) from exc
     except ValueError as exc:
+        # rotate_mastio_ca raises ValueError for arg validation (bad
+        # grace_days, dry_run conflict, etc.). Even though these are
+        # caller-controlled, the exception text can carry filesystem
+        # paths / KMS keystore detail when the underlying serializer
+        # complains. Surface a redacted detail.
+        from mcp_proxy._http_safety import safe_http_detail
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            detail=safe_http_detail(
+                exc,
+                public_hint="invalid rotation arguments",
+                log_context="rotate_mastio_ca",
+            ),
         ) from exc
 
     return RotateMastioCaResponse(

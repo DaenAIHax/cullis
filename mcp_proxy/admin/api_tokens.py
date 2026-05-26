@@ -158,9 +158,23 @@ async def mint_token(body: MintRequest) -> MintResponse:
             expires_at=body.expires_at,
         )
     except ValueError as exc:
+        # mint_user_api_token raises ValueError for unknown principal /
+        # malformed expiry / unknown scope. The exception text can carry
+        # SQLAlchemy parameter dicts on driver fall-through. The
+        # admin-secret API is a machine surface so a trace_id + redacted
+        # hint is more useful for the caller than raw str(exc).
+        from mcp_proxy._http_safety import safe_http_detail
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            detail=safe_http_detail(
+                exc,
+                public_hint="api_token mint rejected",
+                log_context="admin.api_tokens.mint",
+                extra={
+                    "principal_id": body.principal_id,
+                    "label": body.label,
+                },
+            ),
         ) from exc
 
     await log_audit(

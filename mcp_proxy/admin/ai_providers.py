@@ -223,9 +223,23 @@ async def upsert_provider(
     try:
         cleaned = validate_creds(p, body.creds)
     except InvalidCredentialsError as exc:
+        # The exception text echoes admin-supplied values (api_base URL,
+        # missing field names, type errors that include type(input)). The
+        # admin-secret API is a machine surface (scripts, Terraform) so a
+        # structured trace_id + redacted hint is more useful than raw
+        # str(exc), and it stops the validator's internal text from
+        # landing in non-Mastio log aggregators.
+        from mcp_proxy._http_safety import safe_http_detail
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+            detail=safe_http_detail(
+                exc,
+                public_hint=(
+                    f"credentials for provider {p!r} rejected by validator"
+                ),
+                log_context="admin.ai_providers.upsert",
+                extra={"provider": p},
+            ),
         ) from exc
 
     await upsert_ai_provider_creds(
@@ -479,9 +493,24 @@ async def _probe_openai(creds: dict[str, str]) -> TestResult:
     # ``feedback_third_party_ai_gateway_key_leak.md``.
     try:
         _enforce_openai_compat_endpoint(base, allow_byo=_byo_endpoint_allowed())
-    except ValueError as exc:
+    except ValueError:
+        # The validator's str(exc) interpolates the rejected api_base
+        # (admin-supplied) back into the JSON body. Even though the admin
+        # typed it in, the live-probe response can be relayed downstream
+        # (CI bot logs, Terraform state) where the URL adds nothing. Log
+        # the full reason to stderr and return a generic detail.
+        _log.exception(
+            "openai live-probe rejected api_base=%s (allow_byo=%s)",
+            base, _byo_endpoint_allowed(),
+        )
         return TestResult(
-            provider="openai", status="error", detail=str(exc),
+            provider="openai", status="error",
+            detail=(
+                "api_base not on live-probe allow-list. Set "
+                "MCP_PROXY_AI_PROBE_ALLOW_BYO_ENDPOINT=true to enable "
+                "bring-your-own endpoints; the Mastio container logs "
+                "carry the exact reason."
+            ),
         )
     async with httpx.AsyncClient(timeout=5.0) as client:
         resp = await client.get(
@@ -534,9 +563,18 @@ async def _probe_ollama(creds: dict[str, str]) -> TestResult:
     # still refuse non-http schemes and validate the URL is parseable.
     try:
         _enforce_self_hosted_endpoint(api_base)
-    except ValueError as exc:
+    except ValueError:
+        # See _probe_openai for rationale on swallowing str(exc).
+        _log.exception(
+            "ollama live-probe rejected api_base=%s", api_base,
+        )
         return TestResult(
-            provider="ollama", status="error", detail=str(exc),
+            provider="ollama", status="error",
+            detail=(
+                "api_base rejected: must be a parseable http/https URL "
+                "with a hostname. Check the Mastio container logs for "
+                "the exact reason."
+            ),
         )
     models = await fetch_ollama_models(api_base, timeout_s=3.0)
     if not models:
