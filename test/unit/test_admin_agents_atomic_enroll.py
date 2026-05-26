@@ -80,7 +80,7 @@ class _StubAgentManager:
         self._vault_succeeds = vault_succeeds
         self._mint_counter = 0
 
-    def _generate_agent_cert(self, agent_name: str) -> tuple[str, str]:
+    async def _generate_agent_cert(self, agent_name: str) -> tuple[str, str]:
         # Unique per-mint output so the test can tell a stale key from a
         # fresh one byte-perfect.
         self._mint_counter += 1

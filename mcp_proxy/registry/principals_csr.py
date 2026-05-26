@@ -302,6 +302,17 @@ async def sign_user_csr(
     ca_key = agent_manager._mastio_ca_key  # type: ignore[attr-defined]
     ca_cert = agent_manager._mastio_ca_cert  # type: ignore[attr-defined]
     if ca_key is None or ca_cert is None:
+        # D-13 — lazy reload. Another worker may have minted and
+        # persisted the Intermediate while this worker's bootstrap
+        # silently failed (transient DB lock, KMS provider initial
+        # probe race). The pair is on disk; just re-read it.
+        # Mirrors the D-9 winner-election adopt pattern at runtime
+        # instead of only at boot.
+        reloaded = await agent_manager._reload_intermediate_ca_from_persistence()  # type: ignore[attr-defined]
+        if reloaded:
+            ca_key = agent_manager._mastio_ca_key  # type: ignore[attr-defined]
+            ca_cert = agent_manager._mastio_ca_cert  # type: ignore[attr-defined]
+    if ca_key is None or ca_cert is None:
         raise RuntimeError(
             "Mastio Intermediate CA not loaded — ensure_mastio_identity() "
             "must complete before user-principal CSRs can be signed",
