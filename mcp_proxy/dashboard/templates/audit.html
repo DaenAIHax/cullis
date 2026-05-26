@@ -17,19 +17,27 @@
             </p>
         </div>
 
-        <!-- Counter chip: Total · Admin · Traffic -->
+        <!-- Counter chip: Total · Admin · Traffic
+             A-2 dogfood fix: explicit ``title=...`` tooltips so the operator
+             can hover any number and learn what it measures. Pre-fix the
+             three counters (sidebar /badge/audit, header total, chain-verify
+             "N entries") looked like the same metric drifting; they are
+             distinct slices of the audit table and the tooltip says which. -->
         <div class="flex items-center gap-0 flex-shrink-0 border border-gray-800/60 rounded-md overflow-hidden bg-surface-900/60 backdrop-blur-sm">
-            <div class="px-3 py-1.5 flex items-center gap-2">
+            <div class="px-3 py-1.5 flex items-center gap-2"
+                 title="{% if view_mode == 'grouped' %}Grouped tool-call cards on this page (one card = one policy decision + executor + egress).{% else %}Raw audit-log rows after the current filter; matches the SELECT COUNT(*) of the table you are viewing.{% endif %}">
                 <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">{% if view_mode == 'grouped' %}Tool calls{% else %}Events{% endif %}</span>
                 <span class="text-sm font-mono text-white">{{ total }}</span>
             </div>
             <div class="w-px h-5 bg-gray-800/80 self-center"></div>
-            <div class="px-3 py-1.5 flex items-center gap-2">
+            <div class="px-3 py-1.5 flex items-center gap-2"
+                 title="Admin-source events in the current filter (dashboard actions, agent lifecycle, policy edits, enrollment approvals).">
                 <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-blue-400/80">Admin</span>
                 <span class="text-sm font-mono text-blue-400">{{ admin_total }}</span>
             </div>
             <div class="w-px h-5 bg-gray-800/80 self-center"></div>
-            <div class="px-3 py-1.5 flex items-center gap-2">
+            <div class="px-3 py-1.5 flex items-center gap-2"
+                 title="Traffic-source events in the current filter (oneshot deliveries, MCP tool calls, agent egress, session activity).">
                 <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-accent-400/80">Traffic</span>
                 <span class="text-sm font-mono text-accent-400">{{ traffic_total }}</span>
             </div>
@@ -459,8 +467,12 @@
                   '<svg class="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' +
                   '<div class="flex-1 min-w-0">' +
                     '<p class="text-sm font-semibold text-emerald-400 uppercase tracking-wider">Chain verified</p>' +
-                    '<p class="text-[12px] text-gray-300 mt-1 font-mono">' +
-                      escapeHtml(data.entries) + ' entries · ' +
+                    '<p class="text-[12px] text-gray-300 mt-1 font-mono" ' +
+                      'title="Hash-chained rows actually verified end-to-end. ' +
+                      'Smaller than the header Events counter because admin-only rows ' +
+                      'with no chain participation are excluded, and the badge in the ' +
+                      'sidebar is a rolling 1-hour count.">' +
+                      escapeHtml(data.entries) + ' chained entries verified · ' +
                       escapeHtml(data.agents) + ' agent' + (data.agents === 1 ? '' : 's') + ' · ' +
                       escapeHtml(data.orgs) + ' org' + (data.orgs === 1 ? '' : 's') + ' · ' +
                       escapeHtml(data.legacy_chain_rows) + ' legacy · ' +

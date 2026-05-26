@@ -61,6 +61,25 @@
 
 <div class="max-w-6xl space-y-6">
 
+    {# A-5 dogfood fix: server-rendered update-available banner.
+       The HTMX banner in base.html (#update-status-banner) still fires
+       and provides the rich expandable instructions, but it depends on
+       JS + an extra round-trip. This server-rendered banner appears
+       immediately on overview page-load so an operator on a slow link
+       or with HTMX failing for any reason still sees the advisory. #}
+    {% if update_available %}
+    <div class="p-3 bg-amber-500/10 border border-amber-500/40 rounded text-sm text-amber-300 flex items-center gap-2">
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span>
+            Mastio update available:
+            <code class="font-mono text-amber-200">{{ current_version }}</code>
+            &rarr;
+            <code class="font-mono text-amber-200">{{ latest_version }}</code>
+            (<a href="/proxy/updates" class="underline hover:text-amber-200">view changelog</a>)
+        </span>
+    </div>
+    {% endif %}
+
     <!-- Org identity card -->
     <div class="p-6 bg-surface-900/60 border border-gray-800/60 rounded-lg">
         <div class="flex items-start justify-between mb-4">
