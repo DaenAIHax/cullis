@@ -45,6 +45,7 @@ client``.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -242,8 +243,11 @@ class _EnrollmentMixin:
             cert_path, key_path: ADR-014 mTLS material. Required —
                 without them ``/v1/egress/*`` returns 401 from nginx.
             dpop_key_path: file holding the private DPoP JWK. Omit to
-                run without DPoP binding — only accepted while the
-                server's ``egress_dpop_mode`` is ``off`` or ``optional``.
+                auto-discover a ``dpop.jwk`` sibling next to ``cert_path``
+                (the layout written by ``enroll_via_dashboard_approval``).
+                If neither is provided the client runs without DPoP binding
+                — only accepted while the server's ``egress_dpop_mode`` is
+                ``off`` or ``optional``.
             agent_id, org_id: optional identity metadata. Populated on
                 the client instance; the Mastio doesn't require them on
                 egress calls (the cert SAN is authoritative) but callers
@@ -431,11 +435,52 @@ class _EnrollmentMixin:
         # caller explicitly invoked login_via_proxy[_with_local_key].
         instance._auto_login_pending = True
 
+        # B-4-style sister-file auto-discovery: if no explicit dpop_key_path
+        # was passed but a ``dpop.jwk`` sibling sits next to ``cert_path``,
+        # adopt it. ``enroll_via_dashboard_approval`` (PR #934) writes the
+        # four-file layout (cert.pem, key.pem, ca-chain.pem, dpop.jwk) so
+        # the caller can pass cert_path + key_path alone and the DPoP key
+        # loads transparently. Explicit ``dpop_key_path=`` always wins.
+        # Closes D-11 cold-reader 401 (2026-05-26 dogfood): post-#934 the
+        # Mastio enforces DPoP binding on /v1/llm/chat and a missing DPoP
+        # proof comes back as a silent 401 from the DPoP gate.
+        if dpop_key_path is None:
+            dpop_sibling = cert_path_obj.parent / "dpop.jwk"
+            if dpop_sibling.is_file():
+                dpop_key_path = dpop_sibling
+                log(
+                    "sdk",
+                    f"discovered dpop.jwk sibling → loading DPoP key from "
+                    f"{dpop_sibling}",
+                )
+
         if dpop_key_path is not None:
             from cullis_sdk.dpop import DpopKey
-            instance._egress_dpop_key = DpopKey.load(Path(dpop_key_path))
-            log("sdk", f"Loaded DPoP key from {dpop_key_path} "
-                       f"(jkt={instance._egress_dpop_key.thumbprint()[:16]}…)")
+            try:
+                instance._egress_dpop_key = DpopKey.load(Path(dpop_key_path))
+                log(
+                    "sdk",
+                    f"Loaded DPoP key from {dpop_key_path} "
+                    f"(jkt={instance._egress_dpop_key.thumbprint()[:16]}…)",
+                )
+            except (
+                OSError, ValueError, json.JSONDecodeError,
+                AttributeError, KeyError,
+            ) as exc:
+                # Don't crash the client just because a sibling JWK exists
+                # but is unreadable/malformed; the customer can still drive
+                # mTLS-only egress paths. AttributeError / KeyError cover
+                # JWKs missing required fields (kty, crv, x, y) that the
+                # cryptography lib surfaces as attribute/key access on
+                # downstream construction; treat them like a malformed
+                # JSON. Log loud at warning level so the cold-reader sees
+                # something before the eventual 401.
+                log(
+                    "sdk",
+                    f"warning: dpop.jwk at {dpop_key_path} present but "
+                    f"unreadable ({exc!r}) — egress DPoP disabled, /v1/llm/* "
+                    f"will 401 if the Mastio enforces dpop_required",
+                )
 
         log("sdk", f"Runtime client ready (mastio={mastio_url}, "
                    f"agent={instance._label})")
