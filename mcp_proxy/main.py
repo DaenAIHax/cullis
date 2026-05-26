@@ -32,18 +32,20 @@ configure_json_logging()
 _log = logging.getLogger("mcp_proxy")
 
 
-# Mastio version surfaced on /health. Injected at image build time via
-# ``--build-arg VERSION=...`` (release-mastio.yml passes the tag-derived
-# version, e.g. ``0.3.2``). Falls back to ``dev`` for source-checkout runs
-# so curl on a developer laptop yields ``"version":"dev"`` rather than a
-# stale literal that drifts from the running tag. Resolved at call time
-# so tests mutating ``CULLIS_MASTIO_VERSION`` cannot park a stale value
-# via import-time evaluation (caused 6+ flake reruns pre-PR #734).
+# Mastio version surfaced on /health. The bundle compose passes the
+# operator-side ``CULLIS_MASTIO_VERSION`` (read from proxy.env) into
+# the container as ``MCP_PROXY_VERSION`` — same source of truth as
+# version_check.py::get_current_version (the dashboard update-banner
+# code path). Falls back to ``dev`` for source-checkout / pytest runs
+# so curl on a developer laptop yields ``"version":"dev"`` rather
+# than a stale literal that drifts from the running tag. Resolved at
+# call time so tests mutating ``MCP_PROXY_VERSION`` cannot park a
+# stale value via import-time evaluation.
 def _mastio_version() -> str:
-    """Read CULLIS_MASTIO_VERSION at call time so tests that mutate
+    """Read MCP_PROXY_VERSION at call time so tests that mutate
     env do not park a stale value via import-time resolution. Falls
     back to 'dev' for source-checkout / pytest runs."""
-    return os.environ.get("CULLIS_MASTIO_VERSION", "dev")
+    return os.environ.get("MCP_PROXY_VERSION", "dev")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JWKS client reference (set during lifespan)

@@ -90,7 +90,19 @@ for f in "${BUNDLE_ALLOWLIST[@]}"; do
   cp -r "$SRC_BUNDLE/$f" "$TAR_ROOT/$f"
 done
 cp "$SRC_HELPER" "$TAR_ROOT/_common-deploy-helpers.sh"
-ok "  staged $(find "$TAR_ROOT" -mindepth 1 -maxdepth 1 | wc -l) entries in $TAR_ROOT"
+
+# Stamp the bundle with its version. ``generate-proxy-env.sh`` reads
+# this on first run and writes ``CULLIS_MASTIO_VERSION=<v>`` into
+# proxy.env, so the container ENV (``MCP_PROXY_VERSION``) carries a
+# real version instead of falling back to the compose ``unknown``
+# placeholder. Without this stamp, the dashboard update banner of a
+# freshly installed v0.5.5 bundle reads "Update available: 0.5.5"
+# because version_check.py compares ``unknown`` against the GitHub
+# releases API latest. Cold-reader-confidence-killer; see also
+# ``packaging/mastio-bundle/generate-proxy-env.sh`` which reads it.
+echo "$VERSION" > "$TAR_ROOT/VERSION"
+
+ok "  staged $(find "$TAR_ROOT" -mindepth 1 -maxdepth 1 | wc -l) entries in $TAR_ROOT (incl. VERSION=$VERSION)"
 
 # Tar.
 mkdir -p "$OUT_DIR"

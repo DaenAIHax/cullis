@@ -79,10 +79,14 @@ class UpdateStatus(BaseModel):
 def _current_version() -> str:
     """Resolve the running Mastio version.
 
-    Matches the env that ``mcp_proxy/main.py`` already reads at lifespan
-    start. ``dev`` when running from source.
+    Matches ``mcp_proxy/main.py::_mastio_version`` and
+    ``version_check.py::get_current_version``: the bundle compose
+    forwards the operator-side ``CULLIS_MASTIO_VERSION`` into the
+    container as ``MCP_PROXY_VERSION``, so that is the single source
+    of truth for "what is running right now". ``dev`` when running
+    from source / pytest.
     """
-    return os.environ.get("CULLIS_MASTIO_VERSION", "dev")
+    return os.environ.get("MCP_PROXY_VERSION", "dev")
 
 
 def _parse_semver(tag: str) -> Optional[tuple[int, int, int, str]]:
