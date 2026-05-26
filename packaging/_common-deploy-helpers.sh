@@ -120,17 +120,22 @@ _wipe_bind_dirs() {
     # Build the docker mount list + the in-container paths to wipe.
     # Each host dir is mounted at /wipe<N>; we only wipe contents
     # (``/wipe<N>/.`` glob) so the dir itself survives.
+    #
+    # D-10 dogfood fix: we do NOT use a host-side ``compgen`` empty
+    # check anymore. After init-permissions runs, ``data/`` is owned by
+    # uid 10001 mode 0700; a host operator with a different uid sees an
+    # empty listing even when ``mcp_proxy.db`` is sitting inside, and
+    # the old short-circuit silently skipped the docker wipe. The
+    # busybox ``find ... -delete`` call below is already idempotent on
+    # an empty mount, so we just always mount + always run it. The two
+    # extra docker argv args on a fresh-install ``--down --wipe-data``
+    # are cheaper than the failure mode (operator runs ``--wipe-data``,
+    # gets ``OK``, ``mcp_proxy.db`` survives, next ``./deploy.sh up``
+    # boots into the stale DB instead of a fresh Org CA).
     local idx=0
     for dir in "$@"; do
         [[ -n "$dir" ]] || continue
         [[ -d "$dir" ]] || continue
-        # Empty dir → skip both the mount and the rm to keep the
-        # docker argv short on a fresh-install down.
-        if ! compgen -G "$dir/*" >/dev/null 2>&1 \
-                && ! compgen -G "$dir/.[!.]*" >/dev/null 2>&1 \
-                && ! compgen -G "$dir/..?*" >/dev/null 2>&1; then
-            continue
-        fi
         mount_args+=( -v "$dir:/wipe$idx" )
         rm_paths+=( "/wipe$idx" )
         any_wiped=1

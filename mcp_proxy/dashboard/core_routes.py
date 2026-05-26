@@ -357,6 +357,28 @@ async def overview_page(request: Request):
         for a in (local_agents or [])[:3]
     ]
 
+    # A-5 dogfood fix: server-rendered update-available banner.
+    # ``base.html`` already mounts the HTMX banner at
+    # ``/proxy/api/update-status``, but a slow link / disabled JS / HTMX
+    # endpoint failure swallows the advisory silently. The overview
+    # landing page is the operator's first stop after login, so render
+    # a lightweight banner inline from the same cached values. Safe:
+    # ``get_update_status`` is a DB read with no GitHub call when the
+    # cache is fresh (24h window), and the helper already nulls the
+    # latest tag if it fails the safe-character class.
+    update_available = False
+    current_version = ""
+    latest_version = ""
+    try:
+        from mcp_proxy.dashboard.update_check import get_update_status
+        _status = await get_update_status()
+        update_available = bool(_status.available)
+        current_version = _status.current or ""
+        latest_version = _status.latest or ""
+    except Exception:
+        # Never block overview render on the advisory subsystem.
+        pass
+
     return templates.TemplateResponse("overview.html", _ctx(
         request, session,
         active="overview",
@@ -377,4 +399,7 @@ async def overview_page(request: Request):
         binding_active=binding_active,
         recent_agents=recent_agents,
         recent_backends=recent_backends,
+        update_available=update_available,
+        current_version=current_version,
+        latest_version=latest_version,
     ))

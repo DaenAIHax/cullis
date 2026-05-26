@@ -147,8 +147,15 @@ async def badge_audit(request: Request):
         count = row["cnt"] if row else 0
 
     if count:
+        # A-2 dogfood fix: explicit ``title`` so the operator knows the
+        # sidebar badge is a 1-hour rolling count, not the lifetime row
+        # count on /proxy/audit or the chain-verify "N entries"
+        # output. Different slices of the same table; the tooltip pins
+        # which one this number measures.
         return HTMLResponse(
-            f'<span class="px-1.5 py-0.5 rounded-full text-xs bg-teal-500/20 text-teal-400">{count}</span>'
+            f'<span class="px-1.5 py-0.5 rounded-full text-xs '
+            f'bg-teal-500/20 text-teal-400" '
+            f'title="Audit events in the last hour">{count}</span>'
         )
     return HTMLResponse("")
 

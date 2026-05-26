@@ -138,7 +138,19 @@ async def start_enrollment(
     except service.EnrollmentError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
 
-    base = str(request.base_url).rstrip("/")
+    # B-1 dogfood fix: prefer ``settings.proxy_public_url`` (which
+    # carries the operator-visible ``:9443`` of the nginx sidecar) over
+    # ``request.base_url`` (which, inside the uvicorn container behind
+    # nginx, resolves to ``http://mcp-proxy:8080/`` — missing scheme,
+    # missing port, missing public hostname). The Connector polls the
+    # ``poll_url`` literally; an internal URL would either fail DNS or
+    # land on a port the host machine cannot reach.
+    from mcp_proxy.config import get_settings as _get_settings_for_base
+    _public = (_get_settings_for_base().proxy_public_url or "").rstrip("/")
+    if _public:
+        base = _public
+    else:
+        base = str(request.base_url).rstrip("/")
     logger.info(
         "enrollment_started",
         extra={

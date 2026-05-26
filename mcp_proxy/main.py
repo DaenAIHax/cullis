@@ -2393,8 +2393,15 @@ app.include_router(downloads_router)
 
 # Federation update framework (PR 4 of imp/federation_hardening_plan.md
 # Parte 1) — admin list / apply / rollback under /proxy/updates.
-from mcp_proxy.dashboard.updates_router import router as updates_router
+from mcp_proxy.dashboard.updates_router import (
+    alias_router as updates_alias_router,
+    router as updates_router,
+)
 app.include_router(updates_router)
+# A-4 dogfood fix: ``/proxy/update`` (singular) 301 → ``/proxy/updates``
+# so a customer typo lands on the dashboard page instead of FastAPI's
+# bare ``{"detail":"Not Found"}`` JSON response.
+app.include_router(updates_alias_router)
 
 # Enterprise plugin routers. Mounted after every core router so a
 # plugin can never shadow a core endpoint by registering a conflicting

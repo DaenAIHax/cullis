@@ -73,6 +73,32 @@ _log = logging.getLogger("mcp_proxy.dashboard.updates")
 router = APIRouter(prefix="/proxy/updates", tags=["dashboard", "updates"])
 
 
+# A-4 dogfood fix: a customer mistypes the URL as ``/proxy/update``
+# (singular) and gets FastAPI's bare ``{"detail":"Not Found"}`` JSON
+# instead of the dashboard 404. The alias router below catches the
+# singular form and 301-redirects to the canonical plural path so the
+# typo lands on the right page rather than a confusing JSON blob.
+# Kept on a dedicated APIRouter (no prefix) so it sits next to the
+# canonical ``/proxy/updates`` tree in ``main.py`` ``include_router``
+# but does not inherit the plural prefix.
+alias_router = APIRouter(tags=["dashboard", "updates"])
+
+
+@alias_router.get("/proxy/update", include_in_schema=False)
+async def _redirect_singular_to_plural(request: Request) -> RedirectResponse:
+    """Permanent redirect ``/proxy/update`` → ``/proxy/updates``.
+
+    Preserves any query string so a hand-crafted link with filters or
+    flash params survives the redirect. ``301`` (vs ``308``) so naive
+    HTTP clients that downgrade POST → GET on redirect still land
+    correctly; the singular form is never a legitimate mutation
+    target.
+    """
+    qs = request.url.query
+    target = "/proxy/updates" + (f"?{qs}" if qs else "")
+    return RedirectResponse(target, status_code=301)
+
+
 _APPLY_CONFIRM = "APPLY"
 _ROLLBACK_CONFIRM = "ROLLBACK"
 
