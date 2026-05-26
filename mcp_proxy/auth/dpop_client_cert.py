@@ -58,18 +58,37 @@ def _build_htu(request: Request) -> tuple[str, ...]:
     request 401'd with "htu mismatch" even though the client was
     perfectly honest about which URL it dialled.
 
+    D-12 follow-up (post-#939): the dogfood VM showed that even with
+    the v2 permissive set, ``str(request.url)`` itself was wrong —
+    nginx forwarded ``Host: 192.168.122.62`` (with the ``$host``
+    variable stripping the ``:9443`` port the client actually dialled),
+    so uvicorn reconstructed ``request.url`` without the port and none
+    of the v2 candidates matched the client-signed htu (which carries
+    ``:9443``). The nginx config now forwards ``Host: $http_host``
+    (port preserved) and publishes the explicit ``X-Forwarded-{Host,
+    Port,Proto}`` triplet. We add a candidate assembled from that
+    triplet directly so the htu set still matches even if a future
+    middleware ordering regression leaves ``request.url`` pointed at
+    the upstream socket again.
+
     We now return every URL the same proxy could legitimately answer
     on for this request:
 
       * ``str(request.url)`` — the actual URL the ASGI layer saw
-        (scheme + host + path as the client framed it).
+        (scheme + host + path as the client framed it). With the
+        D-12 nginx ``Host: $http_host`` change this carries the port
+        the client dialled.
       * ``proxy_public_url + request.url.path`` — the operator-pinned
         URL, when set. Keeps the legacy contract for deploys whose SDK
         signs against the published proxy_public_url.
       * ``"{scheme}://{Host header}{path}"`` — the URL implied by the
-        ``Host:`` header (or ``X-Forwarded-Host`` once nginx normalises
-        it), in case nginx + uvicorn disagree on which one is in
-        ``request.url`` for this deployment.
+        ``Host:`` header.
+      * ``"{X-Forwarded-Proto}://{X-Forwarded-Host}:{X-Forwarded-Port}
+        {path}"`` — the URL implied by the explicit forwarded triplet
+        nginx publishes (D-12). Belt-and-suspenders: if the
+        ProxyHeadersMiddleware ordering or a future Host-header rewrite
+        ever drops the port from ``request.url`` again, this candidate
+        still carries it.
 
     ``verify_dpop_proof`` accepts any ``Sequence[str]`` and matches on
     set membership, so the returned tuple is deduplicated but order is
@@ -101,6 +120,36 @@ def _build_htu(request: Request) -> tuple[str, ...]:
         scheme = request.url.scheme or "https"
         host_url = f"{scheme}://{host_header}{path}"
         candidates.append(host_url)
+
+    # 4) (D-12) The URL implied by the explicit X-Forwarded-{Proto,
+    #    Host,Port} triplet nginx now publishes. Combines the host
+    #    (which may or may not already carry a port) with the port the
+    #    client reached the edge on. Only emit when we have at least a
+    #    forwarded-host to anchor on; otherwise we'd just rebuild the
+    #    Host-header URL with weaker defaults.
+    fwd_host = request.headers.get("x-forwarded-host")
+    if fwd_host:
+        fwd_proto = (
+            request.headers.get("x-forwarded-proto")
+            or request.url.scheme
+            or "https"
+        )
+        fwd_port = request.headers.get("x-forwarded-port") or ""
+        # If the forwarded-host already carries a port don't append a
+        # second one ("host:9443:9443" would be a parse error). The
+        # check excludes IPv6 colons inside ``[::1]`` style literals
+        # because the port (if any) sits OUTSIDE the brackets in that
+        # form, so a closing-bracket-then-colon is the only "has port"
+        # signal we trust.
+        if fwd_host.startswith("["):
+            has_port = "]:" in fwd_host
+        else:
+            has_port = ":" in fwd_host
+        if fwd_port and not has_port:
+            netloc = f"{fwd_host}:{fwd_port}"
+        else:
+            netloc = fwd_host
+        candidates.append(f"{fwd_proto}://{netloc}{path}")
 
     # Deduplicate while preserving the candidate set; tuple order is
     # not load-bearing because the verifier compares set membership.

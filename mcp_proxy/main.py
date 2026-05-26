@@ -1787,6 +1787,42 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Uvicorn ProxyHeadersMiddleware (D-12)
+#
+# The deployed image runs uvicorn with ``--proxy-headers
+# --forwarded-allow-ips '*'`` (see ``mcp_proxy/Dockerfile`` CMD), which
+# wraps the ASGI app with the same middleware externally. Registering
+# it here too is harmless (idempotent — re-applies the same
+# scheme/client rewrite from the X-Forwarded-Proto / X-Forwarded-For
+# headers) and gives the in-process test suite, ``uvicorn.run``
+# call sites without the CLI flag, and any future ASGI server choice
+# the same scheme/client rewrite the deployed shape relies on. Without
+# this registration, ``request.url.scheme`` would fall back to the
+# upstream socket's scheme (``http`` on the docker network) and every
+# DPoP htu candidate that anchors on ``str(request.url)`` would emit
+# ``http://...`` while the client signs ``https://...``.
+#
+# Registered LAST so Starlette's LIFO order runs it FIRST on every
+# inbound request — the X-Forwarded-* rewrite has to happen before
+# downstream middleware / dep observes ``request.url``. ``trusted_hosts
+# ="*"`` matches the CLI ``--forwarded-allow-ips '*'`` posture; the
+# backend listener (9100) is never published to the host or LAN per the
+# Dockerfile contract, so any inbound request necessarily traversed the
+# nginx sidecar and the X-Forwarded headers are trusted by network
+# topology.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from uvicorn.middleware.proxy_headers import (
+    ProxyHeadersMiddleware as _ProxyHeadersMiddleware,
+)
+
+app.add_middleware(_ProxyHeadersMiddleware, trusted_hosts="*")
+_log.info(
+    "Uvicorn ProxyHeadersMiddleware registered in-app (D-12 belt-and-suspenders)"
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Routers
 # ─────────────────────────────────────────────────────────────────────────────
 
