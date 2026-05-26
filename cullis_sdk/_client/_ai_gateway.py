@@ -27,14 +27,56 @@ from typing import Iterator
 import httpx
 
 
+def _coerce_chat_request(request: dict | None, kwargs: dict) -> dict:
+    """Normalise the dict-or-kwargs call shape used by
+    :meth:`_AiGatewayMixin.chat_completion` and
+    :meth:`_AiGatewayMixin.chat_completion_stream`.
+
+    The historical signature accepted a single positional dict
+    (matching the audit-pinned request envelope). Cold-readers
+    familiar with the OpenAI / Anthropic SDK pattern naturally write
+    ``client.chat_completion(model="...", messages=[...])`` and got a
+    ``TypeError`` from the unexpected kwargs. This helper accepts
+    either form, rejects ambiguous "both at once" calls so a typo
+    cannot silently drop one half, and defends against non-dict
+    positional args (e.g. someone passing a string model name).
+    """
+    if request is not None and kwargs:
+        raise TypeError(
+            "chat_completion accepts either a request dict or kwargs, "
+            "not both. Pick one style."
+        )
+    if request is None:
+        request = kwargs
+    if not isinstance(request, dict):
+        raise TypeError(
+            f"chat_completion request must be a dict (or kwargs); "
+            f"got {type(request).__name__}"
+        )
+    return request
+
+
 class _AiGatewayMixin:
     """AI gateway egress, MCP aggregator and tool-call PDP on
     ``CullisClient``."""
 
     # ── ADR-017 — AI gateway egress ────────────────────────────────
-    def chat_completion(self, request: dict) -> dict:
+    def chat_completion(
+        self, request: dict | None = None, **kwargs
+    ) -> dict:
         """Forward an OpenAI-compatible chat completion to Mastio's
         ``/v1/llm/chat`` endpoint.
+
+        Accepts two equivalent calling conventions, the historical
+        dict-only form and the OpenAI / Anthropic SDK kwargs form::
+
+            client.chat_completion({"model": "...", "messages": [...]})
+            client.chat_completion(model="...", messages=[...])
+
+        Both shapes resolve to the same downstream request envelope.
+        Mixing them in a single call (passing ``request`` AND extra
+        kwargs) is rejected with ``TypeError`` so an ambiguous call
+        site does not silently drop one half.
 
         ``request`` is the OpenAI ChatCompletion body (model, messages,
         max_tokens, temperature). Returns the parsed response dict
@@ -54,12 +96,18 @@ class _AiGatewayMixin:
         body intact so callers can distinguish 401 (unauth), 502
         (gateway upstream), 504 (timeout), 501 (not implemented).
         """
+        request = _coerce_chat_request(request, kwargs)
         resp = self._egress_http("post", "/v1/llm/chat", json=request)
         resp.raise_for_status()
         return resp.json()
 
-    def chat_completion_stream(self, request: dict) -> Iterator[str]:
+    def chat_completion_stream(
+        self, request: dict | None = None, **kwargs
+    ) -> Iterator[str]:
         """Streaming variant of :meth:`chat_completion`.
+
+        Accepts the same dict-or-kwargs calling convention as
+        :meth:`chat_completion` (see that docstring for the rationale).
 
         Forces ``stream=True`` on the request and yields SSE frame
         strings exactly as they arrive from the Mastio, including
@@ -75,6 +123,7 @@ class _AiGatewayMixin:
         the marker can re-open the stream once with the fresh nonce.
         On any other status we surface immediately.
         """
+        request = _coerce_chat_request(request, kwargs)
         body = dict(request)
         body["stream"] = True
         path = "/v1/llm/chat"
