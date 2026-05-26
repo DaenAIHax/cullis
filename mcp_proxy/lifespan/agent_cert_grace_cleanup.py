@@ -87,6 +87,22 @@ async def _sweep_once() -> int:
     in-between updates zero rows and emits zero audit. The
     ``previous_grace_period_expires_at IS NOT NULL`` guard prevents
     cleaning up rows that never had a previous-stash to begin with.
+
+    A-3 no-false-positive contract (pinned by
+    ``test/unit/test_grace_cleanup_no_false_positive.py``): agents that
+    have never rotated their cert (``previous_grace_period_expires_at
+    IS NULL``) MUST be silently skipped — no UPDATE, no
+    ``agent.cert_grace_period_expired`` audit row, no log line.
+    Operators on the dogfood VM read the audit action name as "the
+    agent's cert expired" rather than "the stashed *previous* cert's
+    grace window expired"; emitting the audit row for a fresh agent
+    whose real cert is valid for another 18 months sends a false
+    rotation-failure signal. The SQL ``IS NOT NULL`` filter on BOTH
+    the SELECT and the UPDATE is load-bearing — do not relax to
+    ``previous_grace_period_expires_at < :now`` alone, because string
+    comparison against NULL is implementation-defined across SQLite
+    and Postgres and a future driver swap could start matching NULL
+    rows.
     """
     from mcp_proxy.auth.cert_grace import now_utc_iso
     from mcp_proxy.db import get_db, log_audit
