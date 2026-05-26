@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import time
+from typing import Sequence
 from urllib.parse import urlparse, urlunparse
 
 from cryptography.hazmat.primitives import serialization
@@ -193,7 +194,7 @@ def _normalize_htu(url: str) -> str:
 async def verify_dpop_proof(
     proof_jwt: str,
     htm: str,
-    htu: str,
+    htu: "str | Sequence[str]",
     access_token: str | None = None,
     require_nonce: bool = True,
 ) -> str:
@@ -202,6 +203,20 @@ async def verify_dpop_proof(
     Returns the JWK thumbprint (jkt) on success.
     Raises HTTPException 401 on any failure.
     JTI is consumed only after all checks pass.
+
+    ``htu`` accepts either a single string (backward-compat, pre-D-11 v2
+    callers) or a sequence of candidate URLs — the proof is accepted if
+    its ``htu`` claim normalizes to ANY of the candidates. This widens
+    the binding when the same Mastio is legitimately reachable under
+    multiple hostnames (pinned ``MCP_PROXY_PROXY_PUBLIC_URL`` vs the
+    LAN IP / Host header the client actually used). Security-wise this
+    is safe: htu is the anti-replay binding, not identity — the client
+    must still possess the registered DPoP key to sign the proof, so
+    accepting alternative URLs the same proxy answers on does not
+    reduce the security posture; it just stops penalising deploy
+    topologies (cold-reader on Linux, LAN IP access) where the pinned
+    URL and the reached URL legitimately differ. Root cause confirmed
+    via the dogfood VM 2026-05-26 — see fix/d11-v2-server-permissive-htu.
 
     12-point verification:
       1. JWT structurally valid
@@ -213,7 +228,7 @@ async def verify_dpop_proof(
       7. jti present and not replayed
       8. iat within [-clock_skew, iat_window]
       9. htm matches (case-insensitive)
-      10. htu matches (normalized)
+      10. htu matches at least one candidate (normalized)
       11. ath == base64url(SHA-256(access_token)) if provided
       12. nonce matches if require_nonce
     """
@@ -311,9 +326,17 @@ async def verify_dpop_proof(
         )
 
     # -- 10. htu
-    expected_norm = _normalize_htu(htu)
+    # Accept either a single string (backward-compat) or a Sequence of
+    # candidate URLs. The proof's htu claim must normalize to AT LEAST
+    # ONE candidate — D-11 v2 root cause fix: a Mastio reachable under
+    # both the pinned proxy_public_url and the actual request URL (LAN
+    # IP, Host header) should accept proofs signed against either.
+    htu_candidates: list[str] = (
+        [htu] if isinstance(htu, str) else list(htu)
+    )
+    expected_norms = {_normalize_htu(h) for h in htu_candidates if h}
     got_norm = _normalize_htu(claims.get("htu", ""))
-    if got_norm != expected_norm:
+    if got_norm not in expected_norms:
         # Server-side: log structured diagnostics so operators can correlate
         # 401s with a wrong MCP_PROXY_PROXY_PUBLIC_URL (memory:
         # feedback_proxy_env_public_url_vm). Do NOT log the jkt to keep
@@ -321,7 +344,7 @@ async def verify_dpop_proof(
         _log.warning(
             "DPoP htu mismatch",
             extra={
-                "expected_htu": expected_norm,
+                "expected_htus": sorted(expected_norms),
                 "got_htu": got_norm,
                 "hint": "htu_mismatch_check_proxy_public_url",
             },
@@ -335,7 +358,7 @@ async def verify_dpop_proof(
         else:
             detail = (
                 f"Invalid DPoP proof: htu mismatch "
-                f"(expected={expected_norm!r}, got={got_norm!r})"
+                f"(expected={sorted(expected_norms)!r}, got={got_norm!r})"
             )
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, detail, headers=headers

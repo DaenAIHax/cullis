@@ -45,15 +45,66 @@ _REQUIRE_NONCE_DEFAULT = True
 _MODES = frozenset({"off", "optional", "required"})
 
 
-def _build_htu(request: Request) -> str:
-    """Mirror ``dpop_api_key._build_htu`` — same htu construction so a
-    deploy that flips between the two during a transition window has
-    consistent proof binding."""
+def _build_htu(request: Request) -> tuple[str, ...]:
+    """Return the tuple of acceptable htu URLs for this request.
+
+    D-11 v2 root cause fix (dogfood VM 2026-05-26): when the bundle's
+    pinned ``MCP_PROXY_PROXY_PUBLIC_URL`` (e.g. ``host.docker.internal``,
+    the default community quickstart hint) does not resolve from the
+    client's host (Linux cold-reader without a hosts entry, LAN IP
+    access, alternative DNS), the SDK signed proofs against the actual
+    URL it reached (e.g. ``https://192.168.x.x:9443/...``) and the
+    server pinned the comparison to the proxy_public_url, so every
+    request 401'd with "htu mismatch" even though the client was
+    perfectly honest about which URL it dialled.
+
+    We now return every URL the same proxy could legitimately answer
+    on for this request:
+
+      * ``str(request.url)`` — the actual URL the ASGI layer saw
+        (scheme + host + path as the client framed it).
+      * ``proxy_public_url + request.url.path`` — the operator-pinned
+        URL, when set. Keeps the legacy contract for deploys whose SDK
+        signs against the published proxy_public_url.
+      * ``"{scheme}://{Host header}{path}"`` — the URL implied by the
+        ``Host:`` header (or ``X-Forwarded-Host`` once nginx normalises
+        it), in case nginx + uvicorn disagree on which one is in
+        ``request.url`` for this deployment.
+
+    ``verify_dpop_proof`` accepts any ``Sequence[str]`` and matches on
+    set membership, so the returned tuple is deduplicated but order is
+    not load-bearing.
+
+    Security: htu is the anti-replay binding, not identity. The client
+    still has to sign with the registered DPoP key, so widening the
+    accepted URL set does not reduce the security posture — it just
+    stops penalising deploys where the pinned URL and the reached URL
+    legitimately differ.
+    """
     settings = get_settings()
+    path = request.url.path
+
+    candidates: list[str] = []
+    # 1) The URL the ASGI layer materialised for this request.
+    candidates.append(str(request.url))
+
+    # 2) The operator-pinned proxy_public_url + the request path.
     base = (settings.proxy_public_url or "").rstrip("/")
     if base:
-        return base + request.url.path
-    return str(request.url)
+        candidates.append(base + path)
+
+    # 3) The URL implied by the Host header (covers Forwarded-Host
+    #    flows where nginx rewrites the host but request.url still
+    #    points at the upstream socket name).
+    host_header = request.headers.get("host")
+    if host_header:
+        scheme = request.url.scheme or "https"
+        host_url = f"{scheme}://{host_header}{path}"
+        candidates.append(host_url)
+
+    # Deduplicate while preserving the candidate set; tuple order is
+    # not load-bearing because the verifier compares set membership.
+    return tuple(dict.fromkeys(candidates))
 
 
 def _resolve_mode() -> str:
