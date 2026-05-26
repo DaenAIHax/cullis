@@ -454,7 +454,7 @@ async def approve(
             http_status=503,
         )
 
-    cert_pem = agent_manager.sign_external_pubkey(
+    cert_pem = await agent_manager.sign_external_pubkey(
         pubkey_pem=record["pubkey_pem"],
         agent_name=agent_id,
     )

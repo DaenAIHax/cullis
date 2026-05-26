@@ -171,7 +171,7 @@ async def create_agent(
             detail="cert_pem and private_key_pem must be provided together",
         )
     else:
-        cert_pem, key_pem = mgr._generate_agent_cert(agent_name)
+        cert_pem, key_pem = await mgr._generate_agent_cert(agent_name)
         minted_locally = True
 
     # Bug #6 tactical fix: persist the agent row atomically with the

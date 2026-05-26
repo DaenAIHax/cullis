@@ -704,12 +704,20 @@ class AgentManager:
         if not self.ca_loaded:
             raise RuntimeError("Org CA not loaded — cannot emit nginx server cert")
         if self._mastio_ca_key is None or self._mastio_ca_cert is None:
-            raise RuntimeError(
-                "Mastio Intermediate CA not loaded, cannot emit nginx "
-                "server cert. Three-tier PKI hardening (audit 2026-05-18) "
-                "requires the nginx server cert to be signed by the "
-                "Intermediate, not the Org Root. Call ensure_mastio_identity() first.",
-            )
+            # D-13 — lazy reload. Another worker may have minted and
+            # persisted the Intermediate while this worker's bootstrap
+            # silently failed (transient DB lock, KMS provider initial
+            # probe race). The pair is on disk; just re-read it.
+            # Mirrors the D-9 winner-election adopt pattern at runtime
+            # instead of only at boot.
+            reloaded = await self._reload_intermediate_ca_from_persistence()
+            if not reloaded:
+                raise RuntimeError(
+                    "Mastio Intermediate CA not loaded, cannot emit nginx "
+                    "server cert. Three-tier PKI hardening (audit 2026-05-18) "
+                    "requires the nginx server cert to be signed by the "
+                    "Intermediate, not the Org Root. Call ensure_mastio_identity() first.",
+                )
 
         from pathlib import Path
 
@@ -940,7 +948,7 @@ class AgentManager:
 
     # ── Certificate generation ──────────────────────────────────────
 
-    def _generate_agent_cert(self, agent_name: str) -> tuple[str, str]:
+    async def _generate_agent_cert(self, agent_name: str) -> tuple[str, str]:
         """Generate EC P-256 key + x509 cert for an internal agent.
 
         Cert fields:
@@ -968,10 +976,18 @@ class AgentManager:
         in EC at the next enrollment.
         """
         if self._mastio_ca_key is None or self._mastio_ca_cert is None:
-            raise RuntimeError(
-                "Mastio Intermediate CA not loaded, cannot sign agent cert. "
-                "Call ensure_mastio_identity() first.",
-            )
+            # D-13 — lazy reload. Another worker may have minted and
+            # persisted the Intermediate while this worker's bootstrap
+            # silently failed (transient DB lock, KMS provider initial
+            # probe race). The pair is on disk; just re-read it.
+            # Mirrors the D-9 winner-election adopt pattern at runtime
+            # instead of only at boot.
+            reloaded = await self._reload_intermediate_ca_from_persistence()
+            if not reloaded:
+                raise RuntimeError(
+                    "Mastio Intermediate CA not loaded, cannot sign agent cert. "
+                    "Call ensure_mastio_identity() first.",
+                )
 
         # Generate agent key pair
         agent_key = ec.generate_private_key(ec.SECP256R1())
@@ -1015,7 +1031,7 @@ class AgentManager:
         )
         return cert_pem, key_pem
 
-    def sign_external_pubkey(self, *, pubkey_pem: str, agent_name: str) -> str:
+    async def sign_external_pubkey(self, *, pubkey_pem: str, agent_name: str) -> str:
         """Sign an externally-generated public key with the Mastio Intermediate CA.
 
         Used by the Connector enrollment flow: the Connector keeps its
@@ -1032,10 +1048,18 @@ class AgentManager:
         loaded or the PEM is malformed.
         """
         if self._mastio_ca_key is None or self._mastio_ca_cert is None:
-            raise RuntimeError(
-                "Mastio Intermediate CA not loaded, cannot sign external pubkey. "
-                "Call ensure_mastio_identity() first.",
-            )
+            # D-13 — lazy reload. Another worker may have minted and
+            # persisted the Intermediate while this worker's bootstrap
+            # silently failed (transient DB lock, KMS provider initial
+            # probe race). The pair is on disk; just re-read it.
+            # Mirrors the D-9 winner-election adopt pattern at runtime
+            # instead of only at boot.
+            reloaded = await self._reload_intermediate_ca_from_persistence()
+            if not reloaded:
+                raise RuntimeError(
+                    "Mastio Intermediate CA not loaded, cannot sign external pubkey. "
+                    "Call ensure_mastio_identity() first.",
+                )
 
         public_key = serialization.load_pem_public_key(pubkey_pem.encode())
 
@@ -1114,7 +1138,7 @@ class AgentManager:
         agent_id = f"{self._org_id}::{agent_name}"
 
         # 1. Generate cert + key
-        cert_pem, key_pem = self._generate_agent_cert(agent_name)
+        cert_pem, key_pem = await self._generate_agent_cert(agent_name)
 
         # 2. Store private key
         try:
@@ -1186,6 +1210,77 @@ class AgentManager:
         current signer.
         """
         self._active_key = await self._keystore.current_signer()
+
+    async def _reload_intermediate_ca_from_persistence(self) -> bool:
+        """D-13 cold-reader dogfood (2026-05-26) — lazy reload helper.
+
+        Re-reads the Mastio Intermediate CA pair from the source-of-truth
+        (KMS provider first, legacy ``proxy_config`` rows as fallback) and
+        adopts it into ``self._mastio_ca_key`` / ``self._mastio_ca_cert``.
+        Returns ``True`` on a successful reload, ``False`` when no
+        persisted pair is available anywhere.
+
+        Why this exists: ``main.py:332-336`` wraps
+        ``ensure_mastio_identity()`` in a try/except Exception that
+        swallows any transient bootstrap failure silently (DB lock race,
+        KMS provider probe timeout, etc). With ``MASTIO_WORKERS=4`` one
+        of the uvicorn workers can lose the race and end up with
+        ``_mastio_ca_key=None`` while every other worker has the pair
+        loaded. The dashboard load-balances admin requests across all
+        four workers, so roughly one in four ``Create Agent`` clicks
+        hits the broken worker and 500s with the lottery pattern that
+        frustrates cold-readers. The pair IS on disk — some other
+        worker won the persist race in ``_persist_intermediate_ca`` —
+        so we just need to re-read it instead of failing.
+
+        Mirrors the loser-adoption branch inside ``_mint_mastio_ca``
+        (see line 1772+) but exposes it as a runtime entrypoint signers
+        can call when their in-memory state went missing post-boot.
+        Idempotent: safe to call on a manager that already has the pair
+        loaded (it overwrites with the same persisted material).
+        """
+        ca_key_pem: str | None = None
+        ca_cert_pem: str | None = None
+        try:
+            from mcp_proxy.kms import get_kms_provider
+            loaded = await get_kms_provider().load_intermediate_ca()
+            if loaded is not None:
+                ca_key_pem, ca_cert_pem = loaded
+        except Exception as exc:  # noqa: BLE001 — defensive on KMS failure
+            logger.warning(
+                "D-13 lazy reload: KMSProvider.load_intermediate_ca "
+                "failed: %s — falling back to legacy proxy_config rows",
+                exc,
+            )
+        if not ca_key_pem or not ca_cert_pem:
+            ca_key_pem = await get_config("mastio_ca_key")
+            ca_cert_pem = await get_config("mastio_ca_cert")
+
+        if not ca_key_pem or not ca_cert_pem:
+            return False
+
+        try:
+            self._mastio_ca_key = serialization.load_pem_private_key(
+                ca_key_pem.encode(), password=None,
+            )
+            self._mastio_ca_cert = x509.load_pem_x509_certificate(
+                ca_cert_pem.encode(),
+            )
+        except Exception as exc:  # noqa: BLE001 — corrupt PEM
+            logger.warning(
+                "D-13 lazy reload: failed to parse persisted Mastio "
+                "Intermediate CA pair: %s",
+                exc,
+            )
+            return False
+
+        logger.info(
+            "D-13 lazy reload: Mastio Intermediate CA adopted from "
+            "persistence (CN=%s) — bootstrap had silently failed on "
+            "this worker",
+            self._mastio_ca_cert.subject.rfc4514_string(),
+        )
+        return True
 
     async def ensure_mastio_identity(self) -> None:
         """Load or generate the Mastio CA + leaf identity (EC P-256 / ES256).
@@ -1946,7 +2041,15 @@ class AgentManager:
         signing / counter-signing calls see the new row.
         """
         if self._mastio_ca_key is None or self._mastio_ca_cert is None:
-            raise RuntimeError("Mastio CA not loaded — cannot sign leaf")
+            # D-13 — lazy reload. Another worker may have minted and
+            # persisted the Intermediate while this worker's bootstrap
+            # silently failed (transient DB lock, KMS provider initial
+            # probe race). The pair is on disk; just re-read it.
+            # Mirrors the D-9 winner-election adopt pattern at runtime
+            # instead of only at boot.
+            reloaded = await self._reload_intermediate_ca_from_persistence()
+            if not reloaded:
+                raise RuntimeError("Mastio CA not loaded — cannot sign leaf")
 
         leaf_key = ec.generate_private_key(ec.SECP256R1())
         proxy_spiffe = f"spiffe://{self._trust_domain}/proxy/{self._org_id}"
