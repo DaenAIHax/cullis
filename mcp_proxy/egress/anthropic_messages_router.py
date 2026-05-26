@@ -277,7 +277,7 @@ async def anthropic_messages(
         result = await dispatch(
             req=chat_req,
             agent_id=agent.agent_id,
-            org_id=agent.org_id,
+            org_id=settings.org_id,
             trace_id=trace_id,
             settings=settings,
         )

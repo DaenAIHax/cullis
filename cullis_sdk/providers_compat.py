@@ -228,16 +228,23 @@ def cullis_httpx_client(
     cert, key, ca, dpop_path = _resolve_identity_files(identity_dir)
     dpop_key = DpopKey.load(dpop_path)
 
-    # ``cert`` + ``verify`` MUST go on the inner transport: when a
-    # ``transport=`` is passed to ``httpx.Client``, those kwargs on the
-    # Client are silently ignored (httpx contract). We attach them
-    # explicitly to the underlying HTTPTransport so the DPoP wrapper is
-    # purely an interceptor on the request/response axis and the TLS
-    # layer behaves exactly as a plain ``httpx.Client(cert=, verify=)``.
-    inner = httpx.HTTPTransport(
-        cert=(str(cert), str(key)),
-        verify=str(ca) if ca else True,
-    )
+    # Build an explicit ``ssl.SSLContext`` with the client cert chain
+    # loaded into it. We avoid httpx's legacy ``cert=(crt, key)`` +
+    # ``verify=<path>`` kwargs because that combination silently fails
+    # mTLS handshake under some httpx + OpenSSL builds — the server
+    # sees ``ssl_client_verify=NONE`` even though both files were
+    # configured (reproduced 2026-05-27 ADR-038 pre-tag validation
+    # against the Mastio mTLS sidecar). The explicit-SSLContext path
+    # mirrors what ``CullisClient._build_proxy_http_client`` already
+    # does and works against the same nginx + cert chain.
+    import ssl
+    if ca is not None:
+        ssl_ctx = ssl.create_default_context(cafile=str(ca))
+    else:
+        ssl_ctx = ssl.create_default_context()
+    ssl_ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+
+    inner = httpx.HTTPTransport(verify=ssl_ctx)
     transport = _DpopTransport(inner, dpop_key)
 
     kwargs: dict[str, Any] = dict(extra_httpx_kwargs or {})
