@@ -46,10 +46,11 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 `cullis-sdk` is the Python client an autonomous agent uses to talk to Mastio. It handles mTLS client cert presentation, DPoP signing, token refresh, and request retries, exposing a small surface that maps onto what an agent actually does: ask the LLM something, list the MCP tools it is allowed to call, call one, and let the audit trail accumulate underneath.
 
-Two entry points, depending on how the identity gets to the agent:
+Three entry points, depending on how the identity gets to the agent:
 
 - `CullisClient.from_enrollment(enroll_url)` is the quickstart path. The dashboard issues a one-shot enrollment URL; the SDK calls it, persists the credentials locally, generates a DPoP keypair, and returns a ready-to-use client. No file paths to wire up.
-- `CullisClient.from_identity_dir(mastio_url, cert_path=..., key_path=..., dpop_key_path=...)` is the production path. Cert + key are delivered out-of-band (BYOCA, KMS, systemd LoadCredential) and the SDK loads them from disk. The cert and key are the credential. There is no shared API key to leak.
+- `CullisClient.enroll_via_dashboard_approval(mastio_url, requester_name=..., requester_email=..., save_to=...)` is the scripted bootstrap path. The SDK submits a CSR, polls until an admin clicks Approve in the dashboard, then writes the identity-dir layout (`agent.key + agent.crt + dpop.jwk + meta.json`) and returns the client. Useful for CI/CD onboarding flows where no human is at a terminal to copy a URL.
+- `CullisClient.from_identity_dir(mastio_url, cert_path=..., key_path=...)` is the production path. Cert + key are delivered out-of-band (BYOCA, KMS, systemd LoadCredential) and the SDK loads them from disk. The DPoP key auto-discovers from a `dpop.jwk` sibling next to `cert_path`. The cert and key are the credential. There is no shared API key to leak.
 
 `chat_completion` and `chat_completion_stream` route through Mastio's `/v1/llm/chat` endpoint. The provider, the model, and the upstream API key are configured org-side, in the Mastio dashboard. The agent never sees the upstream key, and every prompt and response is audit-logged with the agent identity attached.
 
@@ -64,10 +65,10 @@ client = CullisClient.from_enrollment(
     verify_tls=False,  # self-signed Org CA on a laptop; pin ca_chain_path in prod
 )
 
-response = client.chat_completion({
-    "model": "claude-sonnet-4-6",
-    "messages": [{"role": "user", "content": "Screen the latest applicant batch."}],
-})
+response = client.chat_completion(
+    model="claude-sonnet-4-6",
+    messages=[{"role": "user", "content": "Screen the latest applicant batch."}],
+)
 
 for tool in client.list_mcp_tools():
     print(tool["name"], tool.get("description", ""))
