@@ -24,9 +24,12 @@
             <svg class="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             <div class="flex-1">
                 <p class="text-sm font-semibold text-emerald-400 mb-1">Agent created</p>
-                <p class="text-xs text-emerald-500/70 mb-3">The Mastio minted a TLS client cert (ADR-014) — that IS the agent's credential. Open the agent's detail page to download cert + key.</p>
+                <p class="text-xs text-emerald-500/70 mb-3">The Mastio minted a TLS client cert (ADR-014), that IS the agent's credential. Open the agent's detail page and download the identity bundle, it contains agent.crt + agent.key + ca-chain.pem in one zip.</p>
                 <p class="text-xs text-gray-500 mb-1">Agent: <span class="font-mono text-gray-400">{{ new_agent_id }}</span></p>
-                <a href="/proxy/agents/{{ new_agent_id }}" class="text-xs text-accent-400 hover:underline">Open agent detail →</a>
+                <div class="flex flex-wrap items-center gap-3 mt-2">
+                    <a href="/proxy/agents/{{ new_agent_id }}" class="text-xs text-accent-400 hover:underline">Open agent detail →</a>
+                    <a href="/proxy/agents/{{ new_agent_id }}/identity-bundle.zip" class="text-xs font-semibold text-accent-300 hover:text-accent-200 hover:underline">Download identity bundle (.zip) ↓</a>
+                </div>
             </div>
         </div>
     </div>
