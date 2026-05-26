@@ -1,4 +1,4 @@
-"""Tests for ``cullis_sdk.anthropic_compat.cullis_httpx_client`` (ADR-038 Phase 0).
+"""Tests for ``cullis_sdk.providers_compat.cullis_httpx_client`` (ADR-038 Phase 0).
 
 Covered:
 
@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
-from cullis_sdk.anthropic_compat import (
+from cullis_sdk.providers_compat import (
     _DpopTransport,
     _resolve_identity_files,
     cullis_httpx_client,

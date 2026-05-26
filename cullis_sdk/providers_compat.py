@@ -1,29 +1,48 @@
-"""Drop-in Anthropic SDK compatibility (ADR-038 Phase 0).
+"""Drop-in vanilla provider SDK compatibility (ADR-038 Phase 0, agnostic).
 
-Lets a customer keep their vanilla ``anthropic.Anthropic`` client (or any
-framework that wraps it: LangChain, LlamaIndex, DSPy, Letta) and route
-every call through a Mastio with mTLS + DPoP applied automatically. The
-Anthropic key stays in ``proxy.env`` on the Mastio side, the agent host
-never sees it, and the audit chain still records every call with the
-agent's identity.
+LLM-agnostic transport shim. Lets a customer keep their vanilla provider
+SDK (Anthropic, OpenAI, and any other SDK that accepts an ``http_client``
++ ``base_url``) and route every call through a Mastio with mTLS + DPoP
+applied automatically. The upstream provider key stays in ``proxy.env``
+on the Mastio side, the agent host never sees it, and the audit chain
+still records every call with the agent's identity.
 
 Three new lines at construction time. Call sites, response handling,
-streaming, tool use, prompt caching — all stay verbatim Anthropic SDK.
+tool use — all stay verbatim provider SDK. Streaming + tool-use response
+shape for the Anthropic path land in Phase 1.
+
+Anthropic SDK example (uses Mastio ``/v1/messages``, Anthropic-shape):
 
     import anthropic
-    from cullis_sdk.anthropic_compat import cullis_httpx_client
+    from cullis_sdk.providers_compat import cullis_httpx_client
 
     http_client = cullis_httpx_client(identity_dir="~/.cullis/scenario-b")
 
     client = anthropic.Anthropic(
         base_url="https://mastio.myorg.example.com:9443/v1",
-        api_key="unused",         # Mastio ignores; mTLS + DPoP are the real auth
+        api_key="unused",         # Mastio ignores; mTLS + DPoP are real auth
         http_client=http_client,
     )
 
     resp = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+OpenAI SDK example (uses Mastio ``/v1/chat/completions``, OpenAI-shape):
+
+    from openai import OpenAI
+    from cullis_sdk.providers_compat import cullis_httpx_client
+
+    client = OpenAI(
+        base_url="https://mastio.myorg.example.com:9443/v1",
+        api_key="unused",
+        http_client=cullis_httpx_client(identity_dir="~/.cullis/scenario-b"),
+    )
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -35,9 +54,14 @@ Identity directory layout (matches ``CullisClient.from_identity_dir``):
         ca-chain.pem     # Mastio Intermediate + Org Root (mTLS trust)
         dpop.jwk         # EC P-256 keypair, JWK form (DPoP signer)
 
-The same pattern works for OpenAI / Google ``genai`` SDKs (both accept
-``base_url`` + ``http_client``); Phase 1 of ADR-038 ships one helper per
-provider after this one soaks for a minor.
+The helper is intentionally provider-neutral: it returns a plain
+``httpx.Client``. The provider SDK chooses the path
+(``/v1/messages`` vs ``/v1/chat/completions``) and the response shape;
+the Mastio handles both on the same identity + audit infrastructure.
+
+Phase 1 (next minor): streaming for Anthropic ``/v1/messages``,
+tool-use response shape for Anthropic ``/v1/messages``, Google
+``genai`` SDK example.
 """
 from __future__ import annotations
 
@@ -52,7 +76,7 @@ from cullis_sdk.dpop import DpopKey
 
 __all__ = ["cullis_httpx_client"]
 
-_log = logging.getLogger("cullis_sdk.anthropic_compat")
+_log = logging.getLogger("cullis_sdk.providers_compat")
 
 _DEFAULT_TIMEOUT = 60.0
 
