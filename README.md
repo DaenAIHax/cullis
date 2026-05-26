@@ -84,6 +84,9 @@ result = client.call_mcp_tool(
 
 Pull the Mastio bundle, set an Anthropic key, enroll an agent, install the SDK, run an agent loop. The Mastio bundle is a self-contained `docker compose` stack with first-boot Org CA minting, an admin account, and a dashboard.
 
+<p align="center"><img src="branding/asciinema/cullis-quickstart.gif" alt="Cullis quickstart: bundle install to first chat reply in 30 seconds" width="720"></p>
+
+
 ```bash
 # 1. Pull and deploy the Mastio bundle.
 curl -L https://github.com/cullis-security/cullis/releases/download/mastio-v0.5.4/cullis-mastio-bundle.tar.gz | tar xz
