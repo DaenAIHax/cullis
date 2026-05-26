@@ -273,8 +273,18 @@ def _summarise_agent_cert(cert_pem: str | None) -> dict | None:
         return None
 
 
-@router.get("/agents/{agent_id:path}", response_class=HTMLResponse)
+@router.get("/agents/{agent_id}", response_class=HTMLResponse)
 async def agent_detail_page(request: Request, agent_id: str):
+    # D-14 cold-reader fix: this route used to be declared with
+    # ``{agent_id:path}`` which (because of Starlette's greedy ``.*``
+    # converter) matched every URL of the form
+    # ``/agents/<id>/<anything>`` before the sub-route declarations
+    # below got a chance. ``env-download`` and ``identity-bundle.zip``
+    # silently 404'd via this route because ``get_agent`` resolved a
+    # non-existent ``<id>/<sub-path>``. Agent IDs never contain ``/``
+    # (``org_id::name`` shape is pinned by migration 0041), so the
+    # default ``str`` converter (``[^/]+``) is both safer and more
+    # accurate, and the sub-routes resolve correctly.
     session = require_login(request)
     if isinstance(session, RedirectResponse):
         return session
@@ -363,6 +373,176 @@ CULLIS_BROKER_URL={broker_url}
         media_type="text/plain",
         headers={
             "Content-Disposition": f'attachment; filename="{agent_name}.env"'
+        },
+    )
+
+
+@router.get("/agents/{agent_id:path}/identity-bundle.zip")
+async def agent_identity_bundle_download(request: Request, agent_id: str):
+    """Download the agent's identity-dir layout as a zip (D-14).
+
+    Cold-reader dogfood (2026-05-26) caught the gap: dashboard Create
+    Agent mints a TLS client cert plus private key, persists them, and
+    the post-create banner instructs the admin to "Open the agent's
+    detail page to download cert + key" — but the only existing
+    download endpoint returned a config-only ``.env`` with no
+    credential material. Admins had no way to deliver the freshly
+    minted identity to the agent host.
+
+    The zip contains the four-file identity-dir layout
+    ``CullisClient.from_identity_dir`` consumes:
+
+    * ``agent.crt`` — TLS client cert PEM (leaf signed by Mastio
+      Intermediate).
+    * ``agent.key`` — TLS client cert private key PEM (PKCS#8).
+    * ``ca-chain.pem`` — Mastio Intermediate concatenated with the Org
+      Root, the same chain ``CullisClient`` auto-discovers as a
+      sibling of ``cert_path``.
+    * ``meta.json`` — agent_id, org_id, mastio_url, capabilities,
+      created_at, spiffe_id. Informational only; the credential is the
+      cert + key pair.
+
+    NB: no ``dpop.jwk`` file. RFC 9449 + ADR-014 keep the DPoP key
+    client-side: the agent generates its own EC P-256 keypair on first
+    run (``cullis_sdk.dpop.DpopKey.load_or_generate``) and registers
+    the public JWK via the admin DPoP endpoint or
+    ``CullisClient.enroll_via_dashboard_approval``. The Mastio never
+    holds the private DPoP material, so we cannot ship it in the
+    bundle. D-11 already wires the SDK to auto-generate the file as a
+    sibling of ``cert_path`` on first use, so the four-file layout is
+    enough end-to-end.
+
+    Admin role required, every successful download writes an
+    ``agent.identity_bundle_downloaded`` audit row because the private
+    key just left the server boundary.
+
+    409 path: agents enrolled via BYOCA / SDK enrollment factory never
+    handed their private key to the Mastio (the Mastio only signed the
+    CSR). In that case there is no key to ship; the response points
+    the admin at the SDK ``enroll_via_dashboard_approval`` factory
+    which already exposes the credential to the agent process.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    # Mint-side bundle download exposes a private key — admin-only.
+    if session.role != "admin" and "admin" not in (session.roles or ()):
+        raise HTTPException(status_code=403, detail="admin role required")
+
+    import io
+    import json as _json
+    import zipfile
+
+    from mcp_proxy.db import get_agent, get_config, log_audit
+    from mcp_proxy.config import get_settings
+
+    agent = await get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    cert_pem = agent.get("cert_pem")
+    if not cert_pem:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent has no minted certificate yet. Wait for the "
+                "create-agent flow to complete, or re-enroll via the "
+                "dashboard."
+            ),
+        )
+
+    # Private key lives in Vault (preferred) or proxy_config under
+    # ``agent_key:{agent_id}`` (fallback). ``AgentManager.get_agent_credentials``
+    # walks both. Agents enrolled via BYOCA / SDK never had their key
+    # reach the Mastio, so the lookup raises and we return 409 with a
+    # message pointing at the SDK enrol path.
+    try:
+        from mcp_proxy.egress.agent_manager import AgentManager
+        org_id_cfg = await get_config("org_id") or get_settings().org_id
+        mgr = AgentManager(org_id=org_id_cfg)
+        _cert_from_mgr, key_pem = await mgr.get_agent_credentials(agent_id)
+    except Exception as exc:  # noqa: BLE001 — surfaced as 409 below
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent has no server-side private key. This typically "
+                "means the agent was enrolled via an external CSR "
+                "(BYOCA) or via the SDK enrol factory where the "
+                "private key never reached the Mastio. Use "
+                "cullis_sdk.CullisClient.enroll_via_dashboard_approval "
+                "instead — that path keeps the key on the agent host "
+                "by construction."
+            ),
+        ) from exc
+
+    # CA chain: Mastio Intermediate || Org Root, PEM-concatenated. The
+    # SDK auto-discovers this layout as the sibling ``ca-chain.pem``
+    # of ``cert_path`` (D-9 / D-11).
+    mastio_ca_pem = (await get_config("mastio_ca_cert") or "").strip()
+    org_ca_pem = (await get_config("org_ca_cert") or "").strip()
+    if mastio_ca_pem and org_ca_pem:
+        ca_chain_pem = mastio_ca_pem + "\n" + org_ca_pem + "\n"
+    else:
+        ca_chain_pem = ((mastio_ca_pem or org_ca_pem) + "\n") if (
+            mastio_ca_pem or org_ca_pem
+        ) else ""
+
+    settings = get_settings()
+    org_id = agent.get("org_id") or await get_config("org_id") or settings.org_id
+    meta = {
+        "agent_id": agent_id,
+        "org_id": org_id,
+        "mastio_url": settings.proxy_public_url or f"https://localhost:{settings.port}",
+        "capabilities": agent.get("capabilities") or [],
+        "created_at": agent.get("created_at"),
+        "spiffe_id": agent.get("spiffe_id"),
+        # Operator hint: the SDK will create the dpop.jwk sibling on
+        # first use. No need to ship a stub here — keeping the bundle
+        # silent on it is the honest representation of what the
+        # Mastio actually persists.
+        "notes": (
+            "Drop this directory at the agent host's identity dir "
+            "(e.g. /etc/cullis/agent/), then point the SDK at it via "
+            "CullisClient.from_identity_dir(path). The SDK will "
+            "auto-generate dpop.jwk on first use and register the "
+            "public key with the Mastio."
+        ),
+    }
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("agent.crt", cert_pem)
+        zf.writestr("agent.key", key_pem)
+        if ca_chain_pem:
+            zf.writestr("ca-chain.pem", ca_chain_pem)
+        zf.writestr("meta.json", _json.dumps(meta, indent=2))
+
+    agent_name = agent_id.split("::")[-1] if "::" in agent_id else agent_id
+
+    # Audit BEFORE returning the bytes: the private key is on its way
+    # out, every successful download needs a trail.
+    try:
+        await log_audit(
+            agent_id=agent_id,
+            action="agent.identity_bundle_downloaded",
+            status="success",
+            detail=f"downloaded_by_role={session.role}",
+        )
+    except Exception:  # noqa: BLE001 — best-effort audit, never block the download
+        _log.warning(
+            "agent.identity_bundle_downloaded audit row failed for %s",
+            agent_id,
+        )
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{agent_name}-identity.zip"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
         },
     )
 
