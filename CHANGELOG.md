@@ -12,6 +12,39 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+## [v0.5.4] — Cold-reader dogfood cascade (PKI race + SDK enrol factory + DPoP htu binding) — 2026-05-26
+
+The 2026-05-25 cold-reader dogfood on a fresh-install Mastio bundle exposed six blocking gaps between the operator handing the bundle to a developer and the developer's first chat reply. Five close in v0.5.4 so the open-source path is green end-to-end: `tar xz | ./deploy.sh | SDK enrol | chat reply` on a vanilla Linux laptop, without manually editing `proxy.env`.
+
+### Mastio — multi-worker PKI bootstrap race (D-9)
+
+- **`AgentManager.generate_org_ca` race-safe persistence** (#937). Under `MASTIO_WORKERS=4` each uvicorn worker raced on Org CA generation; the nginx sidecar exported one worker's pair while sibling workers signed the Mastio Intermediate with a different in-memory key, breaking ECDSA chain verification at the mTLS boundary. Fix mirrors `_mint_mastio_ca` winner-election with key+cert coupled into a single JSON payload via `set_config_if_absent`. 3 unit tests pin it.
+
+### SDK — enrol factory + cert chain emission (B-2 / B-4 / B-7)
+
+- **`CullisClient.enroll_via_dashboard_approval` factory** (#934). Zero-boilerplate path from CSR submit to a working `CullisClient`; materialises `agent.key + agent.crt + dpop.jwk + meta.json` into the identity directory.
+- **`/admin/agents/{id}/approve` returns `cert_chain_pem`** (#934). Admin path emits the full chain (`leaf || Mastio Intermediate || Org Root`) in one PEM blob.
+- **DPoP key persisted as JWK JSON** (#934). `dpop.jwk` loads via `DpopKey.load(...)` with the same canonicalised representation the proxy verifies the thumbprint against.
+
+### Packaging — post-Portkey-pivot public wheel (B-3)
+
+- **`pyproject.toml` no longer force-includes `cullis_connector`** (#935). After the Portkey pivot the Connector moved to the enterprise repo; the public `cullis-sdk` wheel now installs clean from a vanilla checkout. Package list pinned to `["cullis_sdk"]`.
+
+### SDK + Mastio + bundle — DPoP cold-reader hardening (D-11)
+
+- **SDK `from_identity_dir` auto-discovers `dpop.jwk` sibling** (#938). Mirrors the `ca-chain.pem` auto-discovery pattern; customers replaying the quickstart with `cert_path + key_path` alone now load the DPoP key transparently. Load errors downgrade to warning. 4 unit tests pin it.
+- **Mastio `_build_htu` returns a tuple of acceptable URLs** (#939). Cold-reader dogfood VM confirmed the actual root cause: `_build_htu` was pinned to `MCP_PROXY_PROXY_PUBLIC_URL` (community bundle default `https://host.docker.internal:9443`), which never resolves from a vanilla Linux host. Fix widens the acceptable set: pinned URL, actual request URL, Host-header URL are all valid `htu` binding candidates. `htu` is the anti-replay binding, not an identity assertion; the client still has to sign with the registered DPoP key, so widening the URL set does not reduce the security posture.
+- **Bundle plus Mastio propagate `X-Forwarded-{Host,Port,Proto}`** (#940). Follow-up to #939: `request.url` reconstructed server-side dropped the `:9443` port because nginx forwarded `Host: $host` (no port) and uvicorn rebuilt the URL without it. Bundle nginx forwards `X-Forwarded-{Host,Port,Proto}` explicitly with `$http_host` (carrying the port), Mastio registers uvicorn's `ProxyHeadersMiddleware`, and `_build_htu` adds the X-Forwarded-assembled URL as a belt-and-suspenders candidate. Cold-reader on a vanilla Linux laptop (`localhost:9443`) and on a LAN-reachable VM (`192.168.x.x:9443`) both work out-of-the-box without manually editing `PROXY_PUBLIC_URL`.
+
+### Dashboard — SSRF escape knob discoverability (C-3)
+
+- **Backend-save 400 now surfaces the SSRF escape knobs** (#936). Customers hit `400 outbound URL blocked (RFC 1918 / link-local)` on the first attempt to register an MCP backend reachable only on the Docker bridge network. The dashboard form now renders the exact env vars and per-backend toggle in the error response body. Default posture (`deny`) unchanged.
+
+### Known issues / out of scope
+
+- **D-10**: `deploy.sh --down --wipe-data` does not remove `data/mcp_proxy.db` on Linux hosts where the bundle volume was bind-mounted as the invoking user. Workaround: `rm -rf data/` manually. Tracked, fix in v0.5.5.
+- **Encrypted KMS Org CA path** (`LocalKMSProvider.store_org_ca` with `MCP_PROXY_DB_ENCRYPTION_KEY` set) is still race-vulnerable at the provider level. The cold-reader path does not hit this (`validate_config` refuses production starts without the at-rest passphrase), but the encrypted variant deserves the same winner-election treatment in a follow-up.
+
 ## [v0.5.3] — Merkle audit anchoring + Rego policy engine + Postgres binding — 2026-05-25
 
 ### Late shipping cascade (2026-05-25)
@@ -296,6 +329,7 @@ flow until the next `## ` heading.
   and the operator-side troubleshooting matrix (`POSTGRES_PASSWORD`
   missing, orphan SQLite guard, stuck Alembic advisory lock).
 
+[v0.5.4]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.4
 [v0.5.3]: https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.3
 
 ## [Connector v0.5.2] — CRITICAL chat-history cross-user leak — 2026-05-20
