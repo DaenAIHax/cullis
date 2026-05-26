@@ -176,3 +176,44 @@ def test_no_dpop_jwk_sibling_no_explicit_path_no_dpop_key(
         "_egress_dpop_key should remain None when no sibling exists and "
         "no explicit dpop_key_path was passed — legacy opt-in path."
     )
+
+
+def test_malformed_dpop_jwk_sibling_does_not_crash_client(
+    tmp_path: Path,
+) -> None:
+    """A malformed ``dpop.jwk`` sibling (missing required JWK fields
+    like ``kty`` / ``crv``) must not crash ``from_identity_dir`` — the
+    client falls back to ``_egress_dpop_key=None`` and emits a warning
+    so the customer sees a hint before the eventual 401.
+
+    Pre-fix the catch only covered ``(OSError, ValueError, JSONDecodeError)``
+    so a JWK that parses as JSON but is structurally invalid (e.g. an
+    empty object, or one missing ``crv``) propagated ``AttributeError``
+    or ``KeyError`` out of ``DpopKey.load`` / cryptography and crashed
+    ``from_identity_dir`` mid-construction. The customer would then see
+    a Python traceback instead of a usable mTLS-only client.
+    """
+    import json as _json
+    cert_path, key_path = _write_test_identity(tmp_path)
+    # Valid JSON, but structurally invalid as a JWK (no kty, no crv,
+    # no x/y/d). DpopKey.load checks 'd' first → raises ValueError,
+    # which the original catch already covered. So we go one step
+    # further: a JWK that has 'd' but is otherwise malformed (no kty)
+    # — this is the case AttributeError/KeyError were leaking from.
+    malformed_jwk = {"d": "AAAA"}  # 'd' present so we pass the ValueError gate
+    (tmp_path / "dpop.jwk").write_text(_json.dumps(malformed_jwk))
+
+    # Must not raise. _egress_dpop_key must end up None. The warning
+    # log is emitted but pytest captures it; we don't assert on its
+    # content because the log() helper is stdout-bound.
+    client = CullisClient.from_identity_dir(
+        "https://localhost:9443",
+        cert_path=cert_path,
+        key_path=key_path,
+        verify_tls=False,
+    )
+
+    assert client._egress_dpop_key is None, (
+        "A malformed dpop.jwk sibling must downgrade to _egress_dpop_key="
+        "None rather than crash from_identity_dir mid-construction."
+    )

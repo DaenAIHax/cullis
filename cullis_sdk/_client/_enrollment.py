@@ -463,11 +463,18 @@ class _EnrollmentMixin:
                     f"Loaded DPoP key from {dpop_key_path} "
                     f"(jkt={instance._egress_dpop_key.thumbprint()[:16]}…)",
                 )
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
+            except (
+                OSError, ValueError, json.JSONDecodeError,
+                AttributeError, KeyError,
+            ) as exc:
                 # Don't crash the client just because a sibling JWK exists
                 # but is unreadable/malformed; the customer can still drive
-                # mTLS-only egress paths. Log loud at warning level so the
-                # cold-reader sees something before the eventual 401.
+                # mTLS-only egress paths. AttributeError / KeyError cover
+                # JWKs missing required fields (kty, crv, x, y) that the
+                # cryptography lib surfaces as attribute/key access on
+                # downstream construction; treat them like a malformed
+                # JSON. Log loud at warning level so the cold-reader sees
+                # something before the eventual 401.
                 log(
                     "sdk",
                     f"warning: dpop.jwk at {dpop_key_path} present but "
