@@ -74,11 +74,6 @@
                 <span hx-get="/proxy/badge/approvals" hx-trigger="load, every 10s" hx-swap="innerHTML" class="ml-auto"></span>
             </a>
             {% endif %}
-            <a href="/proxy/network"
-               class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'network' %}nav-active{% else %}text-gray-500{% endif %}">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                Network
-            </a>
             <a href="/proxy/tools"
                class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'tools' %}nav-active{% else %}text-gray-500{% endif %}">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"/></svg>
@@ -88,27 +83,6 @@
                class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'backends' %}nav-active{% else %}text-gray-500{% endif %}">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
                 Tools
-            </a>
-            <a href="/proxy/pki"
-               class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'pki' %}nav-active{% else %}text-gray-500{% endif %}">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" fill="currentColor" stroke="none"/></svg>
-                PKI
-            </a>
-            <a href="/proxy/mastio-key"
-               class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'mastio_key' %}nav-active{% else %}text-gray-500{% endif %}">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                Signing Key
-            </a>
-            <a href="/proxy/updates"
-               class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'updates' %}nav-active{% else %}text-gray-500{% endif %}">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                Updates
-                <span hx-get="/proxy/badge/updates" hx-trigger="load, every 10s" hx-swap="innerHTML" class="ml-auto"></span>
-            </a>
-            <a href="/proxy/vault"
-               class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'vault' %}nav-active{% else %}text-gray-500{% endif %}">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                Vault
             </a>
             <a href="/proxy/policies"
                class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'policies' %}nav-active{% else %}text-gray-500{% endif %}">
@@ -120,11 +94,6 @@
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
                 Audit Log
                 <span hx-get="/proxy/badge/audit" hx-trigger="load, every 10s" hx-swap="innerHTML" class="ml-auto"></span>
-            </a>
-            <a href="/proxy/ai-providers"
-               class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'ai_providers' %}nav-active{% else %}text-gray-500{% endif %}">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                AI Providers
             </a>
             <a href="/proxy/settings"
                class="flex items-center gap-2.5 px-3 py-2 rounded text-sm nav-item {% if active == 'settings' %}nav-active{% else %}text-gray-500{% endif %}">

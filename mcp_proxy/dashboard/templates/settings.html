@@ -29,6 +29,270 @@
         </a>
     </div>
 
+    <!-- Cards for nav items moved into Settings (sidebar consolidation) -->
+
+    <!-- PKI & certificates card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                PKI &amp; certificates
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Org Root CA + Mastio Intermediate CA visualiser, chain verification, certificate rotation. Read-only most of the time;
+                rotation is rare and operator-initiated.
+            </p>
+        </div>
+        <a href="/proxy/pki"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" fill="currentColor" stroke="none"/></svg>
+            Open PKI
+        </a>
+    </div>
+
+    <!-- Signing key card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Mastio signing key
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                ES256 leaf key the Mastio uses to counter-sign Court federation requests and to mint short-lived agent credentials.
+                Rotation requires a staged dual-sign window.
+            </p>
+        </div>
+        <a href="/proxy/mastio-key"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            Open signing key
+        </a>
+    </div>
+
+    <!-- Vault / KMS card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Vault / KMS
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Key-management backend that wraps the Org CA + Mastio Intermediate private keys. Default is the local on-disk
+                provider; production deploys point at HashiCorp Vault, AWS KMS, or Azure Key Vault.
+            </p>
+        </div>
+        <a href="/proxy/vault"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            Open Vault
+        </a>
+    </div>
+
+    <!-- Network & federation card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Network &amp; federation
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Peer-Mastio map and Court federation uplink details. Standalone deploys see an empty page; relevant once an
+                attach-ca invite is consumed.
+            </p>
+        </div>
+        <a href="/proxy/network"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Open network
+        </a>
+    </div>
+
+    <!-- AI providers card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                AI providers
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Upstream LLM provider configuration. Set the Anthropic key here so the Mastio can proxy chat completions on behalf
+                of enrolled agents. OpenAI, Gemini, and Ollama route through LiteLLM and roll out incrementally.
+            </p>
+        </div>
+        <a href="/proxy/ai-providers"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            Open AI providers
+        </a>
+    </div>
+
+    <!-- Software updates card -->
+    <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Software updates
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Current Mastio version, release-notes for the published tag, and the bump-script for rolling forward to the next
+                release. Polled hourly against the GitHub Releases feed.
+            </p>
+        </div>
+        <a href="/proxy/updates"
+           class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-accent-400/10 border border-accent-400/30 text-accent-300 hover:bg-accent-400/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Open updates
+        </a>
+    </div>
+
+    {% if has_feature('saml_sso') or has_feature('scim_2_0') or has_feature('audit_archive') or has_feature('audit_export_datadog') or has_feature('cloud_kms_aws') or has_feature('cloud_kms_azure') or has_feature('cloud_kms_gcp') or has_feature('llm_guardian') or has_feature('rbac_multi_admin') %}
+    <!-- Enterprise modules section header -->
+    <div class="pt-2 pb-1 flex items-center gap-3">
+        <h3 class="text-[11px] font-bold text-amber-400 uppercase tracking-[0.18em]" style="font-family: 'Chakra Petch', sans-serif;">
+            Enterprise modules
+        </h3>
+        <div class="flex-1 border-t border-amber-500/20"></div>
+        <span class="text-[10px] text-gray-600">License-gated</span>
+    </div>
+    {% endif %}
+
+    {% if has_feature('saml_sso') %}
+    <!-- SAML SSO card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                SAML SSO
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Federate the dashboard sign-in with your corporate IdP via SAML 2.0 (Okta, Azure AD, Keycloak, OneLogin).
+                Configure via <code class="text-amber-400">CULLIS_SAML_SP_ENTITY_ID</code>, <code class="text-amber-400">CULLIS_SAML_SP_ACS_URL</code>, <code class="text-amber-400">CULLIS_SAML_IDP_ENTITY_ID</code>, <code class="text-amber-400">CULLIS_SAML_IDP_SSO_URL</code>, <code class="text-amber-400">CULLIS_SAML_IDP_CERT_PATH</code> in proxy.env.
+            </p>
+        </div>
+        <a href="https://cullis.io/docs/operate/saml-sso" target="_blank" rel="noopener" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Read docs
+        </a>
+    </div>
+    {% endif %}
+
+    {% if has_feature('scim_2_0') %}
+    <!-- SCIM 2.0 card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                SCIM 2.0 user provisioning
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Automated user lifecycle from your corporate IdP. Provision, deprovision, and group sync via the SCIM 2.0 REST endpoints under <code class="text-amber-400">/scim/v2/</code>.
+                Configure the bearer token via <code class="text-amber-400">CULLIS_SCIM_BEARER_TOKEN</code> in proxy.env.
+            </p>
+        </div>
+        <a href="https://cullis.io/docs/operate/scim" target="_blank" rel="noopener" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Read docs
+        </a>
+    </div>
+    {% endif %}
+
+    {% if has_feature('rbac_multi_admin') %}
+    <!-- RBAC multi-admin card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Multi-admin RBAC (4-eyes)
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Sensitive actions (cert rotation, agent delete, policy push, license import) require a second admin signoff before they apply.
+                The submitter sees the action queued; an admin from a different account approves on the Approvals page.
+            </p>
+        </div>
+        <a href="/proxy/admin/approvals" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            Open approvals queue
+        </a>
+    </div>
+    {% endif %}
+
+    {% if has_feature('audit_archive') %}
+    <!-- Audit archive card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Long-retention audit archive
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Cold-storage tier for audit chain rows older than the live window. Epoch-based Merkle-rooted manifests, WORM sealed via S3 Object Lock COMPLIANCE mode (or filesystem fallback).
+                Configure via <code class="text-amber-400">CULLIS_AUDIT_ARCHIVE_SINK_URL</code> in proxy.env.
+            </p>
+        </div>
+        <a href="https://cullis.io/docs/operate/audit-anchoring" target="_blank" rel="noopener" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Read docs
+        </a>
+    </div>
+    {% endif %}
+
+    {% if has_feature('audit_export_datadog') %}
+    <!-- Datadog audit export card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Datadog audit export
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Stream every audit row to your Datadog Logs intake in near real time. Lets your SIEM index Cullis events alongside the rest of your security telemetry.
+                Configure via <code class="text-amber-400">CULLIS_AUDIT_EXPORT_DATADOG_API_KEY</code> + <code class="text-amber-400">CULLIS_AUDIT_EXPORT_DATADOG_SITE</code> in proxy.env.
+            </p>
+        </div>
+        <a href="https://cullis.io/docs/operate/audit-export" target="_blank" rel="noopener" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Read docs
+        </a>
+    </div>
+    {% endif %}
+
+    {% if has_feature('cloud_kms_aws') or has_feature('cloud_kms_azure') or has_feature('cloud_kms_gcp') %}
+    <!-- Cloud KMS card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                Cloud KMS
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Wrap the Org CA + Mastio Intermediate private keys with a hardware-rooted cloud KMS. Active providers:
+                {% if has_feature('cloud_kms_aws') %}<span class="text-amber-400 font-mono">AWS KMS</span>{% endif %}
+                {% if has_feature('cloud_kms_azure') %} <span class="text-amber-400 font-mono">Azure Key Vault</span>{% endif %}
+                {% if has_feature('cloud_kms_gcp') %} <span class="text-amber-400 font-mono">GCP KMS</span>{% endif %}.
+                Configure via <code class="text-amber-400">MCP_PROXY_KMS_BACKEND=aws|azure|gcp</code> plus the provider-specific env vars.
+            </p>
+        </div>
+        <a href="https://cullis.io/docs/operate/vault-org-ca" target="_blank" rel="noopener" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Read docs
+        </a>
+    </div>
+    {% endif %}
+
+    {% if has_feature('llm_guardian') %}
+    <!-- LLM Guardian card (enterprise) -->
+    <div class="bg-surface-900/60 border border-amber-500/30 rounded-lg p-6 relative">
+        <span class="absolute top-3 right-3 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 uppercase tracking-[0.15em] border border-amber-500/30">Enterprise</span>
+        <div class="mb-4">
+            <h2 class="text-base font-semibold text-white" style="font-family: 'Chakra Petch', sans-serif; letter-spacing: 0.06em;">
+                LLM Guardian
+            </h2>
+            <p class="text-xs text-gray-500 mt-1">
+                Content-layer policy gating on every chat completion: prompt-injection detection, PII redaction, model allowlist, response moderation.
+                Closes the gap that pure identity/policy/audit at the wire level leaves open (community Rego gates the request envelope, not the prompt content).
+            </p>
+        </div>
+        <a href="https://cullis.io/docs/operate/llm-guardian" target="_blank" rel="noopener" class="inline-flex items-center gap-2 px-3 py-2 rounded text-sm font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            Read docs
+        </a>
+    </div>
+    {% endif %}
+
     <!-- OIDC card -->
     <div class="bg-surface-900/60 border border-gray-800/60 rounded-lg p-6">
         <div class="mb-5">
