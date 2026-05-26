@@ -245,12 +245,36 @@ async def register_submit(request: Request):
 
     try:
         await set_admin_password(password)
-    except ValueError as exc:
+    except ValueError:
+        # set_admin_password enforces MIN_PASSWORD_LENGTH and may evolve
+        # to enforce additional policy. The exception text can leak the
+        # configured policy values (which are deployment-specific and
+        # not meant to be advertised on the pre-auth registration page).
+        # Surface a generic hint and log the full reason to stderr.
+        _log.exception(
+            "admin registration rejected by set_admin_password",
+        )
         return templates.TemplateResponse("register.html", {
             "request": request,
-            "error": str(exc),
+            "error": (
+                f"Password rejected by policy. It must be at least "
+                f"{MIN_PASSWORD_LENGTH} characters; pick a stronger value "
+                "and try again."
+            ),
             "min_length": MIN_PASSWORD_LENGTH,
         }, status_code=400)
+    except Exception:
+        # Anything else (DB write failure, etc.) is an internal error —
+        # absolutely do NOT echo it on the pre-auth registration page.
+        _log.exception("admin registration crashed")
+        return templates.TemplateResponse("register.html", {
+            "request": request,
+            "error": (
+                "Failed to register the admin password. Check the "
+                "Mastio container logs and try again."
+            ),
+            "min_length": MIN_PASSWORD_LENGTH,
+        }, status_code=500)
 
     from mcp_proxy.db import log_audit
     await log_audit(

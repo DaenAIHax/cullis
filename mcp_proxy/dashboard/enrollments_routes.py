@@ -180,8 +180,34 @@ async def enrollments_approve(request: Request, session_id: str):
                 admin_name=session.role or "admin",
                 agent_manager=agent_manager,
             )
-    except _enrollment_service.EnrollmentError as exc:
-        return _enroll_error_response(request, str(exc))
+    except _enrollment_service.EnrollmentError:
+        # EnrollmentError messages can carry cryptography backend text
+        # from the underlying serialization layer (e.g. "Invalid public
+        # key PEM: <openssl error>") or other internal validator state.
+        # Log the full text + stack to stderr but surface a generic hint.
+        _log.exception(
+            "enrollment_approve rejected: session_id=%s agent_id=%s",
+            session_id, agent_id,
+        )
+        return _enroll_error_response(
+            request,
+            "Approval rejected. Verify the enrollment session is still "
+            "pending and that agent_id is unique, then check the Mastio "
+            "container logs for the exact reason.",
+        )
+    except Exception:
+        # Anything else (DB write failure, cert sign crash, etc.) is an
+        # internal error — the operator inspects container logs.
+        _log.exception(
+            "enrollment_approve crashed: session_id=%s agent_id=%s",
+            session_id, agent_id,
+        )
+        return _enroll_error_response(
+            request,
+            "Failed to approve enrollment. Check the Mastio container "
+            "logs and try again.",
+            status_code=500,
+        )
 
     _log.info(
         "enrollment_approved via dashboard: session=%s agent=%s admin=%s",
@@ -220,8 +246,26 @@ async def enrollments_reject(request: Request, session_id: str):
                 reason=reason,
                 admin_name=session.role or "admin",
             )
-    except _enrollment_service.EnrollmentError as exc:
-        return _enroll_error_response(request, str(exc))
+    except _enrollment_service.EnrollmentError:
+        # See enrollments_approve for rationale on swallowing the str(exc).
+        _log.exception(
+            "enrollment_reject rejected: session_id=%s", session_id,
+        )
+        return _enroll_error_response(
+            request,
+            "Reject rejected. Verify the enrollment session is still "
+            "pending; the Mastio container logs carry the exact reason.",
+        )
+    except Exception:
+        _log.exception(
+            "enrollment_reject crashed: session_id=%s", session_id,
+        )
+        return _enroll_error_response(
+            request,
+            "Failed to reject enrollment. Check the Mastio container "
+            "logs and try again.",
+            status_code=500,
+        )
 
     _log.info(
         "enrollment_rejected via dashboard: session=%s admin=%s",

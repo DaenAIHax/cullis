@@ -341,14 +341,19 @@ async def mastio_key_rotate(request: Request):
         )
         raise
     except Exception as exc:
-        # Audit H-IO-2, audit row carries the full reason; HTTP detail
-        # is generic so an attacker can't probe rotation internals.
-        _log.warning("mastio_key.rotate failed (old_kid=%s): %s", old_kid, exc)
+        # Audit H-IO-2, the full reason lands in stderr via _log.exception
+        # below; the audit row carries only the operator-visible kid so a
+        # later JSON export of the audit chain (which can travel outside
+        # the host, ADR-030) does NOT carry raw exception text. The HTTP
+        # detail is generic so an attacker can't probe rotation internals.
+        _log.exception(
+            "mastio_key.rotate failed (old_kid=%s)", old_kid,
+        )
         await log_audit(
             agent_id="admin",
             action="mastio_key.rotate",
             status="failure",
-            detail=f"old_kid={old_kid}, reason={exc}",
+            detail=f"old_kid={old_kid}",
         )
         raise HTTPException(
             status_code=500,
@@ -443,17 +448,18 @@ async def mastio_key_complete_staged(request: Request):
     try:
         result = await agent_mgr.complete_staged_rotation(decision)
     except RuntimeError as exc:
-        # Audit H-IO-2, audit row carries the full reason; HTTP detail
-        # is generic so an attacker can't probe internal staging state.
-        _log.warning(
-            "mastio_key.complete_staged failed (decision=%s): %s",
-            decision, exc,
+        # Audit H-IO-2, full reason in stderr via _log.exception; audit
+        # row carries only the operator-visible decision so a JSON export
+        # of the chain does NOT carry raw exception text. HTTP detail is
+        # generic so an attacker can't probe internal staging state.
+        _log.exception(
+            "mastio_key.complete_staged failed (decision=%s)", decision,
         )
         await log_audit(
             agent_id="admin",
             action="mastio_key.complete_staged",
             status="failure",
-            detail=f"decision={decision}, reason={exc}",
+            detail=f"decision={decision}",
         )
         raise HTTPException(
             status_code=409,

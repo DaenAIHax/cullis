@@ -261,12 +261,42 @@ async def settings_admin_password_change(request: Request):
 
     try:
         await set_admin_password(new)
-    except ValueError as exc:
+    except ValueError:
         # set_admin_password enforces MIN_PASSWORD_LENGTH and possibly
-        # other complexity rules; surface the constraint to the operator.
+        # other complexity rules. We do NOT interpolate str(exc) into the
+        # redirect URL: the helper's __str__ can mention the configured
+        # minimum length and other internal policy details. Instead we
+        # surface a generic, action-oriented hint and log the full text
+        # to the container stderr where the operator can inspect it.
         from urllib.parse import quote
+        _log.exception(
+            "admin password rotation rejected by set_admin_password "
+            "(actor=%s)",
+            getattr(session, "username", "?"),
+        )
         return RedirectResponse(
-            f"/proxy/settings?error={quote(str(exc))}",
+            "/proxy/settings?error="
+            + quote(
+                "Password rejected by policy. Pick a longer / stronger "
+                "value and try again; the Mastio container logs carry "
+                "the exact reason."
+            ),
+            status_code=303,
+        )
+    except Exception:
+        # Anything else (DB write failure, etc.) is an internal error
+        # the operator should investigate in the container logs.
+        from urllib.parse import quote
+        _log.exception(
+            "admin password rotation crashed (actor=%s)",
+            getattr(session, "username", "?"),
+        )
+        return RedirectResponse(
+            "/proxy/settings?error="
+            + quote(
+                "Failed to rotate admin password. Check the Mastio "
+                "container logs and try again."
+            ),
             status_code=303,
         )
 
@@ -346,11 +376,16 @@ async def settings_license_swap(request: Request):
 
     try:
         claims = swap_token(candidate)
-    except LicenseSwapError as exc:
+    except LicenseSwapError:
         # Audit the failed swap attempt so a paste-error / hostile JWT
         # is forensically visible. The candidate token itself is NOT
         # logged (it may be a valid JWT for the wrong tenant and we do
-        # not want to leak it via grep).
+        # not want to leak it via grep). The exception text can carry
+        # signing-key fingerprints / internal verifier state, so we keep
+        # it out of the HTTP response AND out of the audit detail row
+        # (audit detail is operator-readable but also exported in JSON
+        # bundles to customers). The full stack lands in stderr.
+        _log.exception("license swap rejected")
         actor = (
             getattr(session, "principal_id", None)
             or getattr(session, "username", None)
@@ -360,10 +395,15 @@ async def settings_license_swap(request: Request):
             agent_id=actor,
             action="license_swap",
             status="error",
-            detail=f"reason={exc} actor={actor}",
+            detail=f"actor={actor}",
         )
         return RedirectResponse(
-            f"/proxy/settings?error={quote(f'License swap rejected: {exc}')}",
+            "/proxy/settings?error="
+            + quote(
+                "License swap rejected. Check the JWT was issued for "
+                "this tenant and inspect the Mastio container logs for "
+                "the exact validator reason."
+            ),
             status_code=303,
         )
 

@@ -87,8 +87,21 @@ async def vault_page(request: Request):
                     }
                 else:
                     vault_status = {"connected": False, "error": f"HTTP {resp.status_code}"}
-        except Exception as exc:
-            vault_status = {"connected": False, "error": str(exc)}
+        except Exception:
+            # httpx / TLS / DNS exceptions can carry the configured
+            # VAULT_ADDR, intermediate CA paths, and other infrastructure
+            # detail that the dashboard should not render in the browser.
+            # Log to stderr with full context and surface a generic hint.
+            _log.exception(
+                "vault status probe failed: addr=%s", vault_addr,
+            )
+            vault_status = {
+                "connected": False,
+                "error": (
+                    "Vault unreachable. Check VAULT_ADDR + token "
+                    "configuration and the Mastio container logs."
+                ),
+            }
 
     return templates.TemplateResponse("vault.html", _ctx(
         request, session,
