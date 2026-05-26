@@ -12,6 +12,29 @@ flow until the next `## ` heading.
 
 ## [Unreleased]
 
+Polish on `main` accumulating for the next minor (target v0.5.5, mid next week). No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
+
+### Dashboard
+
+- **Session cookie now python-requests compatible** (#948, D-6). The dashboard cookie value was JSON-serialised with outer quotes plus `\054` (comma) escape sequences; vanilla `python-requests` cookielib mangled the value on the next request and the HMAC verify failed silently, dropping cold-readers who scripted with `requests` (instead of `cullis-sdk` httpx) into a session-invalid loop. New format is `base64url(json).hex(hmac)`, all RFC 6265 cookie-octet characters; `requests`, `httpx`, and `curl` round-trip identically. Legacy-format cookies are still parseable for the 8h migration window.
+- **Audit counter tooltips** (#949, A-2). Sidebar / header / chain-verify / DB row counts measure different things; each now carries a `title=""` tooltip explaining what it counts.
+- **`/proxy/update` (singular) redirects to `/proxy/updates`** (#949, A-4). 301 redirect preserves the query string.
+- **Overview update-available banner** (#949, A-5). Server-rendered inline fallback in addition to the HTMX advisory.
+- **A-3 regression guard** (#947). The `agent_cert_grace_cleanup` lifespan watcher's `WHERE previous_grace_period_expires_at IS NOT NULL` filter is the load-bearing line preventing false-positive `grace period expired` warnings. The SQL was already correct; this commit adds 3 regression tests and strengthens the docstring so a future refactor cannot silently relax the filter.
+
+### Bundle
+
+- **`deploy.sh --wipe-data` actually wipes the bind-mounted dirs** (#949, D-10). The host-side `compgen -G` empty-check short-circuited the busybox wipe because the data dir is mode 0700 owned by uid 10001 post init-permissions, so the operator's host uid saw the dir as "empty" even when `mcp_proxy.db` was inside. Removed the compgen probe.
+
+### Enrollment
+
+- **`poll_url` carries the operator-visible `:9443`** (#949, B-1). The `start_enrollment` response now prefers `settings.proxy_public_url` (operator-visible URL) over `request.base_url` (which inside the container resolves to the internal mcp-proxy hostname).
+
+### Site / docs
+
+- **cullis.io hero quickstart pointed at `mastio-v0.5.4.1`** (#946). The site code-block was four releases stale (`v0.5.1`); cold-readers copying the hero command got a 404. Both `index.astro` and `index-dark.astro` bumped.
+- **README quickstart polish** (#946). `chat_completion` example switched to OpenAI-compat kwargs style. Added `enroll_via_dashboard_approval` to the entry-points table. `from_identity_dir` signature shows the auto-discovery `dpop.jwk` shape (the D-11 fix made the explicit kwarg unnecessary).
+
 ## [v0.5.4.1] — Cold-reader polish patch — 2026-05-26
 
 Three confidence-killer bug fixes between v0.5.4 release this morning and the public Show HN announce this evening:
