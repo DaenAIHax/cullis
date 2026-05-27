@@ -46,11 +46,12 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 `cullis-sdk` is the Python client an autonomous agent uses to talk to Mastio. It handles mTLS client cert presentation, DPoP signing, token refresh, and request retries, exposing a small surface that maps onto what an agent actually does: ask the LLM something, list the MCP tools it is allowed to call, call one, and let the audit trail accumulate underneath.
 
-Three entry points, depending on how the identity gets to the agent:
+Two entry points, depending on how the identity gets to the agent:
 
-- `CullisClient.from_enrollment(enroll_url)` is the quickstart path. The dashboard issues a one-shot enrollment URL; the SDK calls it, persists the credentials locally, generates a DPoP keypair, and returns a ready-to-use client. No file paths to wire up.
-- `CullisClient.enroll_via_dashboard_approval(mastio_url, requester_name=..., requester_email=..., save_to=...)` is the scripted bootstrap path. The SDK submits a CSR, polls until an admin clicks Approve in the dashboard, then writes the identity-dir layout (`agent.key + agent.crt + dpop.jwk + meta.json`) and returns the client. Useful for CI/CD onboarding flows where no human is at a terminal to copy a URL.
-- `CullisClient.from_identity_dir(mastio_url, cert_path=..., key_path=...)` is the production path. Cert + key are delivered out-of-band (BYOCA, KMS, systemd LoadCredential) and the SDK loads them from disk. The DPoP key auto-discovers from a `dpop.jwk` sibling next to `cert_path`. The cert and key are the credential. There is no shared API key to leak.
+- `CullisClient.from_identity_dir(mastio_url, cert_path=..., key_path=...)` is the default path. The admin mints the agent in the dashboard ("Create agent manually"), downloads the resulting `identity-bundle.zip`, and delivers it to the agent host out of band (scp, KMS, Vault, systemd LoadCredential — whatever the runbook prescribes). The agent unzips it anywhere, and the SDK loads `agent.crt + agent.key` from disk; `ca-chain.pem` and `dpop.jwk` are auto-discovered as siblings. The cert IS the credential (ADR-014, RFC 8705 §3 mTLS); there is no shared API key to leak.
+- `CullisClient.enroll_via_dashboard_approval(mastio_url, requester_name=..., requester_email=..., save_to=...)` is the scripted bootstrap path. The SDK submits a CSR, polls until an admin clicks Approve in the dashboard, then writes the identity-dir layout (`agent.key + agent.crt + dpop.jwk + meta.json`) and returns the client. Useful for CI/CD onboarding flows where the agent host bootstraps itself and no human is at a terminal to copy files.
+
+`CullisClient.from_enrollment(enroll_url)` is **deprecated** in 0.2.0. It was the ADR-011 one-shot enrollment URL path, designed before ADR-014 made the client certificate the sole credential. The server-side endpoint did not survive the 2026-05 pivot, and the admin-minted `identity-bundle.zip` flow above covers the same operator use case with stronger guarantees (no API key shared secret, no DB-side cert state surviving distribution). The method emits a `DeprecationWarning` and will be removed in 0.3.0.
 
 `chat_completion` and `chat_completion_stream` route through Mastio's `/v1/llm/chat` endpoint. The provider, the model, and the upstream API key are configured org-side, in the Mastio dashboard. The agent never sees the upstream key, and every prompt and response is audit-logged with the agent identity attached.
 
@@ -59,9 +60,15 @@ Three entry points, depending on how the identity gets to the agent:
 ```python
 from cullis_sdk import CullisClient
 
-# Paste the enrollment URL the dashboard showed you after "Enroll new agent".
-client = CullisClient.from_enrollment(
-    "https://localhost:9443/v1/enroll/enroll_kyc_screener_abc123",
+# Admin minted this identity in the dashboard ("Create agent manually") and
+# sent you the resulting identity-bundle.zip. Unzip anywhere on the agent
+# host — /etc/cullis/agent/, a KMS-mounted dir, a container volume, your
+# call. The cert IS the credential (ADR-014, RFC 8705 §3 mTLS); there is
+# no shared API key.
+client = CullisClient.from_identity_dir(
+    "https://mastio.acme.local:9443",
+    cert_path="/etc/cullis/agent/agent.crt",
+    key_path="/etc/cullis/agent/agent.key",
     verify_tls=False,  # self-signed Org CA on a laptop; pin ca_chain_path in prod
 )
 
@@ -103,8 +110,11 @@ echo 'MCP_PROXY_ANTHROPIC_API_KEY=sk-ant-...' >> proxy.env
 #    host.docker.internal on Docker Desktop, an interface IP on Linux pure so
 #    a browser on a separate laptop on the same LAN can reach the VM).
 #    Accept the self-signed TLS warning, create the admin account, go to
-#    Agents > Enroll new, and copy the one-shot enrollment URL the dashboard
-#    displays.
+#    Agents > "Create agent manually", fill in a name, submit, and click
+#    "Download identity bundle" to get an identity-bundle.zip containing
+#    agent.crt + agent.key + ca-chain.pem + meta.json. Deliver that zip to
+#    the agent host out of band (scp / KMS / Vault — whatever your runbook
+#    says) and unzip it into the directory the SDK will read.
 
 # 4. Install the SDK.
 pip install cullis-sdk
@@ -165,7 +175,7 @@ Alpha. The Mastio runs end-to-end on a laptop and ships from a public release tr
 | Component | Latest | What it is |
 |---|---|---|
 | **Cullis Mastio** | [`mastio-v0.5.5`](https://github.com/cullis-security/cullis/releases/tag/mastio-v0.5.5) | Org gateway, agent CA, Rego + allowlist policy engine, audit chain, MCP reverse proxy, embedded AI gateway, OPA Data API + CloudEvents bridge for external data planes |
-| **Cullis SDK** | [`cullis-sdk 0.1.3`](https://pypi.org/project/cullis-sdk/) | Python client used by autonomous agents to talk to Mastio. Supports `from_identity_dir` (plain file) and `from_systemd_credentials` (Linux production tmpfs delivery) |
+| **Cullis SDK** | [`cullis-sdk 0.2.0`](https://pypi.org/project/cullis-sdk/) | Python client used by autonomous agents to talk to Mastio. Supports `from_identity_dir` (plain file) and `from_systemd_credentials` (Linux production tmpfs delivery) |
 
 Use Cullis in evaluation, integration, and internal deploys. The community release is the only release; there is no commercial tier today. Feedback, bug reports, and PRs in the public repo.
 

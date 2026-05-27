@@ -23,9 +23,6 @@ README quickstart examples broken on a fresh `pip install cullis-sdk`.
   trail carries a per-call `cullis_trace_id`.
 - `CullisClient.list_mcp_tools()` / `.call_mcp_tool(name, arguments)` -
   MCP reverse-proxy surface. Capability gate enforced server-side.
-- `CullisClient.from_enrollment(enroll_url, verify_tls=False)` quickstart
-  constructor: paste a one-shot enrollment URL from the dashboard,
-  get a ready-to-use client. No file paths to wire up.
 - `CullisClient.enroll_via_dashboard_approval(mastio_url, requester_name=,
   requester_email=, save_to=)` scripted bootstrap path for CI/CD
   onboarding: SDK submits a CSR, polls until admin clicks Approve,
@@ -39,6 +36,20 @@ README quickstart examples broken on a fresh `pip install cullis-sdk`.
   `dpop_key_path` / `ca_chain_path`).
 - All authenticated egress now flows through the cert-pinned DPoP path
   (no plain Bearer accepted).
+
+### Deprecated
+
+- `CullisClient.from_enrollment(enroll_url)` now emits a
+  `DeprecationWarning` and will be removed in 0.3.0. The ADR-011
+  one-shot URL flow was an API-key bearer design predating ADR-014
+  (mTLS RFC 8705); the server-side `GET /v1/enroll/<token>` endpoint
+  did not survive the 2026-05 pivot to Mastio standalone. The
+  admin-minted `identity-bundle.zip` workflow (download from the
+  Mastio dashboard, unzip wherever the agent host stores credentials,
+  load via `from_identity_dir`) covers the same operator use case
+  without a shared API key. CI/CD bootstrap paths that need to
+  generate identity dynamically should use
+  `enroll_via_dashboard_approval(...)` instead.
 
 ### Compatibility
 
