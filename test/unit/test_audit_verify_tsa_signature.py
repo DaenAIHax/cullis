@@ -96,7 +96,13 @@ def _build_ca(*, common_name: str = "test CA"):
     return key, cert
 
 
-def _build_tsa_leaf(ca_key, ca_cert, *, with_timestamping_eku: bool = True):
+def _build_tsa_leaf(
+    ca_key,
+    ca_cert,
+    *,
+    with_timestamping_eku: bool = True,
+    eku_critical: bool = True,
+):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test TSA")])
     now = datetime.now(timezone.utc)
@@ -124,7 +130,7 @@ def _build_tsa_leaf(ca_key, ca_cert, *, with_timestamping_eku: bool = True):
     if with_timestamping_eku:
         builder = builder.add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.TIME_STAMPING]),
-            critical=True,
+            critical=eku_critical,
         )
     cert = builder.sign(ca_key, hashes.SHA256())
     return key, cert
@@ -438,6 +444,53 @@ def test_signer_cert_without_timestamping_eku_is_rejected(
     )
     assert not ok
     assert label == "rfc3161-no-timestamping-eku"
+
+
+def test_signer_cert_with_non_critical_timestamping_eku(
+    verifier_mod, trust_store,
+):
+    """Pin the EKU-criticality discrepancy between Cullis pre-check and
+    ``rfc3161-client``.
+
+    The Cullis pre-check in ``_verify_rfc3161_full`` accepts the EKU
+    ``id-kp-timeStamping`` regardless of its ``critical`` flag — it
+    only inspects ``ExtendedKeyUsage.value`` for the OID. ``rfc3161-
+    client._Verifier._verify_leaf_certs`` (`:289-291`), however,
+    requires the extension to be marked critical and rejects the
+    token otherwise. The net effect is: a TST whose leaf has
+    ``EKU(critical=False)`` passes the pre-check, then fails at the
+    library's ``verify_message`` step and surfaces as
+    ``rfc3161-signature-invalid``.
+
+    This test pins the current behaviour so a future refactor that
+    pulls the pre-check stricter (or that swaps the library) does not
+    silently change the failure label observed by ops.
+    """
+    tsa_key, tsa_cert = _build_tsa_leaf(
+        trust_store["ca_key"], trust_store["ca_cert"],
+        eku_critical=False,
+    )
+    message = b"row_hash_hex_aabbccddeeff"
+    raw_tst, digest = _build_tst(
+        tsa_key=tsa_key,
+        tsa_cert=tsa_cert,
+        ca_cert=trust_store["ca_cert"],
+        message=message,
+    )
+    ok, label = verifier_mod.verify_token_against_digest(
+        b"T1|" + raw_tst,
+        digest.hex(),
+        row_hash=message.decode("ascii"),
+        trust_store_path=trust_store["pem_path"],
+    )
+    # Today: Cullis pre-check passes (EKU present, criticality not
+    # enforced) but the library's _verify_leaf_certs raises and we
+    # return rfc3161-signature-invalid. If a future change pulls the
+    # pre-check stricter to match the library, the expected label
+    # becomes rfc3161-no-timestamping-eku — update this assert
+    # consciously when that happens.
+    assert not ok
+    assert label == "rfc3161-signature-invalid"
 
 
 def test_wrong_trust_root_is_rejected(verifier_mod, trust_store, tmp_path):
