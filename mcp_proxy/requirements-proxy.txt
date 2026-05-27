@@ -23,7 +23,14 @@ redis>=5.0.0
 # ADR-017 native AI gateway on Mastio (architectural fix: Court is
 # federation-only, AI gateway egress runs in-process on Mastio).
 # Required when MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded.
-litellm>=1.50.0
+# Floor 1.83.7 closes the same CVE set documented in requirements.txt
+# (CVE-2026-42208 SQLi on CISA KEV, CVE-2026-42271 + 35029 RCE, OIDC
+# cache collision, pass-the-hash exposure, March 2026 supply chain
+# compromise of PyPI 1.82.7 / 1.82.8). Ceiling matches the root
+# requirements pin so the proxy image and the SDK install stay in
+# lock-step. ADR-038 Phase 1 will replace this with proprietary
+# provider adapters.
+litellm>=1.83.7,<2.0
 # ADR-033 Phase 2 WebAuthn user assertion binding (PR #789). The lazy
 # importer in mcp_proxy/auth/webauthn/_lib.py raises
 # WebAuthnLibraryMissingError on every register/authenticate path and
