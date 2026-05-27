@@ -30,9 +30,13 @@ release. The full Mastio version list is at
 > newer bundle. The cullis.io/download page above is updated atomically
 > with each release.
 
-Open `https://localhost:9443/proxy/login` (the browser will warn — the
-TLS cert is signed by your auto-generated Org CA, not a public CA).
-Complete the first-boot wizard and enroll your first agent.
+When `deploy.sh` finishes it prints the dashboard URL it picked for
+your host (auto-detected: `host.docker.internal` on macOS / Windows /
+Docker Desktop, an interface IP on Linux pure so a remote laptop on
+the same LAN can reach the VM). Open that URL — the browser will
+warn, the TLS cert is signed by your auto-generated Org CA, not a
+public CA. Complete the first-boot wizard and enroll your first
+agent.
 
 ## Enable chat (Anthropic API key)
 

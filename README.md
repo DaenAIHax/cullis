@@ -99,9 +99,12 @@ cd cullis-mastio-bundle && ./deploy.sh
 echo 'MCP_PROXY_ANTHROPIC_API_KEY=sk-ant-...' >> proxy.env
 ./deploy.sh --pull
 
-# 3. Open https://localhost:9443/proxy/login, accept the self-signed TLS warning,
-#    create the admin account, go to Agents > Enroll new, and copy the one-shot
-#    enrollment URL the dashboard displays.
+# 3. Open the dashboard URL the deploy script prints (auto-detected per host:
+#    host.docker.internal on Docker Desktop, an interface IP on Linux pure so
+#    a browser on a separate laptop on the same LAN can reach the VM).
+#    Accept the self-signed TLS warning, create the admin account, go to
+#    Agents > Enroll new, and copy the one-shot enrollment URL the dashboard
+#    displays.
 
 # 4. Install the SDK.
 pip install cullis-sdk

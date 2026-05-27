@@ -318,3 +318,43 @@ _hint_on_bind_mount_failure() {
        See README "Troubleshooting" → "not a directory: mount".
 EOF
 }
+
+# Pick a default public hostname for MCP_PROXY_PROXY_PUBLIC_URL.
+#
+# The previous default ``host.docker.internal`` worked on macOS and
+# Windows (where Docker Desktop pins it in /etc/hosts to the host's
+# loopback) but silently broke on Linux hosts without Docker Desktop:
+# the magic name does not resolve from the host browser, from a sibling
+# container, or from a SDK client on a different machine. Cold-readers
+# hit DNS errors or 401 ``Invalid DPoP proof: htu mismatch`` and could
+# not tell from the deploy banner that the URL itself was the problem.
+#
+# Detection order:
+#   1. host.docker.internal already in /etc/hosts → use it (Docker
+#      Desktop on any OS, or operator who pinned it themselves).
+#   2. macOS / Windows (uname not Linux) → use host.docker.internal
+#      anyway; Docker Desktop maps it at runtime even when not in
+#      /etc/hosts.
+#   3. Linux pure: best non-loopback IPv4 of the interface that holds
+#      the default route. Reachable from a sibling container, from the
+#      host browser, AND from another machine on the same LAN.
+#   4. No default route (very minimal containers) → ``localhost`` as
+#      last resort. Same behaviour as the legacy default.
+_detect_default_public_host() {
+    if grep -q "host.docker.internal" /etc/hosts 2>/dev/null; then
+        echo "host.docker.internal"
+        return
+    fi
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "host.docker.internal"
+        return
+    fi
+    local _ip
+    _ip="$(ip -4 -o route get 1.1.1.1 2>/dev/null \
+            | awk '{for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}')"
+    if [[ -n "$_ip" ]]; then
+        echo "$_ip"
+        return
+    fi
+    echo "localhost"
+}

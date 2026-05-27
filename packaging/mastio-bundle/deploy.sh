@@ -744,24 +744,30 @@ if [[ ! -f "$SCRIPT_DIR/proxy.env" ]]; then
     # ``Invalid DPoP proof: htu mismatch`` on every egress. Ask up front
     # so the operator never finds out post-deploy.
     #
-    # The default ``host.docker.internal:9443`` covers BOTH the browser
-    # on the host (resolves to 127.0.0.1 via the host's hosts file or
-    # docker desktop's automatic mapping) AND a sibling docker container
-    # such as the Frontdesk Connector reaching the Mastio across docker
-    # networks. ``localhost:9443`` only works for the host browser case
-    # and silently breaks the moment a second component (Frontdesk,
-    # second Mastio, agent on a different docker network) is introduced.
+    # The default URL is detected at boot via _detect_default_public_host
+    # (in _common-deploy-helpers.sh): host.docker.internal on macOS /
+    # Windows / Docker Desktop, an interface IP on Linux pure (so a
+    # remote agent SDK or LAN browser can reach the Mastio), localhost
+    # as last-resort fallback. The historical hardcoded
+    # ``host.docker.internal:9443`` silently broke VM / remote-laptop
+    # setups: the magic name does not resolve from the host browser or
+    # from a client on a different machine.
+    _default_public_host="$(_detect_default_public_host)"
+    _default_public_url="https://${_default_public_host}:9443"
     echo ""
     echo "  ${BOLD}Where will agents reach this Mastio?${RESET}"
-    echo "    ${GRAY}- Laptop / single VM: just press Enter (uses https://host.docker.internal:9443)${RESET}"
-    echo "      ${GRAY}covers host browser AND sibling containers (Frontdesk bundle, etc.)${RESET}"
-    echo "    ${GRAY}- Internal server with stable DNS: enter the public URL agents resolve at${RESET}"
-    echo "    ${GRAY}  e.g. https://mastio.acme.local  or  https://192.168.10.42:9443${RESET}"
-    echo "    ${GRAY}- Internet-facing: the LB/ingress hostname${RESET}"
-    echo "    ${GRAY}  e.g. https://mastio.myorg.example.com${RESET}"
+    echo "    ${GRAY}- Single laptop / VM (Mastio + browser + SDK on the same host):${RESET}"
+    echo "      ${GRAY}  just press Enter — uses ${_default_public_url}${RESET}"
+    echo "    ${GRAY}- VM hosting Mastio, browser/SDK on a separate machine:${RESET}"
+    echo "      ${GRAY}  press Enter if the default above is reachable from that machine,${RESET}"
+    echo "      ${GRAY}  or enter the explicit hostname / LAN IP (e.g. https://192.168.10.42:9443)${RESET}"
+    echo "    ${GRAY}- Internal server with stable DNS:${RESET}"
+    echo "      ${GRAY}  e.g. https://mastio.acme.local${RESET}"
+    echo "    ${GRAY}- Internet-facing: the LB / ingress hostname${RESET}"
+    echo "      ${GRAY}  e.g. https://mastio.myorg.example.com${RESET}"
     echo ""
-    read -rp "  Public URL [https://host.docker.internal:9443]: " _public_url
-    _public_url="${_public_url:-https://host.docker.internal:9443}"
+    read -rp "  Public URL [${_default_public_url}]: " _public_url
+    _public_url="${_public_url:-${_default_public_url}}"
 
     # Strip any pre-existing line and re-add (proxy.env from the
     # generator may already carry an empty one).
@@ -783,6 +789,17 @@ if [[ ! -f "$SCRIPT_DIR/proxy.env" ]]; then
     _san="mastio.local,localhost,host.docker.internal"
     if [[ -n "$_public_host" && "$_public_host" != "localhost" && "$_public_host" != "host.docker.internal" ]]; then
         _san="${_public_host},${_san}"
+    fi
+    # Also include the detected default host (e.g. an interface IP on
+    # Linux pure) when it differs from the operator-typed public host.
+    # An agent SDK + the browser may reach the Mastio via different
+    # names (IP from the host browser, DNS from sibling agents), and
+    # both have to land on the same nginx TLS cert without SAN errors.
+    if [[ -n "${_default_public_host:-}" \
+          && "$_default_public_host" != "$_public_host" \
+          && "$_default_public_host" != "localhost" \
+          && "$_default_public_host" != "host.docker.internal" ]]; then
+        _san="${_default_public_host},${_san}"
     fi
     sed -i.bak '/^#*[[:space:]]*MCP_PROXY_NGINX_SAN=/d' "$SCRIPT_DIR/proxy.env"
     rm -f "$SCRIPT_DIR/proxy.env.bak"

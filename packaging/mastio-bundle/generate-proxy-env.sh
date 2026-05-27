@@ -30,6 +30,17 @@ warn() { echo -e "  ${YELLOW}!${RESET}  $1"; }
 err()  { echo -e "  ${RED}✗${RESET}  $1"; }
 die()  { err "$1"; exit 1; }
 
+# Pick up _detect_default_public_host from the shared helpers. The file
+# ships sibling inside the bundle tarball; in the repo it lives one dir
+# up (``packaging/``). Tolerate both so the script works from either
+# layout. See stage-mastio-bundle.sh for the tarball-staging contract.
+# shellcheck source=../_common-deploy-helpers.sh
+if [ -f "$SCRIPT_DIR/_common-deploy-helpers.sh" ]; then
+    source "$SCRIPT_DIR/_common-deploy-helpers.sh"
+elif [ -f "$SCRIPT_DIR/../_common-deploy-helpers.sh" ]; then
+    source "$SCRIPT_DIR/../_common-deploy-helpers.sh"
+fi
+
 MODE="interactive"
 FORCE=0
 # Opt-in to auto-seed the first-boot admin password. Default behavior
@@ -137,18 +148,18 @@ case "$MODE" in
         ;;
     defaults)
         BROKER="${BROKER_URL:-http://broker:8000}"
-        # Default ``https://host.docker.internal:9443`` matches the
-        # docker-compose.yml fallback and the deploy.sh interactive
-        # prompt default. This is the same URL the interactive flow
-        # writes when the operator presses Enter at the public-URL
-        # prompt. Emitting it explicitly keeps ``--defaults`` self-
-        # contained for CI / Ansible / quick-laptop boot: the resulting
-        # proxy.env survives standalone (no extra deploy.sh post-fix)
-        # and the operator never hits 401 ``htu mismatch`` because the
-        # field was empty. Operators fronting the Mastio with a stable
-        # public hostname override via ``PROXY_PUBLIC_URL=...`` env or
-        # by editing proxy.env after generation.
-        PUBLIC="${PROXY_PUBLIC_URL:-https://host.docker.internal:9443}"
+        # Default URL is detected at boot rather than hardcoded so a
+        # Linux pure host (no Docker Desktop) gets an IP reachable from
+        # a remote agent SDK or LAN browser, while macOS/Windows or
+        # Docker Desktop on Linux keep getting ``host.docker.internal``
+        # (the historical default, still correct in those scenarios).
+        # See _detect_default_public_host in _common-deploy-helpers.sh.
+        # Emitting an explicit non-empty value keeps ``--defaults``
+        # self-contained for CI / Ansible / quick-laptop boot and avoids
+        # the 401 ``Invalid DPoP proof: htu mismatch`` on every agent
+        # enrollment caused by an unset PROXY_PUBLIC_URL.
+        _default_public_host="$(_detect_default_public_host 2>/dev/null || echo host.docker.internal)"
+        PUBLIC="${PROXY_PUBLIC_URL:-https://${_default_public_host}:9443}"
         JWKS="${BROKER%/}/.well-known/jwks.json"
         ENVIRONMENT="development"
         ;;
@@ -156,14 +167,15 @@ case "$MODE" in
         echo ""
         read -rp "  Broker URL [http://broker:8000]: " BROKER
         BROKER="${BROKER:-http://broker:8000}"
-        # Same default the deploy.sh interactive prompt offers (line ~611):
-        # covers host browser + sibling containers in the laptop / single
-        # VM scenario. Empty input → laptop default, never the empty
-        # string (MINOR-F: empty triggers 401 htu mismatch on every agent
-        # enrollment because the docker-compose ${VAR:-...} fallback does
-        # NOT apply uniformly across all consumers of proxy.env).
-        read -rp "  Proxy public URL [https://host.docker.internal:9443]: " PUBLIC
-        PUBLIC="${PUBLIC:-https://host.docker.internal:9443}"
+        # Same default the deploy.sh interactive prompt offers. Empty
+        # input → detected default, never the empty string (MINOR-F:
+        # empty triggers 401 htu mismatch on every agent enrollment
+        # because the docker-compose ${VAR:-...} fallback does NOT
+        # apply uniformly across all consumers of proxy.env).
+        _default_public_host="$(_detect_default_public_host 2>/dev/null || echo host.docker.internal)"
+        _default_public_url="https://${_default_public_host}:9443"
+        read -rp "  Proxy public URL [${_default_public_url}]: " PUBLIC
+        PUBLIC="${PUBLIC:-${_default_public_url}}"
         JWKS="${BROKER%/}/.well-known/jwks.json"
         ENVIRONMENT="development"
         ;;
