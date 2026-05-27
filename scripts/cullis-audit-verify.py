@@ -169,9 +169,71 @@ def _chain_reaches_trust_store(
     signed cert in the embedded set that an attacker could otherwise
     use to bypass the trust store.
     """
+    from cryptography import x509
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+
+    def _is_valid_intermediate(cand) -> bool:
+        """Defense-in-depth RFC 5280 §6.1.4 checks on a candidate
+        intermediate cert. ``rfc3161-client`` already does most of this
+        in its own chain walk, but the operator-pin pre-check has been
+        delegating signature + linkage verification only. Adding these
+        keeps a forged intermediate (whose subject/issuer linkage and
+        signature happen to look right but whose extensions don't
+        authorise it to issue subordinate certs) from satisfying the
+        pre-check.
+
+        Required:
+
+        - ``BasicConstraints(ca=True)`` — the cert must self-declare as
+          a CA. A leaf cert (``ca=False`` or extension absent) cannot
+          legitimately sit between the TSA signer and a trust root.
+        - ``KeyUsage.key_cert_sign=True`` (when the KeyUsage extension
+          is present). RFC 5280 §4.2.1.3 requires this bit on any cert
+          that signs other certs; we treat its absence as fatal.
+
+        ``path_length`` is enforced separately in the BFS loop because
+        it depends on how many intermediates were walked, not just on
+        the candidate cert itself.
+        """
+        try:
+            bc = cand.extensions.get_extension_for_class(
+                x509.BasicConstraints,
+            ).value
+            if not bc.ca:
+                return False
+        except x509.ExtensionNotFound:
+            # No BasicConstraints → can't authoritatively assert CA
+            # status. Refuse rather than infer.
+            return False
+        try:
+            ku = cand.extensions.get_extension_for_class(
+                x509.KeyUsage,
+            ).value
+            if not ku.key_cert_sign:
+                return False
+        except x509.ExtensionNotFound:
+            # KeyUsage is optional in RFC 5280, but when present on a
+            # CA cert ``key_cert_sign`` MUST be true. When absent we
+            # tolerate it for backwards compatibility with older roots
+            # in the wild that omit KeyUsage entirely.
+            pass
+        return True
+
+    def _candidate_path_length(cand) -> int | None:
+        """Return the ``pathLenConstraint`` of the candidate cert, or
+        ``None`` when unconstrained / extension absent. RFC 5280
+        §6.1.4 item (i): the number of certificates in the chain
+        following this cert must not exceed ``pathLenConstraint + 1``.
+        """
+        try:
+            bc = cand.extensions.get_extension_for_class(
+                x509.BasicConstraints,
+            ).value
+            return bc.path_length
+        except x509.ExtensionNotFound:
+            return None
 
     def _is_within_validity(cert) -> bool:
         nvb = cert.not_valid_before_utc if hasattr(cert, "not_valid_before_utc") else cert.not_valid_before.replace(tzinfo=timezone.utc)
@@ -180,8 +242,15 @@ def _chain_reaches_trust_store(
 
     def _verify_signed_by(child, parent) -> bool:
         """True when ``parent``'s public key validates ``child``'s
-        signature. Supports the RSA-PKCS#1v1.5 and ECDSA algorithms
-        every public TSA in production uses."""
+        signature. Supports RSA-PKCS#1v1.5, RSA-PSS, and ECDSA.
+
+        Public TSAs in production today (DigiCert / GlobalSign /
+        Sectigo / Apple) emit RSA-PKCS#1v1.5 or ECDSA, but EJBCA
+        defaults to RSA-PSS — without the PSS branch a valid PSS-signed
+        intermediate would be rejected as ``rfc3161-untrusted-chain``,
+        confusing the auditor between a real trust mismatch and a
+        plain "we don't speak this algorithm" gap.
+        """
         try:
             pub = parent.public_key()
             sig = child.signature
@@ -190,7 +259,16 @@ def _chain_reaches_trust_store(
             if hash_alg is None:
                 return False
             if isinstance(pub, rsa.RSAPublicKey):
-                pub.verify(sig, tbs, padding.PKCS1v15(), hash_alg)
+                # cryptography exposes the parsed signature_algorithm_
+                # parameters as either a ``padding.PSS`` instance (when
+                # the cert was signed with RSASSA-PSS, OID 1.2.840.
+                # 113549.1.1.10) or ``None`` for PKCS#1v1.5. Prefer the
+                # PSS path when available.
+                sig_params = getattr(child, "signature_algorithm_parameters", None)
+                if isinstance(sig_params, padding.PSS):
+                    pub.verify(sig, tbs, sig_params, hash_alg)
+                else:
+                    pub.verify(sig, tbs, padding.PKCS1v15(), hash_alg)
                 return True
             if isinstance(pub, ec.EllipticCurvePublicKey):
                 pub.verify(sig, tbs, ec.ECDSA(hash_alg))
@@ -205,14 +283,19 @@ def _chain_reaches_trust_store(
     # matches the current node's issuer and whose key validates the
     # current node's signature. Stop when the parent is in the trust
     # store. Bound by the total cert population to avoid loops.
+    #
+    # Frontier holds tuples of ``(cert, intermediates_below)`` —
+    # ``intermediates_below`` counts how many embedded intermediates
+    # have been walked through to reach this node (the leaf starts at
+    # 0). Used to enforce RFC 5280 §6.1.4 ``pathLenConstraint``.
     visited: set[bytes] = set()
-    frontier = [leaf]
+    frontier: list = [(leaf, 0)]
     max_steps = len(embedded_certs) + len(trust_roots) + 2
     for _ in range(max_steps):
         if not frontier:
             return False
         nxt = []
-        for node in frontier:
+        for node, intermediates_below in frontier:
             if not _is_within_validity(node):
                 continue
             fp = node.fingerprint(hashes.SHA256())
@@ -221,7 +304,10 @@ def _chain_reaches_trust_store(
             visited.add(fp)
             # Trust-anchor check: does ANY trust root validate this
             # node? (Self-signed roots validate themselves; subordinate
-            # nodes are validated by a root cert.)
+            # nodes are validated by a root cert.) ``pathLenConstraint``
+            # on the root is not checked: by RFC 5280 the constraint
+            # applies to the root's authorisation over the rest of the
+            # chain, but as the trust anchor it is the boundary itself.
             for root in trust_roots:
                 if (
                     node.issuer == root.subject
@@ -230,15 +316,38 @@ def _chain_reaches_trust_store(
                 ):
                     return True
             # Otherwise, hunt for a parent in embedded_certs that
-            # signs this node and recurse on the parent.
+            # signs this node, AND that is allowed by its own
+            # extensions to issue subordinate certs at this depth.
             for cand in embedded_certs:
                 if cand.fingerprint(hashes.SHA256()) in visited:
                     continue
                 if (
                     node.issuer == cand.subject
                     and _verify_signed_by(node, cand)
+                    and _is_valid_intermediate(cand)
                 ):
-                    nxt.append(cand)
+                    # Enforce pathLenConstraint on ``cand``: the cert
+                    # authorises at most ``pathLenConstraint``
+                    # intermediates below it. We've already walked
+                    # ``intermediates_below`` intermediates between the
+                    # leaf and ``cand``; that must not exceed ``cand``'s
+                    # constraint, otherwise ``cand`` was not minted with
+                    # authority to certify the present chain shape.
+                    cand_pathlen = _candidate_path_length(cand)
+                    if (
+                        cand_pathlen is not None
+                        and intermediates_below > cand_pathlen
+                    ):
+                        continue
+                    # ``cand`` has one more intermediate below it than
+                    # ``node`` did, UNLESS ``node`` is the leaf
+                    # (intermediates_below stays 0 for the first hop).
+                    new_below = (
+                        intermediates_below
+                        if node is leaf
+                        else intermediates_below + 1
+                    )
+                    nxt.append((cand, new_below))
         frontier = nxt
     return False
 
@@ -418,12 +527,44 @@ def _verify_rfc3161_full(
         tst = _asn1_cms.ContentInfo.load(raw_token)
         encap = tst["content"]["encap_content_info"]["content"].parsed
         imprint = encap["message_imprint"]["hashed_message"].native
+        imprint_alg_oid = (
+            encap["message_imprint"]["hash_algorithm"]["algorithm"].dotted
+        )
         gen_time = encap["gen_time"].native
     except Exception as exc:  # noqa: BLE001
         print(f"  rfc3161 parse error: {exc}", file=sys.stderr)
         return (False, "rfc3161-parse-error")
 
-    if imprint.hex() != digest_hex:
+    # Hash-algorithm-aware imprint pre-check. ``digest_hex`` is
+    # precomputed by the caller as SHA-256 of the row_hash, which
+    # matches today's producer (``mcp_proxy/audit/tsa_client.py``
+    # hardcoded SHA-256), but the TSA itself could emit SHA-384 / 512
+    # tokens. The downstream ``verifier.verify_message`` already
+    # dispatches on the declared algorithm; this pre-check has to
+    # follow suit or it would short-circuit a valid SHA-384/512 token
+    # as ``rfc3161-imprint-mismatch``.
+    _OID_SHA256 = "2.16.840.1.101.3.4.2.1"
+    _OID_SHA384 = "2.16.840.1.101.3.4.2.2"
+    _OID_SHA512 = "2.16.840.1.101.3.4.2.3"
+    if imprint_alg_oid == _OID_SHA256:
+        expected_imprint_hex = digest_hex
+    elif imprint_alg_oid in (_OID_SHA384, _OID_SHA512):
+        import hashlib
+
+        hasher = (
+            hashlib.sha384
+            if imprint_alg_oid == _OID_SHA384
+            else hashlib.sha512
+        )
+        expected_imprint_hex = hasher(row_hash.encode("ascii")).hexdigest()
+    else:
+        print(
+            f"  rfc3161 unsupported imprint hash algorithm OID "
+            f"{imprint_alg_oid}",
+            file=sys.stderr,
+        )
+        return (False, "rfc3161-unsupported-imprint-alg")
+    if imprint.hex() != expected_imprint_hex:
         return (False, "rfc3161-imprint-mismatch")
 
     now = datetime.now(timezone.utc)
@@ -1416,7 +1557,11 @@ def main() -> int:
             "or chain check. The anchor is no longer dispute-grade — "
             "an attacker who knows the row_hash can fabricate a passing "
             "token. Use only when the trust store is genuinely "
-            "unavailable to the verifying party."
+            "unavailable to the verifying party. When the flag is in "
+            "effect the verifier emits a WARNING line to stderr (not "
+            "stdout) for each token whose signature was downgraded; "
+            "operators piping stdout for machine-readable status must "
+            "also capture stderr to see the downgrade signal."
         ),
     )
     ap.add_argument(
