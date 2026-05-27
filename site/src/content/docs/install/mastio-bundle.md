@@ -51,7 +51,16 @@ cd cullis-mastio-bundle/
 ./deploy.sh
 ```
 
-The script prompts once for the **public URL** agents will use to reach this Mastio (e.g. `https://localhost:9443` for a local trial, or `https://mastio.acme.local` once you have DNS). It then:
+The script prompts once for the **public URL** agents will use to reach this Mastio. The default is auto-detected:
+
+- **Single laptop / VM** (Mastio + browser + SDK on the same host): just press Enter — the script picks `https://host.docker.internal:9443` on macOS / Windows / Docker Desktop, or an interface IP on Linux pure.
+- **VM hosting Mastio, browser/SDK on a separate machine** (e.g. a libvirt VM reached from your laptop over a bridge network): the auto-detected default is the VM's primary interface IP, reachable from the laptop. Press Enter unless you have a stable DNS name.
+- **Internal server with stable DNS**: enter `https://mastio.acme.local` (or whatever your DNS resolves).
+- **Internet-facing**: enter the LB / ingress hostname (e.g. `https://mastio.myorg.example.com`).
+
+Whatever you pick, the deploy script bakes it into both `MCP_PROXY_PROXY_PUBLIC_URL` (so DPoP `htu` validation accepts it) and the nginx TLS server certificate SAN list (so agents using `verify_tls=True` complete the handshake). The next deploy reuses these values; rerun `./deploy.sh` with a different answer to rotate.
+
+The script also:
 
 - Generates `proxy.env` from `proxy.env.example` if missing
 - Mints the Org CA and the nginx server certificate into `./nginx-certs/`
@@ -60,7 +69,7 @@ The script prompts once for the **public URL** agents will use to reach this Mas
 
 ## 3. First-boot wizard
 
-Open <https://localhost:9443/proxy/login> in a browser. The browser will warn about the certificate — that is expected: the TLS cert is signed by your auto-generated Org CA, not a public CA. Accept the warning once, or import `./certs/org-ca.pem` (also exported to `./nginx-certs/org-ca.crt`) into your OS trust store.
+Open the dashboard URL printed by the deploy script (e.g. `https://<your-host>:9443/proxy/login`) in a browser. The browser will warn about the certificate — that is expected: the TLS cert is signed by your auto-generated Org CA, not a public CA. Accept the warning once, or import `./certs/org-ca.pem` (also exported to `./nginx-certs/org-ca.crt`) into your OS trust store.
 
 Complete the wizard:
 
