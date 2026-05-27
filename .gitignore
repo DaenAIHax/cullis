@@ -78,12 +78,15 @@ packaging/pypi/NOTICE
 packaging/pypi/CHANGELOG.md
 
 # Same staging pattern for the standalone `cullis-sdk` PyPI build.
+# CHANGELOG.md is the exception: it is the SDK-specific PyPI release
+# history, authored in-place next to the pyproject so the build.sh
+# helper does not need to copy it over from the monorepo root (whose
+# CHANGELOG.md covers Mastio / Connector / Court too).
 packaging/pypi-sdk/cullis_sdk/
 packaging/pypi-sdk/README_PKG.md
 packaging/pypi-sdk/LICENSE
 packaging/pypi-sdk/LICENSE-APACHE-2.0
 packaging/pypi-sdk/NOTICE
-packaging/pypi-sdk/CHANGELOG.md
 
 # Cullis Chat SPA static — built artefact, not source. Copied here by
 # scripts/build-spa.sh before packaging the Connector wheel (ADR-019
