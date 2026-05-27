@@ -85,6 +85,18 @@ class _EnrollmentMixin:
     ) -> "CullisClient":
         """Bootstrap a proxy-connected client from an enrollment URL.
 
+        .. deprecated:: 0.2.0
+            ``from_enrollment`` is the ADR-011 one-shot URL flow, designed
+            before ADR-014 made the client certificate the sole credential.
+            The server-side ``GET /v1/enroll/<token>`` endpoint did not
+            survive the 2026-05 pivot to Mastio standalone — there is no
+            longer any Mastio that responds to this URL with a usable
+            payload. Use ``CullisClient.from_identity_dir(...)`` after
+            unzipping the admin-minted ``identity-bundle.zip`` from the
+            dashboard, or ``CullisClient.enroll_via_dashboard_approval(...)``
+            for the scripted CSR + approve flow. This method will be
+            removed in 0.3.0.
+
         Calls the enrollment endpoint to receive API key and config, then
         returns a lightweight client pre-configured for the proxy egress API.
 
@@ -110,8 +122,21 @@ class _EnrollmentMixin:
             client = CullisClient.from_enrollment("https://proxy.example.com/v1/enroll/enroll_buyer_abc123")
             agents = client.discover(capabilities=["order.read"])
         """
+        import warnings
+
         from cullis_sdk.client import _build_proxy_http_client, _check_insecure_tls
 
+        warnings.warn(
+            "CullisClient.from_enrollment() is deprecated since 0.2.0 and "
+            "will be removed in 0.3.0. The ADR-011 one-shot URL flow is "
+            "no longer supported server-side. Use "
+            "CullisClient.from_identity_dir(...) after unzipping the "
+            "admin-minted identity-bundle.zip from the Mastio dashboard, "
+            "or CullisClient.enroll_via_dashboard_approval(...) for the "
+            "scripted CSR + approve flow.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         _check_insecure_tls(verify_tls)
         # H10: route the bootstrap GET through the same SSLContext-aware
         # builder as the runtime client so the pinned Org CA is honoured
