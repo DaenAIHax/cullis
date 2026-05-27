@@ -32,7 +32,7 @@ Python 3.10+. No required system dependencies. Linux, macOS, Windows supported.
 Pin to a released minor in your `pyproject.toml` so a breaking minor bump doesn't surprise a future-you:
 
 ```toml
-cullis-sdk = ">=0.1,<0.2"
+cullis-sdk = ">=0.2,<0.3"
 ```
 
 For SPIRE/SPIFFE workload-API integration (only if you provision via SPIRE — section 2c), install the extra:
