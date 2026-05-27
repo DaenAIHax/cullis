@@ -1,0 +1,31 @@
+name: cloudflare-deploy
+
+# Triggers a Cloudflare Pages build via Deploy Hook URL on every push to main.
+# Backstop for the native GitHub webhook, which intermittently marks
+# auto-deployments as "skipped" (root cause unknown; Cloudflare side).
+# The Deploy Hook URL lives in repo secret CLOUDFLARE_DEPLOY_HOOK_URL.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: POST Cloudflare deploy hook
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call deploy hook
+        env:
+          HOOK_URL: ${{ secrets.CLOUDFLARE_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "${HOOK_URL:-}" ]; then
+            echo "::error::CLOUDFLARE_DEPLOY_HOOK_URL secret not set"
+            exit 1
+          fi
+          http_code=$(curl -fsS -X POST -o /dev/null -w '%{http_code}' "$HOOK_URL")
+          echo "Cloudflare deploy hook returned HTTP $http_code"
