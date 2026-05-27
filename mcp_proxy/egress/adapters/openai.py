@@ -70,16 +70,50 @@ def _map_openai_exception(exc: Exception) -> "GatewayError":
     return GatewayError(status, reason, detail=detail)
 
 
+# ── client cache ──────────────────────────────────────────────────────
+#
+# Same rationale as the AnthropicAdapter (PR-I): ``AsyncOpenAI`` carries
+# an internal httpx pool; constructing a new instance per request
+# defeats that pool. Cache keyed on the fingerprint of the inputs that
+# drive construction so a dashboard-side key / base_url / organization
+# rotation invalidates the cache on the next call (miss, rebuild).
+
+_CLIENT_CACHE: dict[str, Any] = {}
+
+
+def _creds_fingerprint(creds: dict[str, str], settings: "Settings") -> str:
+    import hashlib
+    import json
+    payload = {
+        "api_key": creds.get("api_key") or "",
+        "base_url": creds.get("api_base") or creds.get("base_url") or "",
+        "organization": creds.get("organization") or creds.get("org_id") or "",
+        "timeout": float(getattr(settings, "ai_gateway_request_timeout_s", 0) or 0),
+    }
+    blob = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
 def _client(creds: dict[str, str], settings: "Settings") -> Any:
-    """Build an AsyncOpenAI client from the catalog row.
+    """Return a cached AsyncOpenAI client for the given credentials.
 
     Supports the OpenAI-compatible endpoints customers run behind
     enterprise gateways (Azure OpenAI deployment URL, vLLM, etc) via
     ``api_base`` / ``base_url``. ``organization`` is honoured when
     present so enterprise OpenAI accounts that bill per-org work
-    out-of-the-box.
+    out-of-the-box. The internal httpx connection pool of the SDK is
+    reused across requests with the same credentials fingerprint.
     """
     from mcp_proxy.egress.ai_gateway import GatewayError
+
+    api_key = creds.get("api_key") or ""
+    if not api_key:
+        raise GatewayError(503, "provider_key_missing")
+
+    fingerprint = _creds_fingerprint(creds, settings)
+    cached = _CLIENT_CACHE.get(fingerprint)
+    if cached is not None:
+        return cached
 
     try:
         from openai import AsyncOpenAI
@@ -93,10 +127,6 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
             ),
         ) from exc
 
-    api_key = creds.get("api_key") or ""
-    if not api_key:
-        raise GatewayError(503, "provider_key_missing")
-
     kwargs: dict[str, Any] = {"api_key": api_key}
     base_url = creds.get("api_base") or creds.get("base_url")
     if base_url:
@@ -107,7 +137,9 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
     timeout = getattr(settings, "ai_gateway_request_timeout_s", None)
     if timeout:
         kwargs["timeout"] = float(timeout)
-    return AsyncOpenAI(**kwargs)
+    client = AsyncOpenAI(**kwargs)
+    _CLIENT_CACHE[fingerprint] = client
+    return client
 
 
 def _cullis_headers(ctx: DispatchContext) -> dict[str, str]:

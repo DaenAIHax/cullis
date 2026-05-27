@@ -631,9 +631,63 @@ class _StreamAccumulator:
 # ── adapter ───────────────────────────────────────────────────────────
 
 
+# ── client cache ──────────────────────────────────────────────────────
+#
+# The Anthropic SDK's ``AsyncAnthropic`` keeps an internal httpx client
+# with connection pooling. Constructing a new instance per request
+# (the pre-PR-I behaviour) defeats that pool and forces TCP + TLS
+# handshakes on every chat completion. We cache one client per
+# credentials fingerprint so back-to-back calls under load reuse the
+# warm connection pool, while a dashboard-side key rotation still
+# invalidates the cache automatically (different fingerprint, miss,
+# rebuild).
+#
+# Cache is module-level and worker-local: each uvicorn worker has its
+# own dict. The cache holds a small, bounded set of entries (1 per
+# active credentials configuration) so no LRU eviction is needed; a
+# pathological case with N rotations would leak the prior client until
+# process exit, which is acceptable given the Python GC will close
+# httpx pools on object collection.
+
+_CLIENT_CACHE: dict[str, Any] = {}
+
+
+def _creds_fingerprint(creds: dict[str, str], settings: "Settings") -> str:
+    """Stable hash of the inputs that drive AsyncAnthropic construction.
+
+    Any change to ``api_key`` / ``base_url`` / ``timeout`` (dashboard
+    rotation, env reload, settings update) yields a different
+    fingerprint, which forces a cache miss + rebuild on the next call.
+    """
+    import hashlib
+    import json
+    payload = {
+        "api_key": creds.get("api_key") or "",
+        "base_url": creds.get("api_base") or creds.get("base_url") or "",
+        "timeout": float(getattr(settings, "ai_gateway_request_timeout_s", 0) or 0),
+    }
+    blob = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
 def _client(creds: dict[str, str], settings: "Settings") -> Any:
-    """Build an AsyncAnthropic client with credentials from the catalog row."""
+    """Return a cached AsyncAnthropic client for the given credentials.
+
+    The client lazy-imports the SDK on first call; subsequent calls
+    with the same credentials reuse the same instance (and its
+    internal httpx connection pool). Credentials rotation invalidates
+    the cache via the fingerprint check.
+    """
     from mcp_proxy.egress.ai_gateway import GatewayError
+
+    api_key = creds.get("api_key") or ""
+    if not api_key:
+        raise GatewayError(503, "provider_key_missing")
+
+    fingerprint = _creds_fingerprint(creds, settings)
+    cached = _CLIENT_CACHE.get(fingerprint)
+    if cached is not None:
+        return cached
 
     try:
         from anthropic import AsyncAnthropic
@@ -647,10 +701,6 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
             ),
         ) from exc
 
-    api_key = creds.get("api_key") or ""
-    if not api_key:
-        raise GatewayError(503, "provider_key_missing")
-
     kwargs: dict[str, Any] = {"api_key": api_key}
     base_url = creds.get("api_base") or creds.get("base_url")
     if base_url:
@@ -658,7 +708,9 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
     timeout = getattr(settings, "ai_gateway_request_timeout_s", None)
     if timeout:
         kwargs["timeout"] = float(timeout)
-    return AsyncAnthropic(**kwargs)
+    client = AsyncAnthropic(**kwargs)
+    _CLIENT_CACHE[fingerprint] = client
+    return client
 
 
 class AnthropicAdapter:
