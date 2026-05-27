@@ -2317,6 +2317,13 @@ app.include_router(egress_router)
 from mcp_proxy.egress.llm_chat_router import router as llm_chat_router
 app.include_router(llm_chat_router)
 
+# ADR-038 Phase 0 (agnostic) — Anthropic-native /v1/messages on the proxy.
+# Same security gates as /v1/chat/completions, translates Anthropic shape
+# request/response to/from the OpenAI shape so the vanilla anthropic SDK
+# can talk to Mastio drop-in via cullis_sdk.providers_compat.
+from mcp_proxy.egress.anthropic_messages_router import router as anthropic_messages_router
+app.include_router(anthropic_messages_router)
+
 # ADR-016 Phase 1 (foundation) — Guardian inspection endpoint. Returns
 # pass for everything until Phase 2 plugin lands the actual fast-path
 # tools, but ships the contract: mTLS auth, signed ticket, audit row.
