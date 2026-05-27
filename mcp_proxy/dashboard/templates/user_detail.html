@@ -279,7 +279,7 @@
                         </label>
                         {% endfor %}
                     </div>
-                    <p class="text-[10px] text-gray-600 mt-1">No selection = all configured providers. Hint for the policy layer, not yet enforced as ACL.</p>
+                    <p class="text-[10px] text-gray-600 mt-1">No selection = all configured providers. Enforced on <code>/v1/chat/completions</code> for callers using this token: a request whose model maps to a provider outside this list returns 403 <code>token_scope_provider_mismatch</code>. The audit log records the denial.</p>
                 </div>
 
                 <button type="submit"
