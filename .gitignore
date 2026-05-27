@@ -186,3 +186,6 @@ scripts/stress/*.log
 
 # Git worktree management dir, used to isolate parallel agent work.
 /.worktrees/
+
+# Local working state for dogfood sessions (venvs, downloaded zips, identity bundles).
+.data/
