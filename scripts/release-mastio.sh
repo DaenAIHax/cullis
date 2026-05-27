@@ -170,7 +170,12 @@ ok "  pushed both image tags to GHCR"
 banner "Create GitHub release"
 NOTES_FILE="$(mktemp /tmp/cullis-release-notes-XXXXXX.md)"
 trap 'rm -f "$NOTES_FILE"' EXIT
-awk -v v="^## \\[v${VERSION}\\]" '
+# POSIX character class ``[[]`` / ``[]]`` portably matches literal
+# ``[`` / ``]`` across awk implementations. The previous ``\[`` /
+# ``\]`` form raised "escape sequence treated as plain" warnings in
+# GNU awk's strict mode and the pattern then failed to match, leaving
+# the extracted notes file empty and blocking gh release create.
+awk -v v="^## [[]v${VERSION}[]]" '
   $0 ~ v { p = 1 }
   /^## / && p && $0 !~ v { exit }
   p { print }
