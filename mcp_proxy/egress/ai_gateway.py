@@ -195,8 +195,11 @@ async def dispatch(
     http_client: httpx.AsyncClient | None = None,
 ) -> GatewayResult:
     backend = settings.ai_gateway_backend.lower()
-    adapter = resolve_adapter(backend)
+    # Resolve provider + creds first so the per-provider adapter selection
+    # in ``cullis_native`` has the resolved provider key. Legacy backends
+    # (``litellm_embedded`` / ``portkey``) ignore the ``provider`` arg.
     provider, creds = await _resolve_provider_creds(req.model, settings)
+    adapter = resolve_adapter(backend, provider)
     ctx = DispatchContext(
         agent_id=agent_id,
         org_id=org_id,
@@ -229,8 +232,8 @@ async def dispatch_stream(
     can read them without inspecting the chunks itself.
     """
     backend = settings.ai_gateway_backend.lower()
-    adapter = resolve_adapter(backend)
     provider, creds = await _resolve_provider_creds(req.model, settings)
+    adapter = resolve_adapter(backend, provider)
     ctx = DispatchContext(
         agent_id=agent_id,
         org_id=org_id,

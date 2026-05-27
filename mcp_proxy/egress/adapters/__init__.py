@@ -1,19 +1,23 @@
 """Provider adapter scaffolding (ADR-039).
 
-The dispatcher in ``mcp_proxy.egress.ai_gateway`` resolves an adapter for
-the configured ``ai_gateway_backend`` and delegates the upstream call to
-it. Each backend has at least one adapter implementation; adapters carry
-the per-backend wire knowledge (LiteLLM library, Portkey REST, native
-provider SDK, raw HTTP) while the dispatcher stays generic.
+The dispatcher in ``mcp_proxy.egress.ai_gateway`` resolves an adapter
+for the configured ``ai_gateway_backend`` (and, in the new
+``cullis_native`` backend, also the resolved provider) and delegates
+the upstream call to it. Each backend has at least one adapter
+implementation; adapters carry the per-backend wire knowledge (LiteLLM
+library, Portkey REST, native provider SDK, raw HTTP) while the
+dispatcher stays generic.
 
 ADR-039 phasing:
-  - Phase 1a (PR-A, this scaffold): factor out ``LiteLLMAdapter`` and
-    ``PortkeyAdapter`` from the existing ``ai_gateway.py`` monolith. Zero
-    behaviour change on the wire — same dispatch decisions, same error
-    surface, same audit log line — but the dispatcher now goes through
-    the adapter protocol.
-  - Phase 1b-d (PR-B/C/D): introduce ``cullis_native`` backend with one
-    native adapter per provider (Anthropic SDK, OpenAI SDK, Ollama HTTP).
+  - Phase 1a (PR-A): factor out ``LiteLLMAdapter`` and ``PortkeyAdapter``
+    from the existing ``ai_gateway.py`` monolith. Zero behaviour change
+    on the wire.
+  - Phase 1b (PR-B, this commit): introduce ``cullis_native`` backend
+    with ``AnthropicAdapter`` (anthropic.AsyncAnthropic SDK). Default
+    backend stays ``litellm_embedded``; ``cullis_native`` is opt-in via
+    env var.
+  - Phase 1c (PR-C): add ``OpenAIAdapter`` under ``cullis_native``.
+  - Phase 1d (PR-D): add ``OllamaAdapter`` under ``cullis_native``.
   - Phase 1e (PR-E): flip the default backend to ``cullis_native`` and
     deprecate ``litellm_embedded`` (removed in v0.8).
 
@@ -22,18 +26,23 @@ for the full design.
 """
 from __future__ import annotations
 
+from mcp_proxy.egress.adapters.anthropic import AnthropicAdapter
 from mcp_proxy.egress.adapters.base import DispatchContext, ProviderAdapter
 from mcp_proxy.egress.adapters.litellm import LiteLLMAdapter
 from mcp_proxy.egress.adapters.portkey import PortkeyAdapter
 
 
-def resolve_adapter(backend: str) -> ProviderAdapter:
-    """Return the adapter instance configured for ``backend``.
+def resolve_adapter(backend: str, provider: str | None = None) -> ProviderAdapter:
+    """Return the adapter instance configured for ``(backend, provider)``.
 
-    Raises ``GatewayError(501)`` for unknown backend values. The lookup
-    is intentionally explicit (no registry import side-effects, no
-    plugin discovery) so an operator misconfiguration surfaces a clear
-    error on the first request rather than an obscure import-time crash.
+    ``provider`` is required for ``cullis_native`` (which dispatches per
+    provider) and ignored for the legacy backends (``litellm_embedded``
+    and ``portkey``) that resolve internally.
+
+    Raises ``GatewayError(501)`` for unknown backend values, or for a
+    ``cullis_native`` request whose provider has no native adapter yet
+    (Gemini, Bedrock, Vertex — pinned to ``litellm_embedded`` until a
+    customer asks).
 
     Adapter instances are cheap stateless objects; we create one per
     call to keep the call site obvious. If profiling ever flags this as
@@ -48,6 +57,23 @@ def resolve_adapter(backend: str) -> ProviderAdapter:
         return LiteLLMAdapter()
     if backend == "portkey":
         return PortkeyAdapter()
+    if backend == "cullis_native":
+        if provider == "anthropic":
+            return AnthropicAdapter()
+        # PR-C (OpenAI) and PR-D (Ollama) wire here. Until then, fall
+        # through to the explicit "no native adapter" error so operators
+        # see a clear message instead of "backend_not_implemented".
+        raise GatewayError(
+            501,
+            f"provider_native_not_implemented:{provider or 'unknown'}",
+            detail=(
+                f"The cullis_native backend has no adapter for provider "
+                f"{provider!r} yet. Pin "
+                f"MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded to keep "
+                f"using LiteLLM for this provider, or wait for the "
+                f"upcoming native adapter (ADR-039 PR-C/D)."
+            ),
+        )
     raise GatewayError(
         501,
         f"backend_not_implemented:{backend}",
@@ -56,6 +82,7 @@ def resolve_adapter(backend: str) -> ProviderAdapter:
 
 
 __all__ = [
+    "AnthropicAdapter",
     "DispatchContext",
     "LiteLLMAdapter",
     "PortkeyAdapter",
