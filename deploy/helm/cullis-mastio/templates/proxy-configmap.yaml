@@ -34,6 +34,16 @@ data:
   MCP_PROXY_ORG_ID: {{ .Values.proxy.orgId | quote }}
   {{- end }}
 
+  # ADR-039 — AI gateway dispatch backend. Default ``cullis_native``:
+  # per-provider native adapters (Anthropic SDK, OpenAI SDK, raw httpx
+  # for Ollama), no third-party library in the critical path. Operators
+  # pinning ``litellm_embedded`` for Gemini / Bedrock / Vertex must also
+  # ship the ``litellm-legacy`` extra in the image (or install
+  # ``litellm>=1.83.7,<2.0`` out-of-band) — see PR-F.
+  {{- if .Values.proxy.aiGatewayBackend }}
+  MCP_PROXY_AI_GATEWAY_BACKEND: {{ .Values.proxy.aiGatewayBackend | quote }}
+  {{- end }}
+
   # ADR-014 — nginx sidecar TLS material. Empty when nginx.enabled=false
   # so the lifespan skips the cert-provisioning path (no consumer to
   # serve the certs to).

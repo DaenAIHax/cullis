@@ -79,6 +79,24 @@ proxy:
   # configured through the setup wizard (DB-resident).
   orgId: ""
 
+  # -- AI gateway dispatch backend (ADR-039).
+  #
+  # Default since v0.7.x: ``cullis_native``. Per-provider native
+  # adapters: official Anthropic / OpenAI SDKs, raw httpx for Ollama.
+  # No third-party AI gateway library in the critical path.
+  #
+  # Override to ``litellm_embedded`` if you depend on Gemini / Bedrock
+  # / Vertex (no native adapter yet) — the legacy LiteLLM backend
+  # remains wired but ``litellm`` is no longer in requirements.txt
+  # since PR-F. Operators pinning the legacy backend must also pull
+  # the ``litellm-legacy`` extra in their image (or install
+  # ``litellm>=1.83.7,<2.0`` out-of-band).
+  #
+  # ``portkey`` is the original ADR-017 Phase 1 backend; Anthropic-only,
+  # deprecated alongside ``litellm_embedded`` in v0.7.x and removed in
+  # v0.8.x.
+  aiGatewayBackend: "cullis_native"
+
   # -- SPIFFE trust domain this proxy serves (ADR-001 Phase 2). Used by
   # the routing decision to classify recipients as intra vs cross-org.
   # Must match the trust domain configured on the broker.
