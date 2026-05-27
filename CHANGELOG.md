@@ -14,6 +14,14 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+## [v0.6.1] — Sidebar update-advisory regex fix — 2026-05-27
+
+Same-day patch on top of v0.6.0. The sidebar update advisory on a fresh v0.6.0 install rendered "Update: 0.5.4.1 (running 0.6.0)" — pointing the operator at a tag strictly older than the one they were running. Confidence-killer banner that cold-readers see within seconds of first login.
+
+### Dashboard
+
+- **`mcp_proxy/version_check.py::_SEMVER_RE` accepts 4-component hotfix versions** (#978). The regex matched only `MAJOR.MINOR.PATCH[-PRE]` and the `_version_key` fallback for unparseable strings returned `(1, v)` — strictly greater than every parseable `(0, ...)` tuple. The v0.5.4.1 emergency hotfix tag therefore won `max(candidates, key=_version_key)` over the GitHub releases list, and the banner reported it as the latest. Extended regex to accept `.HOTFIX` 4th component, flipped the unparseable fallback to `(-1, v)` so garbage sorts BEFORE parseable (defence in depth: even if a future tag style slips past the regex, `max()` can no longer pick it). 10/10 new unit tests in `test/unit/test_version_check_hotfix_regex.py` pin the corrected behaviour: 3- and 4-component acceptance, prerelease ordering, hotfix-between-minors, `max()` selection against the exact GitHub release shape that triggered the bug.
+
 ## [v0.6.0] — Provider SDK drop-in + VM cold-reader fixes + SDK PyPI catch-up — 2026-05-27
 
 End-to-end cold-reader gate cut on top of v0.5.5. Bundle deploy script auto-detects an interface IP on Linux pure hosts so a VM-on-libvirt + browser-on-laptop setup just works without `host.docker.internal` DNS detours. Vanilla Anthropic SDK and OpenAI SDK reach Mastio via a 3-line `cullis_httpx_client(identity_dir=...)` helper that returns an `httpx.Client` with mTLS + DPoP baked in (ADR-038 Phase 0). And the public PyPI wheel `cullis-sdk` finally catches up with the 4-week monorepo drift: `chat_completion`, `list_mcp_tools`, `call_mcp_tool`, and the post-ADR-014 identity factories are now installable via `pip install cullis-sdk` instead of only readable in the repo.
