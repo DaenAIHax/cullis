@@ -27,7 +27,7 @@ organisation. Inside the boundary:
 - The audit chain (append-only hash chain + optional Merkle batch
   + RFC 3161 TSA external anchor).
 - The PDP webhook hook (operator-supplied policy engine).
-- The AI gateway (embedded LiteLLM) and the MCP reverse-proxy.
+- The AI gateway (native dispatch path: official Anthropic / OpenAI SDKs, raw httpx for Ollama; LiteLLM remains in tree as the legacy backend for Gemini / Bedrock / Vertex, opt-in only — ADR-039) and the MCP reverse-proxy.
 
 Outside the boundary:
 

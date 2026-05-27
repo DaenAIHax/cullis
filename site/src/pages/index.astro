@@ -238,14 +238,14 @@ import Layout from '../layouts/Layout.astro';
           <header class="topo-card-head">
             <span class="topo-tag">Default</span>
             <h3>Embedded</h3>
-            <p class="topo-sub">Mastio runs LiteLLM in-process and speaks directly to the provider. One container, no extra gateway to operate.</p>
+            <p class="topo-sub">Mastio dispatches to the provider through a native adapter (official Anthropic / OpenAI SDKs, raw httpx for Ollama) — no third-party gateway in the critical path. One container, nothing extra to operate.</p>
           </header>
           <div class="topo-flow">
             <div class="topo-node">Agent</div>
             <div class="topo-edge" data-label="mTLS + DPoP"></div>
             <div class="topo-node topo-node-primary">
               <span class="topo-node-title">Mastio</span>
-              <span class="topo-node-sub">LiteLLM embedded</span>
+              <span class="topo-node-sub">Native AI dispatch</span>
             </div>
             <div class="topo-edge" data-label="API call"></div>
             <div class="topo-node">LLM provider</div>

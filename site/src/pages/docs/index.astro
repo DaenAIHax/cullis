@@ -172,7 +172,7 @@ const commonPaths = [
             written to a tamper-evident audit chain.
           </p>
           <ul>
-            <li><strong>Mastio</strong> — org gateway. Cert mint, policy enforcement, audit chain, MCP reverse-proxy, embedded AI gateway (LiteLLM).</li>
+            <li><strong>Mastio</strong> — org gateway. Cert mint, policy enforcement, audit chain, MCP reverse-proxy, native AI dispatch (Anthropic / OpenAI SDKs, raw httpx for Ollama).</li>
             <li><strong>Python SDK</strong> — agent client. Loads cert + DPoP key from disk, presents mTLS to Mastio, makes chat completions and MCP tool calls.</li>
           </ul>
         </article>
