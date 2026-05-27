@@ -8,6 +8,35 @@ only see the published wheel have a self-contained history.
 
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-27
+
+Patch release on top of 0.2.0 to ship the ADR-038 Phase 0 provider
+SDK drop-in helper. The 0.2.0 wheel was built before the ADR-038 PR
+landed on `main`, so `cullis_sdk.providers_compat` was missing from
+the published package even though `chat_completion` and the MCP
+surface had already shipped. Same-day catch-up.
+
+### Added
+
+- `cullis_sdk.providers_compat.cullis_httpx_client(identity_dir=...)` —
+  LLM-agnostic helper returning an `httpx.Client` with mTLS client
+  cert + DPoP signing transport. Plug into the vanilla Anthropic SDK
+  (`Anthropic(base_url="https://mastio:9443", api_key="cullis",
+  http_client=cullis_httpx_client(identity_dir="..."))`) or the
+  vanilla OpenAI SDK (`OpenAI(base_url="https://mastio:9443/v1", ...,
+  http_client=cullis_httpx_client(...))`) so agent code uses the
+  upstream SDK directly while Cullis stays in the transport path
+  for identity, audit, and policy. Three-line constructor; no
+  Cullis SDK on the agent business-logic path.
+
+### Compatibility
+
+- Wire-compatible with Mastio >= 0.6.0 for the Anthropic SDK path
+  (the `POST /v1/messages` endpoint that translates Anthropic
+  Messages requests to the LiteLLM dispatch landed server-side in
+  v0.6.0). OpenAI SDK path works against any Mastio with
+  `/v1/chat/completions` (>= v0.5.0).
+
 ## [0.2.0] - 2026-05-27
 
 First release on PyPI since 2026-05-01 (0.1.3). Closes a ~4-week drift
