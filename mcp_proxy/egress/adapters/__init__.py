@@ -16,10 +16,11 @@ ADR-039 phasing:
     ``AnthropicAdapter`` (anthropic.AsyncAnthropic SDK). Default
     backend stays ``litellm_embedded``; ``cullis_native`` is opt-in
     via env var.
-  - Phase 1c (PR-C, this commit): add ``OpenAIAdapter`` under
-    ``cullis_native`` (openai.AsyncOpenAI SDK, mostly passthrough on
-    request shape).
-  - Phase 1d (PR-D): add ``OllamaAdapter`` under ``cullis_native``.
+  - Phase 1c (PR-C): add ``OpenAIAdapter`` under ``cullis_native``
+    (openai.AsyncOpenAI SDK, mostly passthrough on request shape).
+  - Phase 1d (PR-D, this commit): add ``OllamaAdapter`` under
+    ``cullis_native`` (raw httpx against ``/api/chat``, JSONL stream
+    parsing, defense-in-depth SSRF gate on api_base).
   - Phase 1e (PR-E): flip the default backend to ``cullis_native`` and
     deprecate ``litellm_embedded`` (removed in v0.8).
 
@@ -31,6 +32,7 @@ from __future__ import annotations
 from mcp_proxy.egress.adapters.anthropic import AnthropicAdapter
 from mcp_proxy.egress.adapters.base import DispatchContext, ProviderAdapter
 from mcp_proxy.egress.adapters.litellm import LiteLLMAdapter
+from mcp_proxy.egress.adapters.ollama import OllamaAdapter
 from mcp_proxy.egress.adapters.openai import OpenAIAdapter
 from mcp_proxy.egress.adapters.portkey import PortkeyAdapter
 
@@ -65,10 +67,12 @@ def resolve_adapter(backend: str, provider: str | None = None) -> ProviderAdapte
             return AnthropicAdapter()
         if provider == "openai":
             return OpenAIAdapter()
-        # PR-D (Ollama) wires here. Gemini / Bedrock / Vertex stay on
-        # litellm_embedded until a customer asks; fall through to the
-        # explicit "no native adapter" error so the dashboard surface
-        # gives a clear pointer rather than a generic 501.
+        if provider == "ollama":
+            return OllamaAdapter()
+        # Gemini / Bedrock / Vertex stay on litellm_embedded until a
+        # customer asks; fall through to the explicit "no native
+        # adapter" error so the dashboard surface gives a clear pointer
+        # rather than a generic 501.
         raise GatewayError(
             501,
             f"provider_native_not_implemented:{provider or 'unknown'}",
@@ -76,8 +80,7 @@ def resolve_adapter(backend: str, provider: str | None = None) -> ProviderAdapte
                 f"The cullis_native backend has no adapter for provider "
                 f"{provider!r} yet. Pin "
                 f"MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded to keep "
-                f"using LiteLLM for this provider, or wait for the "
-                f"upcoming native adapter (ADR-039 PR-D)."
+                f"using LiteLLM for this provider."
             ),
         )
     raise GatewayError(
@@ -91,6 +94,7 @@ __all__ = [
     "AnthropicAdapter",
     "DispatchContext",
     "LiteLLMAdapter",
+    "OllamaAdapter",
     "OpenAIAdapter",
     "PortkeyAdapter",
     "ProviderAdapter",
