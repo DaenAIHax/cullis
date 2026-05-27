@@ -5,14 +5,20 @@ This module wraps the in-process ``litellm.acompletion`` call path that
 The behaviour, log lines, error tags, and audit semantics are unchanged
 relative to the pre-refactor code; only the call site moved.
 
-ADR-039 phases out this adapter:
-  - v0.7.x — adapter remains the default, native adapters opt-in via
-    ``MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native``.
-  - v0.7.x +1 — default flips to ``cullis_native``, this adapter emits
-    a startup deprecation ``_log.warning`` when explicitly pinned.
-  - v0.8.x — ``litellm`` is removed from ``requirements.txt`` and the
-    import here becomes a hard failure (operators who explicitly pin
-    the legacy backend pip-install the package out-of-band).
+ADR-039 phased out the package dependency:
+  - v0.7.x (PR-A..E, 2026-05-27) — adapter is wired but no longer the
+    default. Native adapters serve Anthropic, OpenAI, Ollama;
+    operators on Gemini / Bedrock / Vertex opt in via
+    ``MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`` and see a
+    deprecation warning at startup.
+  - v0.8.x (PR-F, this commit) — ``litellm`` is dropped from
+    ``requirements.txt`` and ``mcp_proxy/requirements-proxy.txt``. The
+    ``import litellm`` inside this adapter is lazy and protected by
+    ``try/except ImportError`` — when the package is absent every
+    dispatch returns ``GatewayError(503, "litellm_not_installed")``
+    with a clear pointer to ``pip install 'litellm>=1.83.7,<2.0'`` or
+    ``pip install 'cullis-sdk[litellm-legacy]'``. Boot still
+    succeeds; only the dispatch refuses.
 """
 from __future__ import annotations
 
@@ -110,8 +116,16 @@ class LiteLLMAdapter:
                 503,
                 "litellm_not_installed",
                 detail=(
-                    "ai_gateway_backend='litellm_embedded' requires the litellm "
-                    "package. Install it via requirements.txt."
+                    "ai_gateway_backend='litellm_embedded' requires the "
+                    "litellm package, which is no longer a Mastio runtime "
+                    "dependency since ADR-039 PR-F. Install it out-of-band: "
+                    "``pip install 'litellm>=1.83.7,<2.0'`` (defensive floor "
+                    "against the April-May 2026 CVE cluster), or use the "
+                    "``litellm-legacy`` extra: "
+                    "``pip install 'cullis-sdk[litellm-legacy]'``. "
+                    "Better, switch to "
+                    "MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native unless you "
+                    "depend on Gemini / Bedrock / Vertex (native adapters TBD)."
                 ),
             ) from exc
 
@@ -256,8 +270,16 @@ class LiteLLMAdapter:
                 503,
                 "litellm_not_installed",
                 detail=(
-                    "ai_gateway_backend='litellm_embedded' requires the litellm "
-                    "package. Install it via requirements.txt."
+                    "ai_gateway_backend='litellm_embedded' requires the "
+                    "litellm package, which is no longer a Mastio runtime "
+                    "dependency since ADR-039 PR-F. Install it out-of-band: "
+                    "``pip install 'litellm>=1.83.7,<2.0'`` (defensive floor "
+                    "against the April-May 2026 CVE cluster), or use the "
+                    "``litellm-legacy`` extra: "
+                    "``pip install 'cullis-sdk[litellm-legacy]'``. "
+                    "Better, switch to "
+                    "MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native unless you "
+                    "depend on Gemini / Bedrock / Vertex (native adapters TBD)."
                 ),
             ) from exc
         litellm.drop_params = True

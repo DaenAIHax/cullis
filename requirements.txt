@@ -14,21 +14,31 @@ websockets>=14.1
 python-dotenv>=1.0.1
 anthropic>=0.40.0
 openai>=1.0.0
-# ADR-017 Phase 3 — embedded LiteLLM as default AI gateway backend.
-# Pinned to <2.0 to avoid major-version churn (BerriAI ships frequently).
-# Floor 1.83.7 closes:
-#   - CVE-2026-42208 (pre-auth SQL injection, CVSS 9.3, CISA KEV 2026-05-08)
-#   - CVE-2026-42271 (RCE via MCP preview endpoints)
-#   - CVE-2026-35029 (RCE via /config/update without admin role check)
-#   - CVE-2026-35030 (OIDC cache collision with enable_jwt_auth)
-#   - GHSA-69x8-hrgq-fjj8 (SHA-256 unsalted password hash exposure)
-#   - Supply chain compromise of PyPI litellm 1.82.7 / 1.82.8 (2026-03-24)
-# Cullis uses LiteLLM embedded (in-process litellm.acompletion), not as
-# proxy server, so the RCE/SQLi/auth-bypass vectors above are not directly
-# exploitable, but the floor closes the supply-chain window and tracks
-# downstream hardening. ADR-038 Phase 1 will replace this critical-path
-# dependency with proprietary provider adapters.
-litellm>=1.83.7,<2.0
+# ADR-039 — LiteLLM is no longer a runtime dependency of the Mastio.
+# The default AI gateway backend (``cullis_native``) dispatches Anthropic
+# through ``anthropic.AsyncAnthropic``, OpenAI through
+# ``openai.AsyncOpenAI``, and Ollama through raw httpx. None of those
+# import the ``litellm`` package, so a fresh ``pip install`` no longer
+# pulls it.
+#
+# Operators who still depend on Gemini / Bedrock / Vertex (which the
+# native adapters do not cover yet) and who therefore pin
+# ``MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`` MUST install the
+# package out-of-band with the defensive floor that PR #987 pinned for
+# the CVE-2026-42208 / 42271 / 35029 / 35030 / GHSA-69x8 / 2026-03
+# supply-chain cluster:
+#
+#   pip install 'litellm>=1.83.7,<2.0'
+#
+# Or, equivalently, use the ``litellm-legacy`` extra:
+#
+#   pip install 'cullis-sdk[litellm-legacy]'
+#
+# The legacy LiteLLMAdapter imports the package lazily and emits
+# GatewayError(503, "litellm_not_installed") on the first dispatch
+# when the package is absent, so a Mastio pinned to the legacy
+# backend without the package refuses requests with a clear error
+# instead of boot-failing.
 cryptography>=46.0.6
 authlib>=1.3.0
 redis>=5.0.0
