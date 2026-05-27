@@ -206,3 +206,100 @@ def test_production_rejects_private_ip_literal_tsa(
     with pytest.raises(SystemExit) as excinfo:
         validate_config(settings)
     assert excinfo.value.code == 1
+
+
+def test_production_rejects_ipv6_loopback_tsa_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Production + IPv6 loopback literal TSA URL → SystemExit(1).
+
+    Same trust collapse as the IPv4 loopback case, exercised via the
+    IPv6 literal ``::1``. ``mcp_proxy/utils/url_safety.py`` blocks this
+    via ``IPv6Address.is_loopback``; this test pins the F-A-406 gate so
+    a regression in ``url_safety.py`` would not slip past the 6
+    pre-existing IPv4-only cases.
+    """
+    _production_env(monkeypatch)
+    monkeypatch.setenv("MCP_PROXY_AUDIT_ANCHOR_ENABLED", "true")
+    monkeypatch.setenv(
+        "MCP_PROXY_AUDIT_ANCHOR_TSA_URL", "http://[::1]/tsr",
+    )
+
+    from mcp_proxy.config import validate_config
+
+    settings = _fresh_settings()
+    with pytest.raises(SystemExit) as excinfo:
+        validate_config(settings)
+    assert excinfo.value.code == 1
+
+
+def test_production_rejects_ipv6_link_local_tsa_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Production + IPv6 link-local TSA URL → SystemExit(1).
+
+    ``fe80::/10`` is the IPv6 equivalent of the IPv4 ``169.254.0.0/16``
+    surface that fronts cloud metadata IMDS endpoints. A TSA URL
+    pointing there in production is operator-reachable mock-equivalent
+    and trivially spoofable by anything on the same link.
+    """
+    _production_env(monkeypatch)
+    monkeypatch.setenv("MCP_PROXY_AUDIT_ANCHOR_ENABLED", "true")
+    monkeypatch.setenv(
+        "MCP_PROXY_AUDIT_ANCHOR_TSA_URL", "http://[fe80::1]/tsr",
+    )
+
+    from mcp_proxy.config import validate_config
+
+    settings = _fresh_settings()
+    with pytest.raises(SystemExit) as excinfo:
+        validate_config(settings)
+    assert excinfo.value.code == 1
+
+
+def test_production_rejects_ipv6_ula_tsa_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Production + IPv6 ULA TSA URL → SystemExit(1).
+
+    ``fc00::/7`` (RFC 4193 Unique Local Addresses) is the IPv6 analogue
+    of RFC 1918 — a private range any LAN attacker can claim. The gate
+    must refuse to anchor against an address in that range.
+    """
+    _production_env(monkeypatch)
+    monkeypatch.setenv("MCP_PROXY_AUDIT_ANCHOR_ENABLED", "true")
+    monkeypatch.setenv(
+        "MCP_PROXY_AUDIT_ANCHOR_TSA_URL", "http://[fd00::1]/tsr",
+    )
+
+    from mcp_proxy.config import validate_config
+
+    settings = _fresh_settings()
+    with pytest.raises(SystemExit) as excinfo:
+        validate_config(settings)
+    assert excinfo.value.code == 1
+
+
+def test_production_rejects_localhost_hostname_tsa_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Production + ``localhost`` hostname literal TSA URL → SystemExit(1).
+
+    ``url_safety.py:155`` blocks the bare ``localhost`` string
+    explicitly (separately from the ``127.0.0.1`` IPv4 literal already
+    covered by ``test_production_rejects_loopback_tsa_url``). Pin the
+    F-A-406 gate so a regression in that hostname allowlist would not
+    pass the existing IP-only cases.
+    """
+    _production_env(monkeypatch)
+    monkeypatch.setenv("MCP_PROXY_AUDIT_ANCHOR_ENABLED", "true")
+    monkeypatch.setenv(
+        "MCP_PROXY_AUDIT_ANCHOR_TSA_URL", "http://localhost/tsr",
+    )
+
+    from mcp_proxy.config import validate_config
+
+    settings = _fresh_settings()
+    with pytest.raises(SystemExit) as excinfo:
+        validate_config(settings)
+    assert excinfo.value.code == 1
