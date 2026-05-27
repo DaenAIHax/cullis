@@ -886,13 +886,37 @@ if [[ -n "$UPGRADE_TO" ]]; then
 fi
 
 # ── Pre-flight: host port not already in use ───────────────────────────────
+# Refusing on port-in-use is correct for fresh installs and for the case
+# where an unrelated service owns the port. But `./deploy.sh --pull`
+# (and `--upgrade*`) against an already-running cullis-mastio stack is a
+# legitimate in-place upgrade scenario: docker handles `compose up -d
+# --force-recreate` gracefully, stopping the old container before
+# starting the new one. Distinguish via the docker compose project label.
 _host_port="$(grep -E '^MCP_PROXY_PORT=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2-)"
 _host_port="${_host_port:-9443}"
+_PORT_OWNED_BY_OUR_STACK=0
 if command -v ss >/dev/null 2>&1 && ss -tlnH "sport = :${_host_port}" 2>/dev/null | grep -q .; then
-    err "Host port ${_host_port} is already in use — another service is bound there."
-    err "Override with MCP_PROXY_PORT=<free-port> in proxy.env, and update"
-    err "MCP_PROXY_PROXY_PUBLIC_URL to use the same port (otherwise agents 401)."
-    die "Refusing to start — fix the port conflict first."
+    _port_owner_project=""
+    if command -v docker >/dev/null 2>&1; then
+        _port_owner_project="$(docker ps \
+            --filter "publish=${_host_port}" \
+            --format '{{ index .Labels "com.docker.compose.project" }}' \
+            2>/dev/null | head -1)"
+    fi
+
+    if [[ "$_port_owner_project" == "$COMPOSE_PROJECT_NAME" ]] \
+        && { [[ $FORCE_PULL -eq 1 ]] || [[ -n "${UPGRADE_TO:-}" ]]; }; then
+        ok "Port ${_host_port} held by existing $COMPOSE_PROJECT_NAME stack — graceful in-place upgrade"
+        _PORT_OWNED_BY_OUR_STACK=1
+    else
+        err "Host port ${_host_port} is already in use — another service is bound there."
+        if [[ -n "$_port_owner_project" ]]; then
+            err "Detected docker compose project owning this port: ${_port_owner_project}"
+        fi
+        err "Override with MCP_PROXY_PORT=<free-port> in proxy.env, and update"
+        err "MCP_PROXY_PROXY_PUBLIC_URL to use the same port (otherwise agents 401)."
+        die "Refusing to start — fix the port conflict first."
+    fi
 fi
 
 # ── Pull + Start ────────────────────────────────────────────────────────────
@@ -929,10 +953,18 @@ mkdir -p "$CERT_DIR"
 # / open-core / enterprise projects on the same host stay untouched.
 _cleanup_orphan_shims "$COMPOSE_PROJECT_NAME"
 
-echo -e "  ${GRAY}$COMPOSE $COMPOSE_FILES --env-file proxy.env up -d${RESET}"
+# Use --force-recreate for in-place upgrade so docker stops the old
+# container before starting the new one (zero-downtime swap with the
+# image we just pulled). Skip it on fresh install to keep the boring
+# fast path boring.
+_UP_EXTRA_FLAGS=""
+if [[ $_PORT_OWNED_BY_OUR_STACK -eq 1 ]]; then
+    _UP_EXTRA_FLAGS="--force-recreate"
+fi
+echo -e "  ${GRAY}$COMPOSE $COMPOSE_FILES --env-file proxy.env up -d ${_UP_EXTRA_FLAGS}${RESET}"
 # Capture exit BEFORE the if-else: `!` negation rewrites $? to 0 inside
 # the branch, which would make _hint_on_bind_mount_failure dead code.
-$COMPOSE $COMPOSE_FILES --env-file proxy.env up -d
+$COMPOSE $COMPOSE_FILES --env-file proxy.env up -d ${_UP_EXTRA_FLAGS}
 _rc=$?
 if [[ $_rc -ne 0 ]]; then
     _hint_on_bind_mount_failure "$_rc" "$COMPOSE_PROJECT_NAME"
