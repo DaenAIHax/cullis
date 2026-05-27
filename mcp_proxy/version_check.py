@@ -54,12 +54,14 @@ _cache_at: float = 0.0
 _cache_lock = asyncio.Lock()
 
 
-# Loose semver: ``MAJOR.MINOR.PATCH`` plus an optional ``-PRERELEASE``
-# (rc1, rc2, beta, …). Captures pieces so ``_version_key`` can build a
-# sortable tuple. Anything more exotic falls through and gets sorted
-# lexically — fine for our naming convention.
+# Loose semver: ``MAJOR.MINOR.PATCH`` with an optional ``.HOTFIX`` 4th
+# component (``0.5.4.1`` for the v0.5.4 emergency patch line), plus an
+# optional ``-PRERELEASE`` (rc1, rc2, beta, …). Captures pieces so
+# ``_version_key`` can build a sortable tuple. Anything more exotic
+# falls through and gets sorted lexically — fine for our naming
+# convention.
 _SEMVER_RE = re.compile(
-    r"^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)(\d+)?)?$"
+    r"^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?(?:-([a-zA-Z]+)(\d+)?)?$"
 )
 
 
@@ -69,20 +71,31 @@ def _version_key(v: str) -> tuple:
     Final releases (``0.3.0``) sort AFTER any of their prereleases
     (``0.3.0-rc1``, ``0.3.0-beta3``) — same convention as PEP 440 and
     npm/cargo. ``rc2`` sorts after ``rc1`` even when the major.minor
-    part is the same. Unparseable strings sort last.
+    part is the same. A 4th hotfix component (``0.5.4.1``) sorts
+    after the corresponding 3-component release (``0.5.4``) but
+    before the next minor's 3-component release (``0.5.5``).
+    Unparseable strings sort BEFORE everything parseable so the
+    fallback never wins ``max()`` and shows up as a confusing
+    "Update available" pointing at older garbage.
     """
     m = _SEMVER_RE.match(v)
     if not m:
-        return (1, v)  # garbage versions sort after everything parseable
+        # Garbage versions sort BEFORE anything parseable. Previous
+        # behaviour (sort AFTER) caused 4-digit hotfix tags like
+        # ``0.5.4.1`` to win ``max()`` against ``0.6.0`` and trigger a
+        # confidence-killer sidebar banner "Update: 0.5.4.1 (running
+        # 0.6.0)" on every fresh v0.6.0 install.
+        return (-1, v)
     major, minor, patch = int(m[1]), int(m[2]), int(m[3])
-    pre_tag = m[4] or ""
-    pre_num = int(m[5]) if m[5] else 0
+    hotfix = int(m[4]) if m[4] else 0
+    pre_tag = m[5] or ""
+    pre_num = int(m[6]) if m[6] else 0
     # ``is_release = 1`` for full releases, ``0`` for prereleases —
     # so the same major.minor.patch sorts ``rc1 < rc2 < (release)``.
     is_release = 1 if not pre_tag else 0
     # Pre-release tag ordering: alpha < beta < rc < anything-else.
     pre_rank = {"alpha": 0, "beta": 1, "rc": 2}.get(pre_tag, 3) if pre_tag else 0
-    return (0, major, minor, patch, is_release, pre_rank, pre_num)
+    return (0, major, minor, patch, hotfix, is_release, pre_rank, pre_num)
 
 
 def get_current_version() -> str:
