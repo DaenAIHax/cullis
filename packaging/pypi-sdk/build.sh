@@ -38,7 +38,10 @@ cp -f "${REPO_ROOT}/cullis_sdk/README.md" "${STAGE_DIR}/README_PKG.md"
 cp -f "${REPO_ROOT}/LICENSE"            "${STAGE_DIR}/LICENSE"
 cp -f "${REPO_ROOT}/LICENSE-APACHE-2.0" "${STAGE_DIR}/LICENSE-APACHE-2.0"
 cp -f "${REPO_ROOT}/NOTICE"             "${STAGE_DIR}/NOTICE"
-cp -f "${REPO_ROOT}/CHANGELOG.md"       "${STAGE_DIR}/CHANGELOG.md"
+
+# CHANGELOG.md is authored in-place at ${STAGE_DIR}/CHANGELOG.md (SDK-
+# specific PyPI release history, distinct from the monorepo CHANGELOG
+# which covers Mastio / Connector / Court too). No copy step needed.
 
 mkdir -p "${OUT_DIR}"
 

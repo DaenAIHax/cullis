@@ -5,9 +5,14 @@
 # though it is copied in fresh on every build. Hatchling respects
 # `.gitignore` when selecting sdist/wheel contents, so ignoring the
 # package directory here would result in an empty wheel.
+#
+# CHANGELOG.md is also deliberately NOT listed: it is the SDK-only
+# PyPI release history, authored in-place and committed to the repo so
+# distributors seeing only the published wheel get a self-contained
+# history. (The monorepo root CHANGELOG.md bundles Mastio + Connector
+# + Court releases too, which is noise for SDK consumers.)
 
 README_PKG.md
 LICENSE
 LICENSE-APACHE-2.0
 NOTICE
-CHANGELOG.md
