@@ -119,9 +119,12 @@ import Layout from '../layouts/Layout.astro';
       </ul>
 
       <p class="reveal" data-delay="4">
-        LLM-agnostic by design. The embedded gateway routes to
-        Anthropic, OpenAI, Gemini, or Ollama via LiteLLM, and an
-        alternative AI gateway can be wired in as a sidecar.
+        LLM-agnostic by design. Anthropic, OpenAI, and Ollama route
+        through Cullis-owned native adapters (official Anthropic /
+        OpenAI SDKs, raw httpx for Ollama) with no third-party
+        dispatch library in the critical path. Gemini, Bedrock, and
+        Vertex still ride the legacy LiteLLM backend until their
+        native adapters land.
       </p>
     </div>
   </section>
@@ -301,9 +304,9 @@ import Layout from '../layouts/Layout.astro';
           <h3>DORA Vendor/TPA Compliance Reporter</h3>
           <p>
             Cullis-unique. No Anthropic template. Runs on
-            <strong>OpenAI GPT-5 via LiteLLM</strong> to prove
-            LLM-agnostic. Per-agent cryptographic identity bound to
-            every reporting action satisfies DORA Art. 28.
+            <strong>OpenAI GPT-5 via the native OpenAI adapter</strong>
+            to prove LLM-agnostic. Per-agent cryptographic identity
+            bound to every reporting action satisfies DORA Art. 28.
           </p>
         </article>
       </div>

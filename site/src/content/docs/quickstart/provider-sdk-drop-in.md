@@ -59,13 +59,13 @@ client = OpenAI(
 )
 
 resp = client.chat.completions.create(
-    model="claude-sonnet-4-6",   # or any LiteLLM-supported model
+    model="claude-sonnet-4-6",   # any model configured on the Mastio dashboard
     messages=[{"role": "user", "content": "hello"}],
 )
 print(resp.choices[0].message.content)
 ```
 
-The OpenAI SDK targets `/v1/chat/completions`, which is the Mastio's native OpenAI-shape endpoint (LiteLLM under the hood). Streaming, tool use, and prompt caching all work because the Mastio is transparent on the request/response payload — the helper only adds the transport-layer wrapping.
+The OpenAI SDK targets `/v1/chat/completions`, which is the Mastio's native OpenAI-shape endpoint. Cloud providers dispatch through their own official SDKs server-side (`anthropic.AsyncAnthropic`, `openai.AsyncOpenAI`); Ollama uses raw httpx against `/api/chat`. Streaming, tool use, and prompt caching all work because the Mastio is transparent on the request/response payload — the helper only adds the transport-layer wrapping.
 
 ## Framework integration (LangChain, LlamaIndex, DSPy, ...)
 

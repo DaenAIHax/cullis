@@ -17,7 +17,7 @@ updated: "2026-05-23"
 
 ## 1. The minimal call
 
-OpenAI ChatCompletion request shape. Mastio forwards to the configured upstream via LiteLLM:
+OpenAI ChatCompletion request shape. Mastio dispatches to the configured upstream through a native adapter (official Anthropic / OpenAI SDKs, raw httpx for Ollama):
 
 ```python
 response = client.chat_completion({

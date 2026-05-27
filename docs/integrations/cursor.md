@@ -20,9 +20,10 @@ Topology:
 Cursor's **agentic** features (Composer, Agents, multi-step edits)
 make heavy use of provider-specific extensions to the chat completion
 API — tool-call streaming patterns, system prompt injection,
-context-window stuffing. The Mastio's embedded LiteLLM normalises
-the common subset, but some agentic operations may degrade or fail
-when routed through a custom endpoint.
+context-window stuffing. The Mastio's native per-provider adapter
+(Anthropic SDK, OpenAI SDK, raw httpx for Ollama) handles the common
+subset, but some agentic operations may degrade or fail when routed
+through a custom endpoint.
 
 What works reliably today:
 
@@ -156,7 +157,8 @@ that don't always round-trip through normalisation. Workarounds:
   agentic flows (loses audit attribution for those calls, but the
   feature works).
 - File an issue on the Cullis repo with the failing payload — we
-  can extend the LiteLLM normaliser for common Cursor patterns.
+  can extend the native adapter's translator for common Cursor
+  patterns.
 
 ### Cursor Tab (inline autocomplete) doesn't use Cullis
 

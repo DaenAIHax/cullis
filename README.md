@@ -18,7 +18,7 @@ Banks, insurers, and other regulated organizations are starting to put AI agents
 
 Cullis sits underneath any agent stack (Claude Agent SDK, OpenAI Agents SDK, custom loops) and provides the three primitives a regulated deployment is missing: per-agent cryptographic identity bound to whoever or whatever authorized the agent, a policy decision point that runs before the LLM call lands, and a hash-chained append-only audit log that an external auditor can verify without trusting Cullis or your IT team.
 
-Cullis is LLM-agnostic by design. The embedded gateway is wired to Anthropic today; OpenAI, Gemini, and Ollama route through LiteLLM and are rolling out. An alternative AI gateway can be configured as a sidecar. The identity, policy, and audit primitives stay the same regardless of the provider.
+Cullis is LLM-agnostic by design. The default dispatch path uses Cullis-owned native adapters: the official Anthropic and OpenAI Python SDKs for the cloud providers, a thin httpx client for Ollama. No third-party AI gateway in the critical path. Gemini, Bedrock, and Vertex still ride the legacy LiteLLM backend, opt-in via `MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`, until their native adapters land. The identity, policy, and audit primitives stay the same regardless of the provider.
 
 ---
 
@@ -34,7 +34,7 @@ Mastio is the gateway. One container, one organization, one source of truth for 
 
 **Audit.** Every accepted action lands as a row in an append-only audit log, hash-chained per organization, optionally anchored to RFC 3161 TSA on a configurable cadence. The chain replays deterministically: an external auditor can verify it offline without holding any Cullis credentials.
 
-**Embedded AI gateway.** LiteLLM is bundled. Anthropic is wired out of the box (set `MCP_PROXY_ANTHROPIC_API_KEY` in `proxy.env`); OpenAI, Gemini, and Ollama are on the roadmap and currently return HTTP 501. Per-agent identity is propagated into every upstream call as part of the audit trail. The provider can be switched by env var without touching agent code.
+**AI gateway.** Native adapters for Anthropic, OpenAI, and Ollama wrap the providers directly: the official Anthropic and OpenAI SDKs for the cloud paths, raw httpx against `/api/chat` for Ollama. No third-party dispatch library in the critical path (ADR-039). Anthropic is wired out of the box (set `MCP_PROXY_ANTHROPIC_API_KEY` in `proxy.env`); OpenAI and Ollama configure from the dashboard. Gemini, Bedrock, and Vertex still flow through the legacy LiteLLM backend (opt-in via `MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`) until their native adapters land. Per-agent identity is propagated into every upstream call as part of the audit trail; the provider can be switched by env var without touching agent code.
 
 **MCP reverse proxy.** Mastio terminates MCP traffic from agents, applies the capability gate, propagates the agent identity into the tool call, and logs the result. Both stdio and HTTP transports are supported. Resources are declared per tool with explicit allowed-domain lists.
 

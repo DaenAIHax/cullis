@@ -123,8 +123,10 @@ per trust boundary. For each component we:
 │                                 │                            │     │
 │   ┌───────────┐                 │   ┌─────────────────┐      │     │
 │   │  MCP tool │  reverse proxy  │   │  AI gateway     │      │     │
-│   │  upstream │  ◀───────────▶  │   │ (embedded       │      │     │
-│   │ (Slack…)  │                 │   │  LiteLLM)       │      │     │
+│   │  upstream │  ◀───────────▶  │   │ (native:        │      │     │
+│   │ (Slack…)  │                 │   │  Anthropic SDK, │      │     │
+│   │           │                 │   │  OpenAI SDK,    │      │     │
+│   │           │                 │   │  httpx→Ollama)  │      │     │
 │   └───────────┘                 │   └─────────────────┘      │     │
 │                                 │                            │     │
 │                                 │   ┌─────────────────┐      │     │
@@ -274,22 +276,29 @@ directly. The proxy:
 - `mcp_proxy/audit_chain.py` (per-org chain, retry path
   `_AUDIT_CHAIN_MAX_RETRIES = 5`)
 
-## Component: AI gateway (embedded LiteLLM)
+## Component: AI gateway (native per-provider dispatch)
 
 ### Data flow
 
-ADR-017: Mastio embeds LiteLLM as the default AI gateway for outbound
-LLM calls (`/v1/llm/...`). The gateway is selected by
-`settings.ai_gateway_backend` (`mcp_proxy/config.py`); the default
-`litellm_embedded` runs in-process. It terminates an OpenAI-shaped
-or Anthropic-shaped client request, applies per-agent rate limits
-and key selection, and forwards to the configured upstream provider.
+ADR-039 (supersedes ADR-017 on the dispatch layer): Mastio dispatches
+outbound LLM calls (`/v1/llm/...`, `/v1/chat/completions`,
+`/v1/messages`) through a per-provider native adapter. The selection is
+driven by `settings.ai_gateway_backend` (`mcp_proxy/config.py`); the
+default `cullis_native` routes Anthropic through
+`anthropic.AsyncAnthropic`, OpenAI through `openai.AsyncOpenAI`, and
+Ollama through raw httpx against `/api/chat`. No third-party AI
+gateway library is in the critical path. The legacy `litellm_embedded`
+backend remains in tree as an opt-in fallback for providers not yet
+wired natively (Gemini, Bedrock, Vertex); operators pinning it see a
+deprecation warning at startup. The gateway terminates an OpenAI-shaped
+or Anthropic-shaped client request, applies per-agent rate limits and
+key selection, and forwards to the configured upstream provider.
 
 ### STRIDE
 
 | Threat | Detail | Mitigation | Residual |
 |---|---|---|---|
-| Spoofing of the gateway | Agent thinks it is calling Anthropic, hits a proxy | The gateway runs in-process inside Mastio (`mcp_proxy/egress/ai_gateway.py` calls `litellm.acompletion()` directly); no extra hop. The upstream URL is operator-configured; upstream **credentials** are encrypted at rest using Fernet (`mcp_proxy/tools/secret_encrypt.py`, prefix `enc:v1:`). The Fernet master key is **not** KMS-backed today: it lives in `MCP_PROXY_SECRET_ENCRYPTION_KEY_B64` (env) or is auto-generated and stored in the `proxy_config` table. HSM-backed encryption is on the roadmap (see open items). | If the operator points the upstream to an attacker-controlled URL, no Cullis mitigation helps. Use TLS pinning at the bundle's outbound boundary (NetworkPolicy in k8s, host firewall on VPS). If you need HSM-grade protection of the Fernet master key today, mount the env var from a secrets manager such as Vault Agent. |
+| Spoofing of the gateway | Agent thinks it is calling Anthropic, hits a proxy | The gateway runs in-process inside Mastio. Under the default `cullis_native` backend, the per-provider adapter (`mcp_proxy/egress/adapters/anthropic.py`, `openai.py`, `ollama.py`) calls the provider's own SDK or raw HTTP directly; no extra hop. The legacy `litellm_embedded` backend, when explicitly pinned, goes through `litellm.acompletion()` in-process — same trust boundary. The upstream URL is operator-configured; upstream **credentials** are encrypted at rest using Fernet (`mcp_proxy/tools/secret_encrypt.py`, prefix `enc:v1:`). The Fernet master key is **not** KMS-backed today: it lives in `MCP_PROXY_SECRET_ENCRYPTION_KEY_B64` (env) or is auto-generated and stored in the `proxy_config` table. HSM-backed encryption is on the roadmap (see open items). | If the operator points the upstream to an attacker-controlled URL, no Cullis mitigation helps. Use TLS pinning at the bundle's outbound boundary (NetworkPolicy in k8s, host firewall on VPS). If you need HSM-grade protection of the Fernet master key today, mount the env var from a secrets manager such as Vault Agent. |
 | Tampering with the prompt or response | A man-in-the-middle alters the LLM payload | The gateway terminates TLS to the upstream; we do not re-encrypt or sign payloads. Customers needing payload integrity guarantees on the wire should run their own provider proxy with their own pinning. | This is a known limitation of any LLM gateway: prompt/response signing is not standardised. We default-deny on TLS errors. |
 | Repudiation | Agent denies sending a prompt | Every LLM call is audited identically to a tool call (per-agent, per-DPoP-`jti`, with a hash of the prompt and response and the response summary surfaced under `details`). | The prompt hash is one-way: we cannot reproduce the prompt from the log. This is intentional (privacy / no plaintext retention by default), but means a forensic investigation must rely on the agent's logs for prompt reconstruction. |
 | Information disclosure of upstream API keys | The gateway logs the upstream API key | Mastio's gateway never logs the upstream API key. Several competing AI gateways do log upstream keys to their telemetry endpoint as part of their value proposition; we explicitly do not. Upstream credentials live as Fernet-encrypted `creds_json` in `ai_provider_credentials` (migration `0027_ai_provider_creds.py`, encryption added in `0032_ai_creds_at_rest_encrypt.py`). | Operator-side observability that scrapes the gateway's stderr could pick up the key if the upstream emits it in an error message. We sanitise known upstream error patterns; new upstreams should be reviewed. |
@@ -299,8 +308,12 @@ and key selection, and forwards to the configured upstream provider.
 
 ### References
 
-- ADR-017 (embedded LiteLLM)
-- `mcp_proxy/egress/ai_gateway.py`,
+- ADR-017 (original embedded gateway)
+- ADR-039 (native per-provider adapters, drop LiteLLM critical path)
+- `mcp_proxy/egress/ai_gateway.py` (dispatcher),
+  `mcp_proxy/egress/adapters/{anthropic,openai,ollama}.py`
+  (native providers),
+  `mcp_proxy/egress/adapters/{litellm,portkey}.py` (legacy backends),
   `mcp_proxy/egress/llm_chat_router.py`,
   `mcp_proxy/egress/provider_catalog.py`
 - `mcp_proxy/tools/secret_encrypt.py`

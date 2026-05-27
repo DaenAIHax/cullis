@@ -228,8 +228,9 @@ LibreChat shows fewer/different models than expected:
 ### Tool calls behave inconsistently
 
 LibreChat agents v2 emit OpenAI-flavoured tool calls. The Mastio's
-embedded LiteLLM normalises them to the upstream provider's format
-(Anthropic / Bedrock / etc). Some edge cases (parallel tool calls
+native per-provider adapter (Anthropic SDK for Claude, OpenAI SDK for
+gpt-*, raw httpx for Ollama) translates them to the upstream provider's
+format. Some edge cases (parallel tool calls
 against Claude) may not round-trip cleanly today. Workaround: pick a
 provider whose native tool-call format matches what LibreChat emits
 (OpenAI native is the safest), or disable agents v2 and use single-shot
