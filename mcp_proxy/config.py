@@ -651,12 +651,28 @@ class ProxySettings(BaseSettings):
     # allow-list — narrow this in production.
     webauthn_expected_origin: str = ""
 
-    # ADR-017 native AI gateway on Mastio. When the Mastio runs litellm
-    # in-process (default: ``litellm_embedded``), every chat completion
-    # is dispatched without a Court round trip. Set ``backend=portkey``
-    # to delegate to a Portkey gateway sidecar instead.
+    # AI gateway dispatch backend (ADR-017 then ADR-039).
+    #
+    # Default since v0.7.x: ``cullis_native``. Dispatches per-provider
+    # to a Cullis-owned adapter that wraps the official SDK (Anthropic,
+    # OpenAI) or a thin httpx client (Ollama). No LiteLLM in the
+    # critical path. Gemini / Bedrock / Vertex are not yet wired
+    # natively and return HTTP 501 with a clear ``pin litellm_embedded``
+    # message under this backend.
+    #
+    # Other accepted values:
+    #   ``litellm_embedded`` — legacy. Routes every provider through
+    #     the embedded LiteLLM library. Deprecated in v0.7.x, removed
+    #     from ``requirements.txt`` in v0.8.x. Still useful for
+    #     operators who depend on Gemini / Bedrock / Vertex today.
+    #   ``portkey`` — legacy Anthropic-only Portkey sidecar. Deprecated
+    #     alongside ``litellm_embedded``.
+    #
+    # ``validate_config`` emits a deprecation warning when an operator
+    # explicitly pins ``litellm_embedded`` or ``portkey`` so the
+    # transition to native is visible in startup logs.
     anthropic_api_key: str = ""
-    ai_gateway_backend: str = "litellm_embedded"  # litellm_embedded | portkey
+    ai_gateway_backend: str = "cullis_native"  # cullis_native | litellm_embedded | portkey
     ai_gateway_provider: str = "anthropic"
     ai_gateway_url: str = "http://localhost:8787"  # Portkey sidecar URL
     ai_gateway_request_timeout_s: float = 30.0
@@ -1397,13 +1413,43 @@ def validate_config(settings: ProxySettings) -> None:
             settings.dashboard_signing_key_path,
         )
 
+    # ADR-039 — AI gateway backend posture. New default ``cullis_native``
+    # routes Anthropic / OpenAI / Ollama through native adapters with no
+    # LiteLLM in the critical path. Operators pinned to the legacy
+    # backends see a deprecation warning so the v0.8.x removal is not a
+    # surprise.
+    backend = settings.ai_gateway_backend.lower()
+    if backend == "cullis_native":
+        _log.info(
+            "AI gateway backend: cullis_native (ADR-039). Native adapters "
+            "active for anthropic, openai, ollama. Gemini / Bedrock / "
+            "Vertex still require MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded.",
+        )
+    elif backend == "litellm_embedded":
+        _log.warning(
+            "AI gateway backend: litellm_embedded (LEGACY, deprecated by "
+            "ADR-039). This backend will be removed in v0.8.x; the "
+            "``litellm`` package will be dropped from requirements.txt. "
+            "Migrate to MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native unless "
+            "you depend on Gemini / Bedrock / Vertex (native adapters "
+            "TBD).",
+        )
+    elif backend == "portkey":
+        _log.warning(
+            "AI gateway backend: portkey (LEGACY, Anthropic-only). "
+            "Deprecated by ADR-039 alongside litellm_embedded; will be "
+            "removed in v0.8.x. Migrate to "
+            "MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native.",
+        )
+
     _log.info(
         "Startup validation passed (environment=%s, secret_backend=%s, "
-        "kms_backend=%s, standalone=%s).",
+        "kms_backend=%s, standalone=%s, ai_gateway_backend=%s).",
         settings.environment,
         settings.secret_backend,
         settings.kms_backend,
         settings.standalone,
+        settings.ai_gateway_backend,
     )
 
 
