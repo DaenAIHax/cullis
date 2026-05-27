@@ -56,4 +56,4 @@ __all__ = [
     "log_msg",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
