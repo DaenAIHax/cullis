@@ -145,6 +145,37 @@ def _cullis_headers(ctx: DispatchContext) -> dict[str, str]:
     }
 
 
+# ── http client cache (PR-I) ──────────────────────────────────────────
+#
+# Pre-PR-I, ``chat_completion`` and ``stream_chat_completion`` opened a
+# fresh ``httpx.AsyncClient`` per request via ``async with``. Under
+# load that meant a TCP + TLS handshake per call against the Ollama
+# daemon — and on a local daemon "fast" still means dozens of millis
+# of unnecessary syscall churn. We now cache one ``AsyncClient`` per
+# ``(api_base, timeout)`` so the connection pool stays warm across
+# requests.
+#
+# The cache is module-level and worker-local; each uvicorn worker has
+# its own dict. Entries are bounded by the number of distinct Ollama
+# endpoints an operator points the catalog at (typically 1). We do
+# not close clients explicitly — Python GC + interpreter exit handle
+# the httpx pools when the process ends. Long-lived rotation of
+# ``api_base`` would leak the prior client until exit, which is
+# acceptable for the bounded cardinality.
+
+_HTTP_CLIENT_CACHE: dict[str, httpx.AsyncClient] = {}
+
+
+def _get_http_client(api_base: str, timeout: float) -> httpx.AsyncClient:
+    key = f"{api_base}|{timeout}"
+    client = _HTTP_CLIENT_CACHE.get(key)
+    if client is not None:
+        return client
+    client = httpx.AsyncClient(timeout=timeout)
+    _HTTP_CLIENT_CACHE[key] = client
+    return client
+
+
 # ── request translation: OpenAI → Ollama ──────────────────────────────
 
 
@@ -537,14 +568,14 @@ class OllamaAdapter:
         url = api_base + "/api/chat"
         timeout = float(getattr(settings, "ai_gateway_request_timeout_s", 60))
 
+        client = _get_http_client(api_base, timeout)
         started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    url,
-                    json=ollama_body,
-                    headers=_cullis_headers(ctx),
-                )
+            resp = await client.post(
+                url,
+                json=ollama_body,
+                headers=_cullis_headers(ctx),
+            )
         except httpx.TimeoutException as exc:
             raise GatewayError(504, "provider_timeout", detail=str(exc)) from exc
         except httpx.HTTPError as exc:
@@ -647,35 +678,35 @@ class OllamaAdapter:
         async def _aiter() -> AsyncIterator[dict]:
             acc = _StreamAccumulator(model=request_model, trace_id=ctx.trace_id)
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    async with client.stream(
-                        "POST", url,
-                        json=ollama_body,
-                        headers=_cullis_headers(ctx),
-                    ) as response:
-                        if response.status_code // 100 != 2:
-                            body_bytes = await response.aread()
-                            from mcp_proxy.egress.ai_gateway import scrub_secrets
-                            detail = scrub_secrets(body_bytes.decode("utf-8", "replace")[:512])
-                            raise GatewayError(
-                                502,
-                                f"upstream_status_{response.status_code}",
-                                detail=detail,
+                client = _get_http_client(api_base, timeout)
+                async with client.stream(
+                    "POST", url,
+                    json=ollama_body,
+                    headers=_cullis_headers(ctx),
+                ) as response:
+                    if response.status_code // 100 != 2:
+                        body_bytes = await response.aread()
+                        from mcp_proxy.egress.ai_gateway import scrub_secrets
+                        detail = scrub_secrets(body_bytes.decode("utf-8", "replace")[:512])
+                        raise GatewayError(
+                            502,
+                            f"upstream_status_{response.status_code}",
+                            detail=detail,
+                        )
+                    async for raw_line in response.aiter_lines():
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed = json.loads(line)
+                        except json.JSONDecodeError:
+                            _log.debug(
+                                "ollama stream malformed jsonl line dropped: %r",
+                                line[:200],
                             )
-                        async for raw_line in response.aiter_lines():
-                            line = raw_line.strip()
-                            if not line:
-                                continue
-                            try:
-                                parsed = json.loads(line)
-                            except json.JSONDecodeError:
-                                _log.debug(
-                                    "ollama stream malformed jsonl line dropped: %r",
-                                    line[:200],
-                                )
-                                continue
-                            for chunk in acc.on_chunk(parsed):
-                                yield chunk
+                            continue
+                        for chunk in acc.on_chunk(parsed):
+                            yield chunk
                 # Final OpenAI chunk with finish_reason + usage.
                 dispatch_obj.prompt_tokens = acc.prompt_tokens
                 dispatch_obj.completion_tokens = acc.completion_tokens
