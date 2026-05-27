@@ -71,6 +71,16 @@ tpm = [
 webauthn = [
     "webauthn>=2.0,<3.0",
 ]
+# ADR-039 — legacy LiteLLM backend (``MCP_PROXY_AI_GATEWAY_BACKEND=
+# litellm_embedded``). Retained for operators who depend on Gemini /
+# Bedrock / Vertex (no native adapter yet). Default Mastio install
+# never pulls this — only the operator who explicitly opts into the
+# legacy backend. Floor pinned at 1.83.7 to dodge the April-May 2026
+# CVE cluster (CVE-2026-42208 / 42271 / 35029 / 35030 / GHSA-69x8) and
+# the March 2026 supply-chain compromise of 1.82.7 / 1.82.8.
+litellm-legacy = [
+    "litellm>=1.83.7,<2.0",
+]
 
 [project.scripts]
 cullis-proxy = "mcp_proxy.cli:main"
