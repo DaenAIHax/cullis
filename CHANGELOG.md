@@ -14,6 +14,29 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+## [v0.6.0] — Provider SDK drop-in + VM cold-reader fixes + SDK PyPI catch-up — 2026-05-27
+
+End-to-end cold-reader gate cut on top of v0.5.5. Bundle deploy script auto-detects an interface IP on Linux pure hosts so a VM-on-libvirt + browser-on-laptop setup just works without `host.docker.internal` DNS detours. Vanilla Anthropic SDK and OpenAI SDK reach Mastio via a 3-line `cullis_httpx_client(identity_dir=...)` helper that returns an `httpx.Client` with mTLS + DPoP baked in (ADR-038 Phase 0). And the public PyPI wheel `cullis-sdk` finally catches up with the 4-week monorepo drift: `chat_completion`, `list_mcp_tools`, `call_mcp_tool`, and the post-ADR-014 identity factories are now installable via `pip install cullis-sdk` instead of only readable in the repo.
+
+### Bundle
+
+- **`MCP_PROXY_PROXY_PUBLIC_URL` auto-detected at deploy time** (#971). Previous default of `https://host.docker.internal:9443` silently broke VM + remote-laptop setups: the magic name resolves only on macOS / Windows / Docker Desktop, leaving Linux pure cold-readers with DNS errors on the dashboard URL and 401 `Invalid DPoP proof: htu mismatch` on every enrollment. New `_detect_default_public_host` helper in `packaging/_common-deploy-helpers.sh` picks `host.docker.internal` when `/etc/hosts` carries the entry or the host is not Linux, otherwise the IPv4 of the interface holding the default route, otherwise `localhost`. Both the interactive `deploy.sh` prompt and the `generate-proxy-env.sh --defaults` path use the detected value, and the nginx server cert SAN list now includes the detected IP alongside the operator-typed hostname so an agent reaching the Mastio over IP and a sibling container reaching it over DNS both complete the TLS handshake.
+
+### Provider SDK drop-in (ADR-038 Phase 0)
+
+- **`cullis_sdk.providers_compat.cullis_httpx_client(identity_dir=...)`** (#969). LLM-agnostic helper returning an `httpx.Client` with mTLS client cert + DPoP signing transport. Vanilla Anthropic SDK constructor: `Anthropic(base_url="https://mastio:9443", api_key="cullis", http_client=cullis_httpx_client(...))`. Vanilla OpenAI SDK constructor: `OpenAI(base_url="https://mastio:9443/v1", api_key="cullis", http_client=cullis_httpx_client(...))`. Three lines, no Cullis SDK on the agent code path, no proxy library wrapping.
+- **`POST /v1/messages` Anthropic-shape endpoint** (#969). New `mcp_proxy/egress/anthropic_messages_router.py` translates Anthropic Messages requests/responses to the existing OpenAI-shape LiteLLM dispatch. Agent code written for the Anthropic SDK runs unmodified through Mastio's policy + audit + capability gate.
+- **nginx mTLS regex extended to `^/v1/(llm|mcp|chat|messages)`** (#969). The previous regex covered only `/v1/llm` and `/v1/mcp`; vanilla SDK paths (`/v1/chat/completions`, `/v1/messages`) fell into the catchall location which strips `X-SSL-Client-Cert` by design, making the handshake invisible to FastAPI. Adding `chat` and `messages` lets the cert reach the principal-resolver while the catchall keeps protecting truly anonymous endpoints.
+
+### SDK (cullis-sdk PyPI 0.2.0)
+
+- **PyPI release 0.2.0** (#972). First publish since 2026-05-01 (0.1.3). The ~4-week drift between the published wheel and the repo HEAD left the public README quickstart examples (`chat_completion`, `list_mcp_tools`, `from_enrollment`, `enroll_via_dashboard_approval`) broken on a fresh `pip install cullis-sdk`. 0.2.0 closes the gap. Bumps: `cullis_sdk/__init__.py::__version__` 0.1.3 → 0.2.0; `packaging/pypi-sdk/pyproject.toml::version` 0.1.3 → 0.2.0; `pyproject.toml` top-level `version` 0.1.0 → 0.2.0 (drift fix). New SDK-specific changelog at `packaging/pypi-sdk/CHANGELOG.md` (distinct from this monorepo file).
+- **`CullisClient.from_enrollment(enroll_url)` deprecated** (#973). Cold-reader finding from the 2026-05-27 v0.5.5 VM dogfood: the README quickstart pointed at this method, but the dashboard exposes no surface to generate the one-shot URL it requires, and the server-side `GET /v1/enroll/<token>` endpoint did not survive the 2026-05 pivot. Runtime `DeprecationWarning` emitted on call; removal in 0.3.0. Replacement is `from_identity_dir(...)` after unzipping the admin-minted `identity-bundle.zip` (PR #954). README quickstart rewritten to point at the working flow.
+
+### CI / infrastructure
+
+- **Cloudflare Pages deploy hook** (#970). The native Cloudflare → GitHub webhook started marking production auto-deployments as `skipped` around 2026-05-26 (root cause Cloudflare side, untriaged); the site stayed pinned 17 commits behind `main` until a manual "Retry deployment" was clicked, including across the v0.5.5 release. New `.github/workflows/cloudflare-deploy.yml` POSTs to a Deploy Hook URL (repo secret `CLOUDFLARE_DEPLOY_HOOK_URL`) on every push to `main`. The native webhook still fires for PR preview deploys; this only adds a deterministic trigger for production.
+
 ## [v0.5.5] — Dashboard sidebar consolidation + SSRF community default + cold-reader polish — 2026-05-26
 
 Evening minor cut on top of v0.5.4.1, batching the afternoon dogfood findings, the dashboard sidebar consolidation, the agent-create error hardening, and the tier-aware SSRF default for the community bundle. A cold-reader on a vanilla Linux laptop now lands on a less crowded sidebar, dedicated Settings cards for the operator-rare surfaces (PKI, Vault, Network, AI Providers), clickable rows on the Agents and Users tables, and a backend-save that succeeds at the first try when the MCP target is a sibling container on the docker bridge.
