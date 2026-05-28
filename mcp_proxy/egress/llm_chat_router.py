@@ -65,6 +65,37 @@ async def chat_completions(
     settings = get_settings()
     trace_id = f"trace_{uuid.uuid4().hex[:16]}"
 
+    # Capability gate (#22) — fail-closed on missing ``llm.chat``.
+    # Phase 1 left this check decorative on the chat path; an agent
+    # enrolled without ``llm.chat`` in its capabilities could still
+    # reach the LLM provider as long as it was bound and DPoP+mTLS
+    # passed. From v0.6.4 the capability is the first gate after
+    # auth: the agent envelope MUST carry ``llm.chat`` or the request
+    # is denied before any provider dispatch.
+    if "llm.chat" not in (agent.capabilities or []):
+        await log_audit(
+            agent_id=agent.agent_id,
+            action="egress_llm_chat",
+            status="denied",
+            details={
+                "event": "llm.chat_completion",
+                "principal_id": agent.agent_id,
+                "principal_type": agent.principal_type,
+                "model": req.model,
+                "trace_id": trace_id,
+                "reason": "capability_missing",
+                "required_capability": "llm.chat",
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "reason": "capability_missing",
+                "trace_id": trace_id,
+                "required_capability": "llm.chat",
+            },
+        )
+
     # Wave A PR3 (audit 2026-05-11 Tema A) — enforce ``scope_providers``
     # on culk_-authed callers. Pre-fix this field was stored at mint
     # time and never read; a token "anthropic only" worked on every

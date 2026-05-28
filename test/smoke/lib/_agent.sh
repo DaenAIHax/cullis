@@ -22,15 +22,20 @@ fi
 # Enroll an agent via POST /v1/admin/agents. Args:
 #   $1  agent_name (e.g. "alice")
 #   $2  display_name (optional, defaults to agent_name)
+#   $3  capabilities JSON array (optional, defaults to the standard
+#       smoke set: ["llm.chat","mcp.tools.list"]). Pass "[]" for the
+#       negative scenarios that exercise the capability gate.
 #
 # Side effects: writes state/agents/<name>/cert.pem +
 # state/agents/<name>/key.pem with the minted material. Echoes the
 # fully-qualified agent_id (<org>::<name>) on stdout.
 agent_enroll() {
     local name="$1" display="${2:-$1}"
+    local capabilities="${3:-[\"llm.chat\",\"mcp.tools.list\"]}"
     local body resp agent_dir agent_id
 
-    body=$(printf '{"agent_name":"%s","display_name":"%s","capabilities":[]}' "$name" "$display")
+    body=$(printf '{"agent_name":"%s","display_name":"%s","capabilities":%s}' \
+        "$name" "$display" "$capabilities")
     resp="$(curl_admin POST "/v1/admin/agents" "$body")" \
         || die "agent enrollment failed (HTTP $(smoke_status)): $resp"
 
