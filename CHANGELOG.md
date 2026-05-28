@@ -14,6 +14,28 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+## [v0.6.3] — Fix mastio_keys mint race + LOCAL_TOKEN auth recovery — 2026-05-28
+
+Same-day patch on top of v0.6.2. Restores `/v1/auth/token` and every downstream surface that depends on it (SDK `list_mcp_tools` / `call_mcp_tool`, Connector login, dashboard signing) on fresh installs. Issue cullis#997.
+
+Before this patch, the four uvicorn workers at lifespan startup each entered `AgentManager._mint_mastio_leaf` with their per-process `self._active_key == None` cache and each INSERTed a fresh active row into `mastio_keys`. The `current_signer()` invariant (`activated_at IS NOT NULL AND deprecated_at IS NULL` == 1) was broken on every cold boot; `RuntimeError("N active mastio keys")` was caught silently in `main.py:704`; `app.state.local_issuer` stayed None; `/v1/auth/token` returned 503 `local issuer not initialized` for the rest of the deploy. The bug was confirmed on the v0.6.2 cold-reader run: a fresh `mastio-v0.6.2` deploy reached 4 active rows in 80 ms, and the SDK quickstart snippets that traverse LOCAL_TOKEN auth all failed end-to-end.
+
+### Fix
+
+- **`AgentManager._mint_mastio_leaf` is now single-writer across workers** (#1000). New `_acquire_mastio_mint_lock` / `_release_mastio_mint_lock` helpers in `mcp_proxy/db.py` mirror the existing `_run_migrations_sync_under_flock` pattern: a blocking `fcntl.LOCK_EX` on a sibling-of-DB lockfile (`<db>.mastio_mint.lock`) serialises the mint critical section. Inside the lock the worker re-reads `get_mastio_keys_active()`, adopts the existing row when N=1, repairs the invariant when N>1 (keeps the newest by `activated_at`, deprecates the rest via the new `deprecate_mastio_keys_by_kids` helper), and only mints fresh material when truly absent.
+- **Lazy in-place repair for pre-existing N>1 state** (#1000). Operators whose `mastio_keys` table already accumulated stale active rows from pre-fix boots (16 observed on `mastio-demo`) get the repair on the next boot — no manual SQL, no migration step. The first worker to acquire the flock prunes the stale rows; subsequent workers adopt the survivor.
+
+### Scope
+
+- SQLite-only fix; Postgres deploys (0 in the wild today) take the original racy branch. A follow-up patch will switch to `pg_try_advisory_lock` for symmetric coverage.
+- 4 unit tests in `test/unit/test_mastio_keys_invariant_997.py` pin the corrected behaviour against both the fresh-boot and N>1-repair paths.
+
+### CHANGELOG hygiene
+
+- `CHANGELOG.md` — new `[v0.6.3]` section above `[v0.6.2]`.
+- `README.md` — quickstart curl + project-component table flipped to `mastio-v0.6.3`.
+- `site/src/pages/index.astro` + `index-dark.astro` — hero quickstart curl flipped to `mastio-v0.6.3`.
+
 ## [v0.6.2] — ADR-039 drop LiteLLM from the critical path — 2026-05-28
 
 Dependency-hygiene patch on top of v0.6.1. Removes LiteLLM from the default chat-completion dispatch path and replaces it with three Cullis-owned native adapters (Anthropic, OpenAI, Ollama). The LiteLLM library is no longer a runtime requirement; operators on Gemini, Bedrock, or Vertex can still opt in via the legacy backend (`pip install 'cullis-sdk[litellm-legacy]'` + `MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`) until their native adapters land.
