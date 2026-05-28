@@ -1,20 +1,10 @@
 # `cullis-sdk`
 
-**Python SDK for the Cullis federated agent-trust network.**
+**Python SDK for Cullis Mastio. Zero-trust identity, policy, and audit for autonomous AI agents in regulated environments.**
 
-The Cullis SDK is the library you import from your Python agent code to
-talk to a Cullis broker. It handles enrollment, mutual TLS / DPoP-bound
-authentication, agent discovery, session management, and end-to-end
-encrypted messaging — so your agent code stays focused on what it does,
-not on the wire format.
+`cullis-sdk` is the Python client an autonomous agent imports to talk to a Cullis Mastio (the org-level gateway). It handles mTLS client cert presentation, DPoP proof signing, token refresh, and request retries, exposing a small surface that maps onto what an agent actually does: ask the LLM something, list the MCP tools it is allowed to call, call one, and let the audit trail accumulate underneath.
 
-The SDK is one of three Python distributions in the Cullis monorepo:
-
-| Distribution      | Purpose                                                          |
-|-------------------|------------------------------------------------------------------|
-| `cullis-sdk`      | Library you `import cullis_sdk` from your agent code (this one). |
-| `cullis-connector`| End-user MCP server bridging Claude Code / Cursor / etc.         |
-| `mcp-proxy`       | Org-level gateway (deployed as a container, not pip-installed).  |
+The SDK never holds the upstream LLM API key. The Mastio is the only thing that talks to Anthropic, OpenAI, Ollama, or any other provider. The agent only sees its own client certificate and the Mastio URL.
 
 ---
 
@@ -26,122 +16,128 @@ pip install cullis-sdk
 
 Python 3.10+ required.
 
-For [SPIFFE](https://spiffe.io/) workload-API integration (enroll an
-agent using its SPIRE-issued SVID), install the optional extra:
+Optional extras:
 
 ```bash
-pip install 'cullis-sdk[spiffe]'
+pip install 'cullis-sdk[spiffe]'         # SPIFFE workload-API integration
+pip install 'cullis-sdk[litellm-legacy]' # opt-in legacy LiteLLM upstream path
 ```
 
 ---
 
 ## Quick start
 
-The SDK talks to your org's Mastio (the local proxy), not directly to
-a central broker. The Mastio handles enrollment, mTLS, DPoP and
-forwards encrypted payloads on your behalf.
-
-Two entry points, depending on how your agent gets its identity:
-
-### Desktop / Connector flow
-
-When the agent lives next to a Cullis Connector (Claude Desktop,
-Cursor, Cline, or any local MCP client), the Connector has already
-enrolled an identity under `~/.cullis/identity/`. The SDK reads it:
+The standard flow is: an org admin mints your agent's identity in the Mastio dashboard, downloads the resulting `identity-bundle.zip`, and delivers it to your agent host out of band (scp, KMS, Vault, systemd LoadCredential, whatever your runbook says). You unzip it anywhere on the agent host. The SDK reads `agent.crt + agent.key` from disk; `ca-chain.pem` and `dpop.jwk` are auto-discovered as siblings.
 
 ```python
 from cullis_sdk import CullisClient
 
-client = CullisClient.from_connector()       # loads ~/.cullis/identity/
-client.login_via_proxy_with_local_key()      # mint a proxy-scoped token
-
-resp = client.send_oneshot(
-    recipient_id="acme::supplier-agent",
-    payload={"text": "Quote for 1000 M8 bolts please."},
-    ttl_seconds=300,
-)
-print(resp["msg_id"])
-```
-
-### Server / BYOCA flow
-
-When the agent runs server-side and the cert+key are provisioned by
-your own PKI (Bring-Your-Own-CA), build the client from the identity
-directory directly. The mTLS client cert *is* the credential, so no
-separate login step is needed:
-
-```python
-from cullis_sdk import CullisClient
-
+# Admin minted this identity in the dashboard and sent you the zip.
+# Unzip anywhere on the agent host. The cert IS the credential
+# (ADR-014, RFC 8705 mTLS); there is no shared API key.
 client = CullisClient.from_identity_dir(
-    "https://mastio.example.com:9443",
-    cert_path="/etc/cullis/agent/cert.pem",
-    key_path="/etc/cullis/agent/key.pem",
-    dpop_key_path="/etc/cullis/agent/dpop.jwk",
+    "https://mastio.acme.local:9443",
+    cert_path="/etc/cullis/agent/agent.crt",
+    key_path="/etc/cullis/agent/agent.key",
+    verify_tls=False,  # self-signed Org CA on a laptop; pin ca_chain_path in prod
 )
 
-resp = client.send_oneshot(
-    recipient_id="acme::supplier-agent",
-    payload={"text": "Quote for 1000 M8 bolts please."},
-    ttl_seconds=300,
+# Ask the LLM. The Mastio dispatches to whichever provider the org
+# admin configured (Anthropic, OpenAI, Ollama). The agent never sees
+# the upstream API key.
+response = client.chat_completion(
+    model="claude-sonnet-4-6",
+    messages=[{"role": "user", "content": "Screen the latest applicant batch."}],
 )
-print(resp["msg_id"])
+
+# List the MCP tools the policy engine allows this agent to invoke.
+for tool in client.list_mcp_tools():
+    print(tool["name"], tool.get("description", ""))
+
+# Invoke one. The Mastio enforces the capability gate again on the
+# server side, applies the Rego policy, and writes an audit row.
+result = client.call_mcp_tool(
+    "sanctions_lookup",
+    {"full_name": "Acme Holding Ltd"},
+)
 ```
 
-The SDK does the heavy lifting: mTLS to your Mastio with the agent
-cert, DPoP-bound bearer tokens for replay protection, AES-256-GCM +
-RSA-OAEP/ECDH key wrap for end-to-end encryption to the recipient
-agent (the broker never sees the cleartext), and (on receive)
-hash-chain verification of the per-org audit log.
+The other entry point is `CullisClient.enroll_via_dashboard_approval(mastio_url, requester_name=..., requester_email=..., save_to=...)` — the scripted bootstrap path for CI/CD onboarding flows where no human is at a terminal to copy files. The SDK submits a CSR, polls until an admin clicks Approve in the dashboard, then writes the identity-dir layout and returns the client.
 
-### Migrating from v0.3 sessions
+For Linux production hosts using systemd, `CullisClient.from_systemd_credentials(...)` reads the identity from the `LoadCredential=` tmpfs delivery instead of disk.
 
-The v0.3 `login()` / `open_session()` / `send()` surface is
-deprecated and will be removed in `cullis-sdk` v0.5 (~2026-08-15).
-Map the legacy API to the canonical one-shot surface:
+---
 
-| v0.3 (deprecated, `DeprecationWarning` at call time) | Canonical (use this) |
-|---|---|
-| `CullisClient(url)` + `client.login(agent_id, org_id, cert, key)` | `CullisClient.from_identity_dir(url, cert_path=, key_path=, dpop_key_path=)` |
-| `client.open_session(target_agent, target_org, caps)` + `client.send(session_id, ...)` | `client.send_oneshot(recipient_id="org::agent", payload=, ttl_seconds=)` (no session needed) |
-| `client.discover(capabilities=[...])` | Same. Discovery still lives on the canonical surface. |
+## Vanilla Anthropic / OpenAI SDK drop-in (ADR-038)
 
-The one-shot surface (ADR-008) is sessionless: every message is its
-own correlation-ID-tagged transaction, intra-org uses signed
-plaintext over mTLS, cross-org uses end-to-end encrypted envelope.
+If your agent code already uses `anthropic.Anthropic` or `openai.OpenAI` directly and you do not want to refactor it to `client.chat_completion(...)`, the SDK ships a 3-line drop-in helper that routes the vanilla SDK through Mastio:
+
+```python
+import anthropic
+from cullis_sdk.providers_compat import cullis_httpx_client
+
+# cullis_httpx_client reads agent.crt + agent.key + ca-chain.pem + dpop.jwk
+# from the directory you point at (same layout the admin-minted
+# identity-bundle.zip unpacks to). It wires mTLS, DPoP signing, and
+# the nonce-retry challenge so the vanilla provider SDK does not need
+# to know any of that.
+http = cullis_httpx_client(identity_dir="/etc/cullis/agent")
+
+# Hand the httpx client to the vanilla Anthropic SDK. Streaming, tool
+# use, prompt caching all work as if you were hitting the Anthropic
+# API directly. Every request flows through Mastio and lands in the
+# audit chain. The Mastio holds the upstream Anthropic key; the agent
+# host never sees it, hence ``api_key="unused"``.
+client = anthropic.Anthropic(
+    base_url="https://mastio.acme.local:9443/v1",
+    api_key="unused",
+    http_client=http,
+)
+
+msg = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+Same pattern with `openai.OpenAI(base_url="https://mastio.acme.local:9443/v1", api_key="unused", http_client=cullis_httpx_client(identity_dir="..."))`. See `docs/quickstart/provider-sdk-drop-in.md` on the site.
 
 ---
 
 ## Architecture
 
 ```
-       ┌──────────┐  mTLS + DPoP   ┌──────────┐  mTLS + DPoP  ┌──────────┐
-       │ Agent A  │───────────────▶│  Broker  │◀──────────────│ Agent B  │
-       │ (cullis- │                │ (Cullis  │               │ (cullis- │
-       │   sdk)   │                │  Site)   │               │   sdk)   │
-       └──────────┘                └──────────┘               └──────────┘
-            │                                                       ▲
-            └─── E2E-encrypted payload (ECDH, broker can't read) ───┘
+   ┌──────────┐  mTLS + DPoP   ┌──────────┐    HTTPS     ┌────────────┐
+   │  Agent   │───────────────▶│  Mastio  │─────────────▶│ LLM upstr. │
+   │ (cullis- │                │  (Cullis │              │ (Anthropic,│
+   │   sdk)   │                │  gateway)│              │  OpenAI,   │
+   └──────────┘                └────┬─────┘              │  Ollama)   │
+                                    │                    └────────────┘
+                                    ▼
+                              ┌──────────┐
+                              │  Audit   │
+                              │  chain   │
+                              └──────────┘
 ```
 
-The broker authenticates both endpoints, routes messages, and
-appends a tamper-evident hash-chain entry per send. It never sees
-the cleartext payload.
+The Mastio is the only component that holds upstream LLM credentials. Per-agent identity flows into every dispatched call as part of the audit trail. The audit chain replays deterministically: an external auditor can verify it offline without holding any Cullis credentials.
+
+The default dispatch path uses Cullis-owned native adapters (official Anthropic and OpenAI SDKs, raw httpx for Ollama). No third-party AI gateway library in the critical path (ADR-039).
 
 ---
 
 ## Documentation
 
-- Repository: https://github.com/cullis-security/cullis
-- Site: https://cullis.io
-- Issues: https://github.com/cullis-security/cullis/issues
-- Quickstart: https://cullis.io/docs/quickstart/getting-started/
+- Repository: [github.com/cullis-security/cullis](https://github.com/cullis-security/cullis)
+- Site: [cullis.io](https://cullis.io)
+- Quickstart (SDK): [cullis.io/docs/quickstart/sdk](https://cullis.io/docs/quickstart/sdk)
+- Vanilla SDK drop-in: [cullis.io/docs/quickstart/provider-sdk-drop-in](https://cullis.io/docs/quickstart/provider-sdk-drop-in)
+- MCP tool calls from the SDK: [cullis.io/docs/quickstart/mcp-tools](https://cullis.io/docs/quickstart/mcp-tools)
+- Issues: [github.com/cullis-security/cullis/issues](https://github.com/cullis-security/cullis/issues)
 
 ---
 
 ## License
 
-Functional Source License 1.1 with Apache-2.0 future grant
-([`LICENSE`](https://github.com/cullis-security/cullis/blob/main/LICENSE)).
-You can use, modify, and self-host the SDK for any non-competing
-purpose; competing-use restriction lifts after two years to Apache 2.0.
+Apache 2.0 ([`LICENSE`](https://github.com/cullis-security/cullis/blob/main/cullis_sdk/LICENSE)). Permissive, permanent. The SDK is a permissive component; the Cullis Mastio (`mcp_proxy/`) ships under FSL-1.1-Apache-2.0 (non-competing use, two-year Apache 2.0 future grant) — see [the repo NOTICE file](https://github.com/cullis-security/cullis/blob/main/NOTICE).
