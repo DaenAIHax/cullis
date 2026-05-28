@@ -2035,10 +2035,24 @@ class AgentManager:
         """Mint a fresh EC P-256 leaf under the existing intermediate CA.
 
         The keypair + cert are inserted into ``mastio_keys`` with
-        ``activated_at=now`` (no previous active row in the Phase 2.0
-        cold-start path — multi-row transitions land in Phase 2.1).
-        The cached ``self._active_key`` is refreshed so subsequent
-        signing / counter-signing calls see the new row.
+        ``activated_at=now``. The cached ``self._active_key`` is
+        refreshed so subsequent signing / counter-signing calls see the
+        new row.
+
+        Issue cullis#997 — single-writer guard. The N uvicorn worker
+        processes all enter this method during lifespan startup with
+        ``self._active_key is None`` (in-memory cache, never populated
+        on a cold boot). Without the flock below, each worker INSERTs a
+        fresh active row; ``mastio_keys`` then carries N>1 rows where
+        ``activated_at IS NOT NULL AND deprecated_at IS NULL``;
+        ``LocalKeyStore.current_signer()`` raises
+        ``RuntimeError("N active mastio keys")``; ``app.state.local_
+        issuer`` stays None; ``/v1/auth/token`` returns 503 for the
+        rest of the deploy. The flock serialises mint across workers
+        against a sibling-of-DB lockfile; under it we re-read the
+        active set, adopt + repair if a sibling already minted (or a
+        previous boot left N>1 rows behind), and only mint when truly
+        absent.
         """
         if self._mastio_ca_key is None or self._mastio_ca_cert is None:
             # D-13 — lazy reload. Another worker may have minted and
@@ -2051,53 +2065,121 @@ class AgentManager:
             if not reloaded:
                 raise RuntimeError("Mastio CA not loaded — cannot sign leaf")
 
-        leaf_key = ec.generate_private_key(ec.SECP256R1())
-        proxy_spiffe = f"spiffe://{self._trust_domain}/proxy/{self._org_id}"
-        leaf_subject = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, f"proxy:{self._org_id}"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, self._org_id),
-        ])
-        leaf_cert = (
-            x509.CertificateBuilder()
-            .subject_name(leaf_subject)
-            .issuer_name(self._mastio_ca_cert.subject)
-            .public_key(leaf_key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - timedelta(minutes=5))
-            .not_valid_after(now + timedelta(days=MASTIO_LEAF_VALIDITY_DAYS))
-            .add_extension(
-                SubjectAlternativeName([UniformResourceIdentifier(proxy_spiffe)]),
-                critical=False,
+        # ── Issue cullis#997: acquire flock + re-fetch active set ──
+        # SQLite-only; Postgres deploys (none in the wild today) take
+        # the racy branch until a follow-up adds an advisory lock.
+        from mcp_proxy.config import get_settings
+        from mcp_proxy.db import (
+            _acquire_mastio_mint_lock,
+            _release_mastio_mint_lock,
+            _sqlite_path,
+            deprecate_mastio_keys_by_kids,
+            get_mastio_keys_active,
+        )
+
+        lock_fd: int | None = None
+        sqlite_path = _sqlite_path(get_settings().database_url)
+        if sqlite_path:
+            lock_fd = await asyncio.to_thread(
+                _acquire_mastio_mint_lock, sqlite_path,
             )
-            .add_extension(
-                x509.BasicConstraints(ca=False, path_length=None),
-                critical=True,
+        try:
+            existing = await get_mastio_keys_active()
+            if existing:
+                # A sibling worker won the mint race, or a previous boot
+                # left N>1 rows behind. Keep the newest by
+                # ``activated_at``; deprecate any older to restore the
+                # one-active-row invariant. Then adopt the survivor and
+                # return without minting a fresh keypair.
+                newest = max(
+                    existing,
+                    key=lambda row: row.get("activated_at") or "",
+                )
+                stale_kids = [
+                    row["kid"] for row in existing if row["kid"] != newest["kid"]
+                ]
+                if stale_kids:
+                    deprecated = await deprecate_mastio_keys_by_kids(
+                        stale_kids, now.isoformat(),
+                    )
+                    logger.warning(
+                        "Mastio leaf invariant repaired (cullis#997) — "
+                        "kept kid=%s, deprecated %d stale rows: %s",
+                        newest["kid"], deprecated, stale_kids,
+                    )
+                self._active_key = await self._keystore.find_by_kid(
+                    newest["kid"],
+                )
+                logger.info(
+                    "Mastio leaf adopted from existing active row — kid=%s",
+                    newest["kid"],
+                )
+                return
+
+            # No active row under the lock — proceed with the original
+            # mint path.
+            leaf_key = ec.generate_private_key(ec.SECP256R1())
+            proxy_spiffe = (
+                f"spiffe://{self._trust_domain}/proxy/{self._org_id}"
             )
-            .sign(self._mastio_ca_key, hashes.SHA256())
-        )
+            leaf_subject = x509.Name([
+                x509.NameAttribute(
+                    NameOID.COMMON_NAME, f"proxy:{self._org_id}",
+                ),
+                x509.NameAttribute(
+                    NameOID.ORGANIZATION_NAME, self._org_id,
+                ),
+            ])
+            leaf_cert = (
+                x509.CertificateBuilder()
+                .subject_name(leaf_subject)
+                .issuer_name(self._mastio_ca_cert.subject)
+                .public_key(leaf_key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=5))
+                .not_valid_after(
+                    now + timedelta(days=MASTIO_LEAF_VALIDITY_DAYS),
+                )
+                .add_extension(
+                    SubjectAlternativeName(
+                        [UniformResourceIdentifier(proxy_spiffe)],
+                    ),
+                    critical=False,
+                )
+                .add_extension(
+                    x509.BasicConstraints(ca=False, path_length=None),
+                    critical=True,
+                )
+                .sign(self._mastio_ca_key, hashes.SHA256())
+            )
 
-        priv_pem = _priv_to_pem(leaf_key)
-        cert_pem = _cert_to_pem(leaf_cert)
-        pub_pem = leaf_key.public_key().public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode()
-        kid = compute_kid(pub_pem)
-        now_iso = now.isoformat()
+            priv_pem = _priv_to_pem(leaf_key)
+            cert_pem = _cert_to_pem(leaf_cert)
+            pub_pem = leaf_key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode()
+            kid = compute_kid(pub_pem)
+            now_iso = now.isoformat()
 
-        await insert_mastio_key(
-            kid=kid,
-            pubkey_pem=pub_pem,
-            privkey_pem=priv_pem,
-            cert_pem=cert_pem,
-            created_at=now_iso,
-            activated_at=now_iso,
-        )
-        self._active_key = await self._keystore.find_by_kid(kid)
+            await insert_mastio_key(
+                kid=kid,
+                pubkey_pem=pub_pem,
+                privkey_pem=priv_pem,
+                cert_pem=cert_pem,
+                created_at=now_iso,
+                activated_at=now_iso,
+            )
+            self._active_key = await self._keystore.find_by_kid(kid)
 
-        logger.info(
-            "Mastio leaf minted — kid=%s, SAN=%s", kid, proxy_spiffe,
-        )
+            logger.info(
+                "Mastio leaf minted — kid=%s, SAN=%s", kid, proxy_spiffe,
+            )
+        finally:
+            if lock_fd is not None:
+                await asyncio.to_thread(
+                    _release_mastio_mint_lock, lock_fd,
+                )
 
     def _require_active(self) -> MastioKey:
         if self._active_key is None or self._mastio_ca_cert is None:

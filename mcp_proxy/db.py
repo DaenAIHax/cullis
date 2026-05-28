@@ -123,6 +123,65 @@ def _detect_legacy_unstamped(sync_conn) -> bool:
     return bool(_LEGACY_TABLES & table_names)
 
 
+def _acquire_mastio_mint_lock(sqlite_path: str) -> int:
+    """Open + flock-exclusive a lockfile next to the SQLite DB.
+
+    Serialises the leaf-mint critical section in
+    ``AgentManager._mint_mastio_leaf`` across the N uvicorn worker
+    processes that race at lifespan startup. Without this, every worker
+    enters the mint path with ``self._active_key is None`` (per-process
+    in-memory cache, never populated yet) and they all INSERT a fresh
+    active row. ``mastio_keys`` then carries N>1 rows where
+    ``activated_at IS NOT NULL AND deprecated_at IS NULL``, and the
+    first call to ``LocalKeyStore.current_signer()`` raises
+    ``RuntimeError("N active mastio keys — rotation invariant
+    violated")``. The caught exception leaves ``app.state.local_issuer``
+    as None and ``/v1/auth/token`` returns 503 "local issuer not
+    initialized" for the lifetime of the deploy. Issue cullis#997.
+
+    Pattern mirrors :func:`_run_migrations_sync_under_flock`: blocking
+    ``fcntl.LOCK_EX`` on a sibling-of-DB lockfile that the kernel
+    auto-releases on worker exit. SQLite-only — Postgres deploys rely
+    on a different code path (today: still racy, fix follow-up; the
+    in-the-wild Postgres count is 0 so this is acceptable as a
+    same-day patch).
+    """
+    import fcntl
+    from pathlib import Path
+
+    db_path = Path(sqlite_path)
+    lock_path = db_path.with_name(f"{db_path.name}.mastio_mint.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        try:
+            os.close(fd)
+        finally:
+            raise
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+    except OSError:
+        pass  # diagnostic write, not load-bearing
+    return fd
+
+
+def _release_mastio_mint_lock(fd: int) -> None:
+    """Release the flock acquired by :func:`_acquire_mastio_mint_lock`."""
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def _run_migrations_sync_under_flock(url: str, sqlite_path: str) -> None:
     """Run ``_run_migrations_sync`` under an exclusive blocking flock.
 
@@ -1052,6 +1111,44 @@ async def set_config_if_absent(key: str, value: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # Mastio keys (ADR-012 Phase 2.0 multi-key store, issue #261)
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def deprecate_mastio_keys_by_kids(
+    kids: list[str],
+    deprecated_at: str,
+) -> int:
+    """Mark a set of ``mastio_keys`` rows as deprecated.
+
+    Used by the issue cullis#997 repair path in
+    ``AgentManager._mint_mastio_leaf`` when the active-row invariant
+    ``len(get_mastio_keys_active()) <= 1`` is found violated under the
+    mint flock. The newest active row is kept; the older ones are
+    deprecated here in a single round-trip.
+
+    Returns the number of rows actually updated. Idempotent: a row
+    already deprecated (``deprecated_at IS NOT NULL``) is left alone
+    via the WHERE clause, so a repeat call after a crash mid-repair
+    converges instead of over-counting.
+    """
+    if not kids:
+        return 0
+    updated = 0
+    async with get_db() as conn:
+        for kid in kids:
+            result = await conn.execute(
+                text(
+                    """
+                    UPDATE mastio_keys
+                       SET deprecated_at = :deprecated
+                     WHERE kid = :kid
+                       AND activated_at IS NOT NULL
+                       AND deprecated_at IS NULL
+                    """
+                ),
+                {"deprecated": deprecated_at, "kid": kid},
+            )
+            updated += getattr(result, "rowcount", 0) or 0
+    return updated
+
 
 async def insert_mastio_key(
     *,
