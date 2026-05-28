@@ -25,6 +25,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from mcp_proxy.admin._capabilities import (
+    CAPABILITIES_FIELD,
+    Capability,
+    decode_capabilities,
+)
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import get_db
 
@@ -62,7 +67,9 @@ class UserCreateRequest(BaseModel):
     # v0.6.4 (#23 follow-up) — capability set granted to this user
     # principal. Zero-trust default: an empty list denies on every
     # capability gate (e.g. ``mcp.tools.list`` on POST /v1/mcp).
-    capabilities: list[str] = Field(default_factory=list)
+    # Shape constrained by ``Capability`` + ``CAPABILITIES_FIELD``
+    # so an abusive admin push can't bloat the row.
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 class UserOut(BaseModel):
@@ -86,20 +93,6 @@ class UserListResponse(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _decode_capabilities(raw: object) -> list[str]:
-    if raw is None or raw == "":
-        return []
-    if isinstance(raw, list):
-        return [c for c in raw if isinstance(c, str)]
-    try:
-        loaded = json.loads(raw) if isinstance(raw, str) else raw
-    except (TypeError, ValueError):
-        return []
-    if not isinstance(loaded, list):
-        return []
-    return [c for c in loaded if isinstance(c, str)]
 
 
 def _principal_id(org_id: str, user_name: str) -> str:
@@ -188,7 +181,7 @@ async def create_user(
             display_name=existing["display_name"],
             reach=existing["reach"],
             surface=existing["surface"],
-            capabilities=_decode_capabilities(existing["capabilities"]),
+            capabilities=decode_capabilities(existing["capabilities"]),
             last_active=existing["last_active_at"],
             created_at=existing["created_at"],
         )
@@ -241,7 +234,7 @@ async def list_users(
             display_name=r["display_name"],
             reach=r["reach"],
             surface=r["surface"],
-            capabilities=_decode_capabilities(r["capabilities"]),
+            capabilities=decode_capabilities(r["capabilities"]),
             last_active=r["last_active_at"],
             created_at=r["created_at"],
         )

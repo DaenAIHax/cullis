@@ -295,7 +295,10 @@ async def anthropic_messages(
     if agent.scope_providers:
         try:
             req_provider = parse_provider_from_model(req.model)
-        except Exception:  # noqa: BLE001 — parse failure → deny
+        except Exception as exc:  # noqa: BLE001 — parse failure → deny
+            _log.warning(
+                "parse_provider_from_model failed for %r: %s", req.model, exc,
+            )
             req_provider = None
         if req_provider is None or req_provider not in agent.scope_providers:
             await log_audit(

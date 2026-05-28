@@ -25,7 +25,7 @@ import jwt as jose_jwt
 
 from mcp_proxy.auth.local_validator import LocalTokenError, validate_local_token
 from mcp_proxy.config import get_settings
-from mcp_proxy.db import get_agent
+from mcp_proxy.db import get_agent, get_principal_capabilities
 from mcp_proxy.models import InternalAgent, TokenPayload
 
 _log = logging.getLogger("mcp_proxy.auth.local_agent_dep")
@@ -245,7 +245,6 @@ async def _maybe_local_token(request: Request) -> TokenPayload | None:
         # default-deny: tools/list returns -32005 capability_missing
         # until the admin attaches ``mcp.tools.list`` via
         # ``POST /v1/admin/users`` or the dashboard form.
-        from mcp_proxy.db import get_principal_capabilities
         caps = await get_principal_capabilities(
             payload.agent_id, principal_type,
         )

@@ -24,6 +24,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from mcp_proxy.admin._capabilities import (
+    CAPABILITIES_FIELD,
+    Capability,
+    decode_capabilities,
+)
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import get_db
 
@@ -54,7 +59,7 @@ class WorkloadCreateRequest(BaseModel):
     runtime_status: str = Field("unknown")
     # v0.6.4 (#23 follow-up) — see UserCreateRequest. Empty list
     # denies on every capability gate; admin grants explicitly.
-    capabilities: list[str] = Field(default_factory=list)
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 class WorkloadOut(BaseModel):
@@ -77,20 +82,6 @@ class WorkloadListResponse(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _decode_capabilities(raw: object) -> list[str]:
-    if raw is None or raw == "":
-        return []
-    if isinstance(raw, list):
-        return [c for c in raw if isinstance(c, str)]
-    try:
-        loaded = json.loads(raw) if isinstance(raw, str) else raw
-    except (TypeError, ValueError):
-        return []
-    if not isinstance(loaded, list):
-        return []
-    return [c for c in loaded if isinstance(c, str)]
 
 
 def _principal_id(org_id: str, workload_name: str) -> str:
@@ -199,7 +190,7 @@ async def create_workload(
             display_name=existing["display_name"],
             image_digest=existing["image_digest"],
             runtime_status=existing["runtime_status"],
-            capabilities=_decode_capabilities(existing["capabilities"]),
+            capabilities=decode_capabilities(existing["capabilities"]),
             hosted_principals_count=count,
             hosted_principals_sample=sample,
             last_active=existing["last_active_at"],
@@ -251,7 +242,7 @@ async def list_workloads(
             display_name=r["display_name"],
             image_digest=r["image_digest"],
             runtime_status=r["runtime_status"],
-            capabilities=_decode_capabilities(r["capabilities"]),
+            capabilities=decode_capabilities(r["capabilities"]),
             hosted_principals_count=count,
             hosted_principals_sample=sample,
             last_active=r["last_active_at"],
