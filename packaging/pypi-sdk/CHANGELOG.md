@@ -8,6 +8,31 @@ only see the published wheel have a self-contained history.
 
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-05-28
+
+Documentation-only patch. Rewrites the PyPI-shipped `README_PKG.md`
+(and its repo twin `cullis_sdk/README.md`) to reflect the post-pivot
+product surface: zero-trust identity + policy + audit for autonomous
+agents through Cullis Mastio, not the pre-pivot federated A2A
+network. The published API surface (`from_identity_dir`,
+`chat_completion`, `list_mcp_tools`, `call_mcp_tool`,
+`cullis_httpx_client`) is unchanged from 0.2.1; the bump exists so
+the new README reaches PyPI without waiting on a feature release.
+
+### Changed
+
+- `README_PKG.md` and `cullis_sdk/README.md` — drop pre-pivot
+  vocabulary (federated broker, A2A messaging, `send_oneshot`,
+  `cullis-connector` distribution). Quickstart now demonstrates
+  `chat_completion` + `list_mcp_tools` + `call_mcp_tool`.
+  Architecture diagram shows the Agent → Mastio → upstream LLM path
+  with the audit chain as the side artifact. Vanilla SDK drop-in
+  section covers ADR-038 Phase 0
+  (`cullis_httpx_client(identity_dir=...)`) with the correct
+  Anthropic / OpenAI `base_url + api_key="unused"` shape.
+- `cullis_sdk/__init__.py` module docstring — same rewrite for the
+  module-level Python-help view.
+
 ## [0.2.1] - 2026-05-27
 
 Patch release on top of 0.2.0 to ship the ADR-038 Phase 0 provider

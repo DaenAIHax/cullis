@@ -1,35 +1,40 @@
 """
-cullis-agent-sdk — Python SDK for Cullis, the federated agent trust broker.
+cullis-sdk: Python SDK for Cullis Mastio.
 
-Connect your AI agents to the Cullis network with E2E encrypted messaging,
-x509 mutual authentication, and DPoP-bound tokens.
+Zero-trust identity, policy, and audit for autonomous AI agents in
+regulated environments. The SDK talks to a self-hosted Cullis Mastio
+(the org-level gateway) over mTLS + DPoP-bound requests. The Mastio
+dispatches LLM calls to Anthropic, OpenAI, or Ollama through native
+adapters (no third-party AI gateway library in the critical path,
+ADR-039) and writes every action to a hash-chained audit log.
 
-Canonical usage (ADR-008 one-shot, ADR-014 mTLS-cert-as-credential)::
+Canonical usage (ADR-014 mTLS-cert-as-credential)::
 
     from cullis_sdk import CullisClient
 
-    # Connector flow (identity from ~/.cullis/identity/)
-    client = CullisClient.from_connector()
-    client.login_via_proxy_with_local_key()
-
-    # Or server / BYOCA flow (cert + key on disk)
-    # client = CullisClient.from_identity_dir(
-    #     "https://mastio.example.com:9443",
-    #     cert_path="/etc/cullis/agent/cert.pem",
-    #     key_path="/etc/cullis/agent/key.pem",
-    #     dpop_key_path="/etc/cullis/agent/dpop.jwk",
-    # )
-
-    resp = client.send_oneshot(
-        recipient_id="acme::supplier-agent",
-        payload={"text": "Quote for 1000 M8 bolts please."},
-        ttl_seconds=300,
+    # Admin minted this identity in the Mastio dashboard
+    # ("Create agent manually") and sent you the identity-bundle.zip.
+    client = CullisClient.from_identity_dir(
+        "https://mastio.acme.local:9443",
+        cert_path="/etc/cullis/agent/agent.crt",
+        key_path="/etc/cullis/agent/agent.key",
+        verify_tls=False,  # self-signed Org CA in dev; pin in prod
     )
-    print(resp["msg_id"])
 
-The legacy ``login()`` / ``open_session()`` / ``send()`` surface is
-deprecated and will be removed in v0.5 (~2026-08-15). See the README
-"Migrating from v0.3 sessions" section for the mapping.
+    response = client.chat_completion(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello."}],
+    )
+
+    for tool in client.list_mcp_tools():
+        print(tool["name"])
+
+    result = client.call_mcp_tool("sanctions_lookup", {"q": "ACME"})
+
+For vanilla Anthropic / OpenAI SDK drop-in (ADR-038 Phase 0), see
+``cullis_sdk.providers_compat.cullis_httpx_client``.
+
+See ``README.md`` for the full quickstart and architecture diagram.
 """
 
 from cullis_sdk.client import CullisClient
@@ -56,4 +61,4 @@ __all__ = [
     "log_msg",
 ]
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
