@@ -1,0 +1,21 @@
+{# Shared datalist for capability autocomplete.
+
+   Used by the four capability input fields in the dashboard:
+     * agents.html   — Create form
+     * agent_detail.html — Update form
+     * users.html    — Create form
+     * user_detail.html — Update form
+     * enrollments.html — Approve form
+
+   The four built-in tokens shipped with the Mastio appear as suggestions
+   when the operator types in the textbox. Custom (per-tool) and
+   operator-defined tokens are accepted by the same field but do NOT
+   appear as suggestions in v0.6.4 — they will once the capability
+   registry lands in v0.7. See ``docs/reference/capabilities``.
+#}
+<datalist id="cullis-capabilities">
+    <option value="llm.chat">Chat completions + Anthropic messages (/v1/chat/completions, /v1/llm/chat, /v1/messages)</option>
+    <option value="mcp.tools.list">List MCP tools available to the principal (/v1/mcp tools/list)</option>
+    <option value="mcp.tools.call">Invoke MCP tools (/v1/mcp tools/call — forward-compatible, enforced in v0.7)</option>
+    <option value="http.get">Generic HTTP GET egress (built-in MCP tool)</option>
+</datalist>

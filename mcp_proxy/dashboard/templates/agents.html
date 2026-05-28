@@ -104,10 +104,13 @@
             </div>
             <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Capabilities</label>
-                <input type="text" name="capabilities"
-                       placeholder="erp.read, salesforce.query, http.get"
+                <input type="text" name="capabilities" list="cullis-capabilities"
+                       placeholder="llm.chat, mcp.tools.list"
                        class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 font-mono transition-all">
-                <p class="text-[10px] text-gray-600 mt-1">Comma-separated capability tokens. Must match tool requirements.</p>
+                {% include "_capabilities_datalist.html" %}
+                <p class="text-[10px] text-gray-600 mt-1">
+                    Comma-separated. Standard: <code class="text-info-400">llm.chat</code>, <code class="text-info-400">mcp.tools.list</code>, <code class="text-info-400">mcp.tools.call</code>, <code class="text-info-400">http.get</code>. Custom tokens (per-tool) also accepted. See the <a href="https://cullis.io/docs/reference/capabilities" target="_blank" rel="noopener" class="text-info-400 underline">capabilities catalog</a> for what each one unlocks.
+                </p>
             </div>
             {% if has_ca is defined and has_ca %}
             <p class="text-[10px] text-gray-500 flex items-center gap-1.5">

@@ -75,10 +75,13 @@
             </div>
             <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wider">Capabilities</label>
-                <input type="text" name="capabilities"
+                <input type="text" name="capabilities" list="cullis-capabilities"
                        placeholder="llm.chat, mcp.tools.list"
                        class="w-full bg-surface-950 border border-gray-700/60 rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 font-mono transition-all">
-                <p class="text-[10px] text-gray-600 mt-1">Comma-separated capability tokens. Empty = zero-trust default-deny. Edit later from the user detail page.</p>
+                {% include "_capabilities_datalist.html" %}
+                <p class="text-[10px] text-gray-600 mt-1">
+                    Comma-separated. Empty = zero-trust default-deny. Edit later from the user detail page. See the <a href="https://cullis.io/docs/reference/capabilities" target="_blank" rel="noopener" class="text-info-400 underline">capabilities catalog</a>.
+                </p>
             </div>
             {% if frontdesk_enabled %}
             <div class="grid grid-cols-2 gap-4">
