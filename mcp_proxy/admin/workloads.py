@@ -30,7 +30,7 @@ from mcp_proxy.admin._capabilities import (
     decode_capabilities,
 )
 from mcp_proxy.config import get_settings
-from mcp_proxy.db import get_db
+from mcp_proxy.db import get_db, log_audit
 
 
 _log = logging.getLogger("mcp_proxy.admin.workloads")
@@ -78,6 +78,10 @@ class WorkloadOut(BaseModel):
 class WorkloadListResponse(BaseModel):
     workloads: list[WorkloadOut]
     total: int
+
+
+class WorkloadCapabilitiesPatch(BaseModel):
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 def _now_iso() -> str:
@@ -251,3 +255,62 @@ async def list_workloads(
         for r in rows
     ]
     return WorkloadListResponse(workloads=items, total=len(items))
+
+
+@router.patch(
+    "/{principal_id:path}/capabilities",
+    response_model=WorkloadOut,
+    dependencies=[Depends(_require_admin_secret)],
+)
+async def patch_workload_capabilities(
+    principal_id: str, body: WorkloadCapabilitiesPatch, request: Request,
+) -> WorkloadOut:
+    """Replace the workload principal's capability set (set, not delta).
+
+    Symmetric to ``PATCH /v1/admin/agents/{id}/capabilities`` and
+    ``PATCH /v1/admin/users/{id}/capabilities``.
+    """
+    async with get_db() as conn:
+        existing = (await conn.execute(
+            text(
+                "SELECT principal_id, workload_name, display_name, "
+                "       image_digest, runtime_status, capabilities, "
+                "       created_at, last_active_at "
+                "  FROM local_workload_principals WHERE principal_id = :pid"
+            ),
+            {"pid": principal_id},
+        )).mappings().first()
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="workload principal not found",
+            )
+        await conn.execute(
+            text(
+                "UPDATE local_workload_principals "
+                "   SET capabilities = :caps "
+                " WHERE principal_id = :pid"
+            ),
+            {"caps": json.dumps(body.capabilities), "pid": principal_id},
+        )
+        count, sample = await _hosted_principals(conn, "")
+
+    await log_audit(
+        agent_id="admin",
+        action="workload.capabilities_patched",
+        status="success",
+        detail=f"principal_id={principal_id} capabilities={body.capabilities}",
+    )
+
+    return WorkloadOut(
+        principal_id=existing["principal_id"],
+        workload_name=existing["workload_name"],
+        display_name=existing["display_name"],
+        image_digest=existing["image_digest"],
+        runtime_status=existing["runtime_status"],
+        capabilities=body.capabilities,
+        hosted_principals_count=count,
+        hosted_principals_sample=sample,
+        last_active=existing["last_active_at"],
+        created_at=existing["created_at"],
+    )

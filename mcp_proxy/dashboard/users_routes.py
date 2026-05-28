@@ -202,6 +202,7 @@ async def _build_user_view() -> tuple[list[dict], bool]:
     merged: list[dict] = []
     seen_user_names: set[str] = set()
 
+    from mcp_proxy.admin._capabilities import decode_capabilities as _dec_caps
     for row in mastio_rows:
         user_name = row.get("user_name") or ""
         seen_user_names.add(user_name)
@@ -214,6 +215,7 @@ async def _build_user_view() -> tuple[list[dict], bool]:
             "surface": row.get("surface"),
             "cert_thumbprint": row.get("cert_thumbprint"),
             "pubkey_thumbprint": row.get("pubkey_thumbprint"),
+            "capabilities": _dec_caps(row.get("capabilities")),
             "created_at": row.get("created_at"),
             "last_active_at": row.get("last_active_at"),
             "in_frontdesk": user_name in fd_users,
@@ -238,6 +240,7 @@ async def _build_user_view() -> tuple[list[dict], bool]:
             "surface": "frontdesk",
             "cert_thumbprint": None,
             "pubkey_thumbprint": None,
+            "capabilities": [],
             "created_at": fd.get("created_at"),
             "last_active_at": None,
             "in_frontdesk": True,
@@ -322,9 +325,17 @@ async def users_create(request: Request):
     form = await request.form()
     user_name = (form.get("user_name") or "").strip()
     display_name = (form.get("display_name") or "").strip()
+    capabilities_raw = str(form.get("capabilities", "")).strip()
     if not user_name:
         return RedirectResponse(
             "/proxy/users?error=user_name+is+required",
+            status_code=303,
+        )
+    capabilities, cap_err = _parse_capabilities_form(capabilities_raw)
+    if cap_err is not None:
+        from urllib.parse import quote as _q
+        return RedirectResponse(
+            f"/proxy/users?error={_q(cap_err)}",
             status_code=303,
         )
 
@@ -361,20 +372,22 @@ async def users_create(request: Request):
                         f"/proxy/users?error=User+{user_name}+already+exists",
                         status_code=303,
                     )
+                import json as _json
                 await conn.execute(
                     text(
                         """
                         INSERT INTO local_user_principals
                         (principal_id, user_name, display_name, reach,
-                         surface, created_at)
+                         surface, capabilities, created_at)
                         VALUES (:pid, :uname, :dname, 'intra', 'registry',
-                                datetime('now'))
+                                :caps, datetime('now'))
                         """
                     ),
                     {
                         "pid": principal_id,
                         "uname": user_name,
                         "dname": display_name,
+                        "caps": _json.dumps(capabilities),
                     },
                 )
             await log_audit(
@@ -485,16 +498,24 @@ async def users_create(request: Request):
         org_id = await get_config("org_id") or ""
         if org_id:
             principal_id = f"{org_id}::user::{user_name}"
+            import json as _json
             async with get_db() as conn:
                 await conn.execute(
                     text(
                         """
                         INSERT OR IGNORE INTO local_user_principals
-                        (principal_id, user_name, display_name, reach, surface, created_at)
-                        VALUES (:pid, :uname, :dname, 'intra', 'frontdesk', datetime('now'))
+                        (principal_id, user_name, display_name, reach,
+                         surface, capabilities, created_at)
+                        VALUES (:pid, :uname, :dname, 'intra', 'frontdesk',
+                                :caps, datetime('now'))
                         """
                     ),
-                    {"pid": principal_id, "uname": user_name, "dname": display_name},
+                    {
+                        "pid": principal_id,
+                        "uname": user_name,
+                        "dname": display_name,
+                        "caps": _json.dumps(capabilities),
+                    },
                 )
     except Exception as exc:  # noqa: BLE001, pre-seed is best-effort
         _log.warning("users_create: mastio pre-seed failed: %s", exc)
@@ -599,6 +620,86 @@ async def user_detail_page(principal_id: str, request: Request):
         new_api_token_label=new_api_token_label,
         api_token_error=api_token_error,
     ))
+
+
+_CAPABILITY_RE = __import__("re").compile(r"^[a-z_][a-z0-9_.]{0,63}$")
+_MAX_CAP_ITEMS = 64
+
+
+def _parse_capabilities_form(raw: str) -> tuple[list[str], str | None]:
+    items = [c.strip() for c in raw.split(",") if c.strip()]
+    if len(items) > _MAX_CAP_ITEMS:
+        return [], f"too many capabilities (max {_MAX_CAP_ITEMS})"
+    for c in items:
+        if not _CAPABILITY_RE.match(c):
+            return (
+                [],
+                f"invalid capability {c!r}: must match [a-z_][a-z0-9_.]{{0,63}}",
+            )
+    return items, None
+
+
+@router.post("/users/{principal_id:path}/capabilities")
+async def users_set_capabilities(principal_id: str, request: Request):
+    """Replace the user principal's capability set from the dashboard.
+
+    Symmetric to ``POST /proxy/agents/{id}/capabilities``. Writes to
+    ``local_user_principals.capabilities`` (added in migration 0045).
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        return RedirectResponse(
+            f"/proxy/users/{principal_id}?error=csrf",
+            status_code=303,
+        )
+
+    form = await request.form()
+    capabilities_raw = str(form.get("capabilities", "")).strip()
+    capabilities, err = _parse_capabilities_form(capabilities_raw)
+    if err is not None:
+        from urllib.parse import quote
+        return RedirectResponse(
+            f"/proxy/users/{principal_id}?error={quote(err)}",
+            status_code=303,
+        )
+
+    from mcp_proxy.db import get_db, log_audit
+    from sqlalchemy import text as _text
+    import json as _json
+
+    async with get_db() as conn:
+        row = (await conn.execute(
+            _text(
+                "SELECT 1 FROM local_user_principals WHERE principal_id = :pid"
+            ),
+            {"pid": principal_id},
+        )).first()
+        if row is None:
+            return RedirectResponse(
+                f"/proxy/users?error=user+not+found",
+                status_code=303,
+            )
+        await conn.execute(
+            _text(
+                "UPDATE local_user_principals "
+                "   SET capabilities = :caps "
+                " WHERE principal_id = :pid"
+            ),
+            {"caps": _json.dumps(capabilities), "pid": principal_id},
+        )
+
+    await log_audit(
+        agent_id=principal_id,
+        action="user.capabilities_set",
+        status="success",
+        detail=f"source=dashboard capabilities={capabilities}",
+    )
+
+    return RedirectResponse(
+        f"/proxy/users/{principal_id}", status_code=303,
+    )
 
 
 @router.post("/users/{principal_id:path}/reset-password")

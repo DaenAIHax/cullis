@@ -873,7 +873,7 @@ async def list_user_principals() -> list[dict]:
             text(
                 "SELECT principal_id, user_name, display_name, reach, "
                 "       surface, cert_thumbprint, pubkey_thumbprint, "
-                "       created_at, last_active_at "
+                "       capabilities, created_at, last_active_at "
                 "  FROM local_user_principals "
                 " ORDER BY created_at DESC"
             )

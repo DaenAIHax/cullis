@@ -31,7 +31,7 @@ from mcp_proxy.admin._capabilities import (
     decode_capabilities,
 )
 from mcp_proxy.config import get_settings
-from mcp_proxy.db import get_db
+from mcp_proxy.db import get_db, log_audit
 
 
 _log = logging.getLogger("mcp_proxy.admin.users")
@@ -86,6 +86,10 @@ class UserOut(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserOut]
     total: int
+
+
+class UserCapabilitiesPatch(BaseModel):
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -241,6 +245,63 @@ async def list_users(
         for r in rows
     ]
     return UserListResponse(users=items, total=len(items))
+
+
+@router.patch(
+    "/{principal_id:path}/capabilities",
+    response_model=UserOut,
+    dependencies=[Depends(_require_admin_secret)],
+)
+async def patch_user_capabilities(
+    principal_id: str, body: UserCapabilitiesPatch,
+) -> UserOut:
+    """Replace the user principal's capability set (set, not delta).
+
+    Symmetric to ``PATCH /v1/admin/agents/{id}/capabilities``. The
+    new list takes effect on the next token mint — sessions issued
+    before the change continue to carry the old scope until their
+    natural expiry.
+    """
+    async with get_db() as conn:
+        existing = (await conn.execute(
+            text(
+                "SELECT principal_id, user_name, display_name, reach, "
+                "       surface, capabilities, created_at, last_active_at "
+                "  FROM local_user_principals WHERE principal_id = :pid"
+            ),
+            {"pid": principal_id},
+        )).mappings().first()
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="user principal not found",
+            )
+        await conn.execute(
+            text(
+                "UPDATE local_user_principals "
+                "   SET capabilities = :caps "
+                " WHERE principal_id = :pid"
+            ),
+            {"caps": json.dumps(body.capabilities), "pid": principal_id},
+        )
+
+    await log_audit(
+        agent_id="admin",
+        action="user.capabilities_patched",
+        status="success",
+        detail=f"principal_id={principal_id} capabilities={body.capabilities}",
+    )
+
+    return UserOut(
+        principal_id=existing["principal_id"],
+        user_name=existing["user_name"],
+        display_name=existing["display_name"],
+        reach=existing["reach"],
+        surface=existing["surface"],
+        capabilities=body.capabilities,
+        last_active=existing["last_active_at"],
+        created_at=existing["created_at"],
+    )
 
 
 @router.post(

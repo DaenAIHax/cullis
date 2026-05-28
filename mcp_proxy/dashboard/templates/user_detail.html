@@ -158,6 +158,34 @@
             </div>
         </div>
 
+        <!-- Capabilities (v0.6.4) -->
+        <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg p-6 card-glow backdrop-blur-sm mb-6">
+            <h3 class="text-sm font-semibold text-white uppercase tracking-wider mb-1">Capabilities</h3>
+            <p class="text-[11px] text-gray-500 mb-4">
+                Capability tokens the Mastio gates on (e.g. <code class="font-mono text-info-400">llm.chat</code>, <code class="font-mono text-info-400">mcp.tools.list</code>). Empty list = zero-trust default-deny. New token takes effect on the user's next sign-in.
+            </p>
+            <div class="flex flex-wrap gap-1 mb-3">
+                {% for cap in user.capabilities %}
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-info-400/10 text-info-400">{{ cap }}</span>
+                {% endfor %}
+                {% if not user.capabilities %}
+                <span class="text-xs text-gray-600 italic">none granted</span>
+                {% endif %}
+            </div>
+            <form method="post" action="/proxy/users/{{ user.principal_id|urlencode }}/capabilities"
+                  class="flex items-center gap-2">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="text" name="capabilities"
+                       value="{{ user.capabilities | join(', ') }}"
+                       placeholder="llm.chat, mcp.tools.list"
+                       class="flex-1 bg-surface-950 border border-gray-700/60 rounded px-3 py-1.5 text-xs text-white placeholder-gray-600 font-mono transition-all">
+                <button type="submit"
+                        class="px-3 py-1.5 rounded text-xs font-medium bg-info-400/10 text-info-400 border border-info-400/30 hover:bg-info-400/20 transition-colors">
+                    Update
+                </button>
+            </form>
+        </div>
+
     </div>
 
     <!-- TAB 2: Activity -->
