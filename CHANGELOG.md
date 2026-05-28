@@ -14,6 +14,36 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+## [v0.6.2] — ADR-039 drop LiteLLM from the critical path — 2026-05-28
+
+Dependency-hygiene patch on top of v0.6.1. Removes LiteLLM from the default chat-completion dispatch path and replaces it with three Cullis-owned native adapters (Anthropic, OpenAI, Ollama). The LiteLLM library is no longer a runtime requirement; operators on Gemini, Bedrock, or Vertex can still opt in via the legacy backend (`pip install 'cullis-sdk[litellm-legacy]'` + `MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`) until their native adapters land.
+
+Triggered by the CVE cluster on the LiteLLM 1.x line in April–May (SQLi `CVE-2026-42208` listed in CISA KEV; RCE `CVE-2026-42271`, RCE `CVE-2026-35029`, OIDC `CVE-2026-35030`, multiple `GHSA-69x8…` advisories). Pinning was the v0.6.x posture; v0.6.2 removes the dependency from the default path entirely.
+
+This is a dependency-hygiene release, not a performance release. End-to-end stress against a mock provider (200 ms artificial latency, single agent, peak 200 VU, 4 minutes) showed `cullis_native` ~5% above `litellm_embedded` in sustained throughput and ~9% lower p50 latency; against Ollama (`qwen2.5:0.5b`, peak 60 VU) the delta is statistically irrelevant (model queue dominates). Image size on disk drops by ~360 MB once the `litellm` wheel and transitive deps are removed from the runtime layer.
+
+### Egress (ADR-039)
+
+- **`mcp_proxy.egress.ProviderAdapter` scaffold** (#988, PR-A). Defines the per-provider dispatch interface (`dispatch`, `dispatch_stream`, model-id resolution, error mapping to `GatewayError`) so each provider lives behind a small, testable surface instead of an `if backend == "...":` ladder in `ai_gateway.py`. Zero behaviour change at this step.
+- **`AnthropicAdapter` (`anthropic.AsyncAnthropic`)** (#989, PR-B). Native dispatch via the official Anthropic Python SDK. Maps `claude-…` model ids to the SDK's `messages.create` / `messages.stream`. Preserves the existing audit row shape (`backend="cullis_native", provider="anthropic"`) and the per-agent identity propagation.
+- **`OpenAIAdapter` (`openai.AsyncOpenAI`)** (#990, PR-C). Same treatment for the official OpenAI SDK. `gpt-…`, `o1-…`, and any `openai/<model>` prefix resolve here; streaming uses the SDK's `chat.completions.create(stream=True)`.
+- **`OllamaAdapter` (raw `httpx`)** (#991, PR-D). Thin client against `POST /api/chat`. No SDK in between because `ollama` Python doesn't add anything we use, and a raw `httpx.AsyncClient` lets us reuse the connection-pool primitive PR-I introduces. `ollama_chat/<model>` resolves here.
+- **Default backend flipped to `cullis_native`** (#992, PR-E). `settings.ai_gateway_backend` default is now `"cullis_native"`. Existing deployments that pinned the env var explicitly are unaffected. Operators on Gemini / Bedrock / Vertex still need `MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded` until their native adapters land.
+- **AI gateway docs reframed** (#993, PR-G). README, site landing page, and the threat model now lead with the native-adapter narrative ("no third-party AI gateway in the critical path"); LiteLLM is presented as the opt-in legacy backend for the still-unported providers, not the default.
+- **`litellm` removed from `requirements.txt`** (#994, PR-F). The runtime dependency line is gone from the default install. Operators who still want the legacy backend install it explicitly via the new `litellm-legacy` extra on `cullis-sdk` (or, equivalently, `pip install 'litellm>=1.83.7,<2.0'` next to the Mastio). The `LiteLLMAdapter` in `mcp_proxy/egress/adapters/litellm.py` lazy-imports the package and emits `GatewayError(503, "litellm_not_installed")` on the first dispatch when the operator forgot the extra. Image size drops ~360 MB on the Mastio container.
+- **Helm `proxy.aiGatewayBackend` value** (#995, PR-H). New top-level Helm value so Kubernetes operators can flip the backend without templating the env var by hand. Default mirrors the code default (`cullis_native`).
+- **Client pooling for the native adapters** (#996, PR-I). The Anthropic, OpenAI, and Ollama adapters now cache their `AsyncAnthropic` / `AsyncOpenAI` / `httpx.AsyncClient` instances in a module-level dict keyed on credential fingerprint. Earlier revisions of the PR-B/C/D adapters built a fresh client per request, which paid the TCP/TLS handshake + auth-header bootstrap cost on every chat call. Measured 4× speedup in the local micro-benchmark; the visible delta in the end-to-end stress is smaller because the audit chain global lock is the next bottleneck.
+
+### Defensive pin retained
+
+- **`litellm>=1.83.7,<2.0` floor on the legacy extra** (#987). The pin landed before the native adapters did, while LiteLLM was still in the default critical path; it now applies only when an operator explicitly installs the `litellm-legacy` extra. Matches the upstream advisory floor for `CVE-2026-42208` / `42271` / `35029` / `35030`.
+
+### CHANGELOG hygiene
+
+- `CHANGELOG.md` — new `[v0.6.2]` section above `[v0.6.1]`.
+- `README.md` — quickstart curl + project-component table flipped to `mastio-v0.6.2`.
+- `site/src/pages/index.astro` + `index-dark.astro` — hero quickstart curl flipped to `mastio-v0.6.2`.
+
 ## [v0.6.1] — Sidebar update-advisory regex fix — 2026-05-27
 
 Same-day patch on top of v0.6.0. The sidebar update advisory on a fresh v0.6.0 install rendered "Update: 0.5.4.1 (running 0.6.0)" — pointing the operator at a tag strictly older than the one they were running. Confidence-killer banner that cold-readers see within seconds of first login.
