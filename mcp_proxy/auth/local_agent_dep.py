@@ -234,6 +234,21 @@ async def _maybe_local_token(request: Request) -> TokenPayload | None:
         or "::workload::" in payload.agent_id
     )
     if is_typed_principal:
+        principal_type = (
+            "user" if "::user::" in payload.agent_id else "workload"
+        )
+        # v0.6.4 (#23 follow-up) — load capabilities from
+        # ``local_user_principals`` / ``local_workload_principals``
+        # instead of hardcoding ``scope=[]``. Migration 0045 added
+        # the ``capabilities`` column on both tables. Pre-grant the
+        # principal goes capabilities=[] which is the zero-trust
+        # default-deny: tools/list returns -32005 capability_missing
+        # until the admin attaches ``mcp.tools.list`` via
+        # ``POST /v1/admin/users`` or the dashboard form.
+        from mcp_proxy.db import get_principal_capabilities
+        caps = await get_principal_capabilities(
+            payload.agent_id, principal_type,
+        )
         return TokenPayload(
             sub=payload.agent_id,
             agent_id=payload.agent_id,
@@ -241,11 +256,9 @@ async def _maybe_local_token(request: Request) -> TokenPayload | None:
             exp=payload.expires_at,
             iat=payload.issued_at,
             jti=payload.jti,
-            scope=[],
+            scope=caps,
             cnf=None,
-            principal_type=(
-                "user" if "::user::" in payload.agent_id else "workload"
-            ),
+            principal_type=principal_type,
         )
 
     record = await get_agent(payload.agent_id)

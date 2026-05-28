@@ -16,6 +16,7 @@ Auth: ``X-Admin-Secret`` (same contract as ``/v1/admin/agents``).
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -58,6 +59,10 @@ class UserCreateRequest(BaseModel):
     display_name: str = Field("", max_length=256)
     reach: str = Field("intra")
     surface: Optional[str] = Field(None, max_length=64)
+    # v0.6.4 (#23 follow-up) — capability set granted to this user
+    # principal. Zero-trust default: an empty list denies on every
+    # capability gate (e.g. ``mcp.tools.list`` on POST /v1/mcp).
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class UserOut(BaseModel):
@@ -66,6 +71,7 @@ class UserOut(BaseModel):
     display_name: Optional[str]
     reach: str
     surface: Optional[str]
+    capabilities: list[str]
     last_active: Optional[str]
     created_at: str
 
@@ -80,6 +86,20 @@ class UserListResponse(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _decode_capabilities(raw: object) -> list[str]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [c for c in raw if isinstance(c, str)]
+    try:
+        loaded = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(loaded, list):
+        return []
+    return [c for c in loaded if isinstance(c, str)]
 
 
 def _principal_id(org_id: str, user_name: str) -> str:
@@ -125,7 +145,7 @@ async def create_user(
         existing = (await conn.execute(
             text(
                 "SELECT principal_id, user_name, display_name, reach, "
-                "       surface, created_at, last_active_at "
+                "       surface, capabilities, created_at, last_active_at "
                 "  FROM local_user_principals WHERE principal_id = :pid"
             ),
             {"pid": pid},
@@ -136,9 +156,9 @@ async def create_user(
                     """
                     INSERT INTO local_user_principals (
                         principal_id, user_name, display_name,
-                        reach, surface, created_at
+                        reach, surface, capabilities, created_at
                     ) VALUES (
-                        :pid, :uname, :disp, :reach, :surface, :now
+                        :pid, :uname, :disp, :reach, :surface, :caps, :now
                     )
                     """
                 ),
@@ -148,6 +168,7 @@ async def create_user(
                     "disp": body.display_name or None,
                     "reach": body.reach,
                     "surface": body.surface,
+                    "caps": json.dumps(body.capabilities),
                     "now": now,
                 },
             )
@@ -157,6 +178,7 @@ async def create_user(
                 display_name=body.display_name or None,
                 reach=body.reach,
                 surface=body.surface,
+                capabilities=body.capabilities,
                 last_active=None,
                 created_at=now,
             )
@@ -166,6 +188,7 @@ async def create_user(
             display_name=existing["display_name"],
             reach=existing["reach"],
             surface=existing["surface"],
+            capabilities=_decode_capabilities(existing["capabilities"]),
             last_active=existing["last_active_at"],
             created_at=existing["created_at"],
         )
@@ -189,7 +212,7 @@ async def list_users(
         )
     sql = (
         "SELECT principal_id, user_name, display_name, reach, surface, "
-        "       created_at, last_active_at "
+        "       capabilities, created_at, last_active_at "
         "  FROM local_user_principals "
     )
     where: list[str] = []
@@ -218,6 +241,7 @@ async def list_users(
             display_name=r["display_name"],
             reach=r["reach"],
             surface=r["surface"],
+            capabilities=_decode_capabilities(r["capabilities"]),
             last_active=r["last_active_at"],
             created_at=r["created_at"],
         )

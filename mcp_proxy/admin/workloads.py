@@ -15,6 +15,7 @@ Auth: ``X-Admin-Secret``.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -51,6 +52,9 @@ class WorkloadCreateRequest(BaseModel):
     display_name: str = Field("", max_length=256)
     image_digest: Optional[str] = Field(None, max_length=128)
     runtime_status: str = Field("unknown")
+    # v0.6.4 (#23 follow-up) — see UserCreateRequest. Empty list
+    # denies on every capability gate; admin grants explicitly.
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class WorkloadOut(BaseModel):
@@ -59,6 +63,7 @@ class WorkloadOut(BaseModel):
     display_name: Optional[str]
     image_digest: Optional[str]
     runtime_status: str
+    capabilities: list[str]
     hosted_principals_count: int
     hosted_principals_sample: list[str]
     last_active: Optional[str]
@@ -72,6 +77,20 @@ class WorkloadListResponse(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _decode_capabilities(raw: object) -> list[str]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [c for c in raw if isinstance(c, str)]
+    try:
+        loaded = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(loaded, list):
+        return []
+    return [c for c in loaded if isinstance(c, str)]
 
 
 def _principal_id(org_id: str, workload_name: str) -> str:
@@ -131,7 +150,7 @@ async def create_workload(
         existing = (await conn.execute(
             text(
                 "SELECT principal_id, workload_name, display_name, "
-                "       image_digest, runtime_status, "
+                "       image_digest, runtime_status, capabilities, "
                 "       created_at, last_active_at "
                 "  FROM local_workload_principals "
                 " WHERE principal_id = :pid"
@@ -144,9 +163,10 @@ async def create_workload(
                     """
                     INSERT INTO local_workload_principals (
                         principal_id, workload_name, display_name,
-                        image_digest, runtime_status, created_at
+                        image_digest, runtime_status, capabilities,
+                        created_at
                     ) VALUES (
-                        :pid, :wname, :disp, :img, :status, :now
+                        :pid, :wname, :disp, :img, :status, :caps, :now
                     )
                     """
                 ),
@@ -154,7 +174,9 @@ async def create_workload(
                     "pid": pid, "wname": body.workload_name,
                     "disp": body.display_name or None,
                     "img": body.image_digest,
-                    "status": body.runtime_status, "now": now,
+                    "status": body.runtime_status,
+                    "caps": json.dumps(body.capabilities),
+                    "now": now,
                 },
             )
             count, sample = await _hosted_principals(conn, mgr.org_id)
@@ -164,6 +186,7 @@ async def create_workload(
                 display_name=body.display_name or None,
                 image_digest=body.image_digest,
                 runtime_status=body.runtime_status,
+                capabilities=body.capabilities,
                 hosted_principals_count=count,
                 hosted_principals_sample=sample,
                 last_active=None,
@@ -176,6 +199,7 @@ async def create_workload(
             display_name=existing["display_name"],
             image_digest=existing["image_digest"],
             runtime_status=existing["runtime_status"],
+            capabilities=_decode_capabilities(existing["capabilities"]),
             hosted_principals_count=count,
             hosted_principals_sample=sample,
             last_active=existing["last_active_at"],
@@ -200,7 +224,7 @@ async def list_workloads(
         )
     sql = (
         "SELECT principal_id, workload_name, display_name, image_digest, "
-        "       runtime_status, created_at, last_active_at "
+        "       runtime_status, capabilities, created_at, last_active_at "
         "  FROM local_workload_principals "
     )
     where: list[str] = []
@@ -227,6 +251,7 @@ async def list_workloads(
             display_name=r["display_name"],
             image_digest=r["image_digest"],
             runtime_status=r["runtime_status"],
+            capabilities=_decode_capabilities(r["capabilities"]),
             hosted_principals_count=count,
             hosted_principals_sample=sample,
             last_active=r["last_active_at"],

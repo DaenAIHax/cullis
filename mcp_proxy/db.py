@@ -923,6 +923,54 @@ async def get_user_principal_pubkey_thumbprint(
         return (True, row["pubkey_thumbprint"])
 
 
+async def get_principal_capabilities(
+    principal_id: str, principal_type: str,
+) -> list[str]:
+    """Return the capability list for a typed principal.
+
+    Used by ``mcp_proxy.auth.local_agent_dep`` when minting the
+    ``TokenPayload.scope`` for the user / workload short-circuit (#23
+    follow-up — v0.6.4). Returns an empty list when:
+
+      * principal_type is not ``"user"`` or ``"workload"`` (callers
+        for agents should read ``internal_agents.capabilities`` via
+        :func:`get_agent` instead);
+      * the principal row does not exist;
+      * the stored value is malformed JSON.
+
+    The empty-list contract is the zero-trust default: a user /
+    workload with no row, or a row pre-migration-0045, denies on
+    every capability gate. Operators grant capabilities explicitly
+    via ``POST /v1/admin/users`` / ``POST /v1/admin/workloads``.
+    """
+    if principal_type == "user":
+        table = "local_user_principals"
+    elif principal_type == "workload":
+        table = "local_workload_principals"
+    else:
+        return []
+    async with get_db() as conn:
+        result = await conn.execute(
+            text(f"SELECT capabilities FROM {table} WHERE principal_id = :pid"),  # noqa: S608 — table whitelisted above
+            {"pid": principal_id},
+        )
+        row = result.mappings().first()
+    if row is None:
+        return []
+    raw = row["capabilities"]
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [c for c in raw if isinstance(c, str)]
+    try:
+        loaded = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(loaded, list):
+        return []
+    return [c for c in loaded if isinstance(c, str)]
+
+
 async def get_workload_principal_pubkey_thumbprint(
     principal_id: str,
 ) -> tuple[bool, str | None]:
