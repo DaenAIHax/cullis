@@ -37,6 +37,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from mcp_proxy.auth.builtin_capabilities import LLM_CHAT
 from mcp_proxy.auth.dpop_client_cert import get_agent_from_dpop_client_cert
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import log_audit
@@ -265,7 +266,7 @@ async def anthropic_messages(
     # gate nor scope_providers was actually applied here. Any agent
     # could egress via the Anthropic shape regardless of its
     # capabilities. Fixed alongside #22 (audit 2026-05-28 BLOCKER B1).
-    if "llm.chat" not in (agent.capabilities or []):
+    if LLM_CHAT not in (agent.capabilities or []):
         await log_audit(
             agent_id=agent.agent_id,
             action="egress_llm_chat",
@@ -278,7 +279,7 @@ async def anthropic_messages(
                 "model": req.model,
                 "trace_id": trace_id,
                 "reason": "capability_missing",
-                "required_capability": "llm.chat",
+                "required_capability": LLM_CHAT,
             },
         )
         raise HTTPException(
@@ -286,7 +287,7 @@ async def anthropic_messages(
             detail={
                 "reason": "capability_missing",
                 "trace_id": trace_id,
-                "required_capability": "llm.chat",
+                "required_capability": LLM_CHAT,
             },
         )
 

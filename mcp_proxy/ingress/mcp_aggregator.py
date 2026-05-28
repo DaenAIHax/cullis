@@ -31,6 +31,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from mcp_proxy.auth.builtin_capabilities import MCP_TOOLS_LIST
 from mcp_proxy.auth.dependencies import get_authenticated_agent
 from mcp_proxy.local.audit import append_local_audit
 from mcp_proxy.models import (
@@ -105,7 +106,7 @@ async def _handle_tools_list(req_id: Any, agent: TokenPayload) -> dict:
     # requires the capability, symmetric to ``llm.chat`` on the chat
     # endpoint. Per-tool binding + ``required_capability`` filters
     # still apply downstream.
-    if "mcp.tools.list" not in agent_caps:
+    if MCP_TOOLS_LIST not in agent_caps:
         await append_local_audit(
             event_type="mcp_tools_list",
             result="denied",
@@ -115,13 +116,13 @@ async def _handle_tools_list(req_id: Any, agent: TokenPayload) -> dict:
                 "principal_id": agent.agent_id,
                 "principal_type": agent.principal_type,
                 "reason": "capability_missing",
-                "required_capability": "mcp.tools.list",
+                "required_capability": MCP_TOOLS_LIST,
             },
         )
         return _rpc_error(
             req_id, ERR_CAPABILITY_MISSING,
-            "capability_missing: mcp.tools.list",
-            data={"required_capability": "mcp.tools.list"},
+            f"capability_missing: {MCP_TOOLS_LIST}",
+            data={"required_capability": MCP_TOOLS_LIST},
         )
 
     bound = await _bound_resource_ids(

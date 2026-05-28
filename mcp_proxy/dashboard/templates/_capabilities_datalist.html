@@ -1,21 +1,28 @@
-{# Shared datalist for capability autocomplete.
+{# Capability suggestion chips for the dashboard forms.
 
-   Used by the four capability input fields in the dashboard:
-     * agents.html   — Create form
-     * agent_detail.html — Update form
-     * users.html    — Create form
-     * user_detail.html — Update form
-     * enrollments.html — Approve form
+   Each chip is wired by the global ``data-cap-add`` click handler
+   in ``base.html``: it appends the token to the nearest
+   ``<input name="capabilities">`` in the same form, skipping
+   duplicates and dispatching an ``input`` event so any reactive
+   validation sees the change.
 
-   The four built-in tokens shipped with the Mastio appear as suggestions
-   when the operator types in the textbox. Custom (per-tool) and
-   operator-defined tokens are accepted by the same field but do NOT
-   appear as suggestions in v0.6.4 — they will once the capability
-   registry lands in v0.7. See ``docs/reference/capabilities``.
+   The list of suggestions is sourced from
+   ``mcp_proxy.auth.builtin_capabilities.builtin_capability_list()``,
+   injected into every dashboard context by ``_helpers._ctx``. Add a
+   built-in token there and it appears in all five forms (agent
+   create + detail, user create + detail, enrollment approve)
+   without touching this partial.
+
+   Note: the file is named ``_capabilities_datalist.html`` for
+   historical reasons (it used to render an HTML5 ``<datalist>`` —
+   that approach clobbered the comma-separated value on selection).
+   Renaming is a churn rebase nobody needs.
 #}
-<datalist id="cullis-capabilities">
-    <option value="llm.chat">Chat completions + Anthropic messages (/v1/chat/completions, /v1/llm/chat, /v1/messages)</option>
-    <option value="mcp.tools.list">List MCP tools available to the principal (/v1/mcp tools/list)</option>
-    <option value="mcp.tools.call">Invoke MCP tools (/v1/mcp tools/call — forward-compatible, enforced in v0.7)</option>
-    <option value="http.get">Generic HTTP GET egress (built-in MCP tool)</option>
-</datalist>
+<div class="flex flex-wrap gap-1.5 mt-2" data-cap-suggestions>
+    <span class="text-[10px] text-gray-600 self-center mr-1 uppercase tracking-wider">Suggest:</span>
+    {% for cap in builtin_capabilities %}
+    <button type="button" data-cap-add="{{ cap.name }}"
+            title="{{ cap.description }}"
+            class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-info-400/10 text-info-400 border border-info-400/30 hover:bg-info-400/20 transition-colors cursor-pointer">+ {{ cap.name }}</button>
+    {% endfor %}
+</div>

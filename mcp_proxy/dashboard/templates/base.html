@@ -206,6 +206,53 @@ document.addEventListener('click', function(ev) {
         }, 1500);
     });
 });
+
+// Append-only handler for the capability suggestion chips.
+// Each chip carries ``data-cap-add="<token>"``. Clicking it locates
+// the nearest ``<input name="capabilities">`` (same form preferred,
+// then nearest preceding input on the page as a fallback) and
+// appends the token to the comma-separated list, skipping duplicates.
+// Replaces the HTML5 ``<datalist>`` UX which clobbered the existing
+// value when the operator picked a suggestion.
+document.addEventListener('click', function(ev) {
+    var btn = ev.target.closest('[data-cap-add]');
+    if (!btn) return;
+    ev.preventDefault();
+    var token = btn.getAttribute('data-cap-add');
+    if (!token) return;
+    var form = btn.closest('form');
+    var input = form ? form.querySelector('input[name="capabilities"]') : null;
+    if (!input) {
+        // Fallback: walk back from the chip group to the nearest
+        // preceding capabilities input on the page.
+        var group = btn.closest('[data-cap-suggestions]');
+        var probe = group ? group.previousElementSibling : null;
+        while (probe) {
+            var found = probe.querySelector
+                ? probe.querySelector('input[name="capabilities"]')
+                : null;
+            if (found) { input = found; break; }
+            if (probe.tagName === 'INPUT' && probe.name === 'capabilities') {
+                input = probe; break;
+            }
+            probe = probe.previousElementSibling;
+        }
+    }
+    if (!input) return;
+    var current = input.value
+        .split(',').map(function(s) { return s.trim(); })
+        .filter(Boolean);
+    if (current.indexOf(token) === -1) {
+        current.push(token);
+        input.value = current.join(', ');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+    } else {
+        // Already present, just flash feedback.
+        btn.classList.add('opacity-50');
+        setTimeout(function() { btn.classList.remove('opacity-50'); }, 600);
+    }
+});
 </script>
 </body>
 </html>

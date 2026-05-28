@@ -28,6 +28,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from mcp_proxy.auth.builtin_capabilities import LLM_CHAT
 from mcp_proxy.auth.dpop_client_cert import get_agent_from_dpop_client_cert
 from mcp_proxy.auth.rate_limit import get_token_sum_limiter
 from mcp_proxy.config import get_settings
@@ -72,7 +73,7 @@ async def chat_completions(
     # passed. From v0.6.4 the capability is the first gate after
     # auth: the agent envelope MUST carry ``llm.chat`` or the request
     # is denied before any provider dispatch.
-    if "llm.chat" not in (agent.capabilities or []):
+    if LLM_CHAT not in (agent.capabilities or []):
         await log_audit(
             agent_id=agent.agent_id,
             action="egress_llm_chat",
@@ -84,7 +85,7 @@ async def chat_completions(
                 "model": req.model,
                 "trace_id": trace_id,
                 "reason": "capability_missing",
-                "required_capability": "llm.chat",
+                "required_capability": LLM_CHAT,
             },
         )
         raise HTTPException(
@@ -92,7 +93,7 @@ async def chat_completions(
             detail={
                 "reason": "capability_missing",
                 "trace_id": trace_id,
-                "required_capability": "llm.chat",
+                "required_capability": LLM_CHAT,
             },
         )
 
