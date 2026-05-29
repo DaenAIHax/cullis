@@ -18,6 +18,11 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-repeat>=0.9",
+    # asyncio + xdist are load-bearing for the core test suite:
+    # asyncio_mode=auto (see [tool.pytest.ini_options]) needs pytest-asyncio,
+    # and the CI/local full runs use `-n auto --dist=loadfile` (pytest-xdist).
+    "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
