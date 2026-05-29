@@ -6,7 +6,6 @@ the plugin dispatch path used by cullis-enterprise cloud KMS providers.
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
 from mcp_proxy import db as core_db
 from mcp_proxy import kms as core_kms
@@ -15,10 +14,7 @@ from mcp_proxy.kms.factory import get_kms_provider, reset_kms_provider
 from mcp_proxy.kms.local import LocalKMSProvider
 
 
-pytestmark = pytest.mark.asyncio
-
-
-@pytest_asyncio.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 async def _fresh_state(monkeypatch):
     """Each test starts with a fresh in-memory DB + clean caches."""
     reset_kms_provider()
