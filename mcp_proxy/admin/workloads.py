@@ -15,6 +15,7 @@ Auth: ``X-Admin-Secret``.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,8 +24,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from mcp_proxy.admin._capabilities import (
+    CAPABILITIES_FIELD,
+    Capability,
+    decode_capabilities,
+)
 from mcp_proxy.config import get_settings
-from mcp_proxy.db import get_db
+from mcp_proxy.db import get_db, log_audit
 
 
 _log = logging.getLogger("mcp_proxy.admin.workloads")
@@ -51,6 +57,9 @@ class WorkloadCreateRequest(BaseModel):
     display_name: str = Field("", max_length=256)
     image_digest: Optional[str] = Field(None, max_length=128)
     runtime_status: str = Field("unknown")
+    # v0.6.4 (#23 follow-up) — see UserCreateRequest. Empty list
+    # denies on every capability gate; admin grants explicitly.
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 class WorkloadOut(BaseModel):
@@ -59,6 +68,7 @@ class WorkloadOut(BaseModel):
     display_name: Optional[str]
     image_digest: Optional[str]
     runtime_status: str
+    capabilities: list[str]
     hosted_principals_count: int
     hosted_principals_sample: list[str]
     last_active: Optional[str]
@@ -68,6 +78,10 @@ class WorkloadOut(BaseModel):
 class WorkloadListResponse(BaseModel):
     workloads: list[WorkloadOut]
     total: int
+
+
+class WorkloadCapabilitiesPatch(BaseModel):
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 def _now_iso() -> str:
@@ -131,7 +145,7 @@ async def create_workload(
         existing = (await conn.execute(
             text(
                 "SELECT principal_id, workload_name, display_name, "
-                "       image_digest, runtime_status, "
+                "       image_digest, runtime_status, capabilities, "
                 "       created_at, last_active_at "
                 "  FROM local_workload_principals "
                 " WHERE principal_id = :pid"
@@ -144,9 +158,10 @@ async def create_workload(
                     """
                     INSERT INTO local_workload_principals (
                         principal_id, workload_name, display_name,
-                        image_digest, runtime_status, created_at
+                        image_digest, runtime_status, capabilities,
+                        created_at
                     ) VALUES (
-                        :pid, :wname, :disp, :img, :status, :now
+                        :pid, :wname, :disp, :img, :status, :caps, :now
                     )
                     """
                 ),
@@ -154,7 +169,9 @@ async def create_workload(
                     "pid": pid, "wname": body.workload_name,
                     "disp": body.display_name or None,
                     "img": body.image_digest,
-                    "status": body.runtime_status, "now": now,
+                    "status": body.runtime_status,
+                    "caps": json.dumps(body.capabilities),
+                    "now": now,
                 },
             )
             count, sample = await _hosted_principals(conn, mgr.org_id)
@@ -164,6 +181,7 @@ async def create_workload(
                 display_name=body.display_name or None,
                 image_digest=body.image_digest,
                 runtime_status=body.runtime_status,
+                capabilities=body.capabilities,
                 hosted_principals_count=count,
                 hosted_principals_sample=sample,
                 last_active=None,
@@ -176,6 +194,7 @@ async def create_workload(
             display_name=existing["display_name"],
             image_digest=existing["image_digest"],
             runtime_status=existing["runtime_status"],
+            capabilities=decode_capabilities(existing["capabilities"]),
             hosted_principals_count=count,
             hosted_principals_sample=sample,
             last_active=existing["last_active_at"],
@@ -200,7 +219,7 @@ async def list_workloads(
         )
     sql = (
         "SELECT principal_id, workload_name, display_name, image_digest, "
-        "       runtime_status, created_at, last_active_at "
+        "       runtime_status, capabilities, created_at, last_active_at "
         "  FROM local_workload_principals "
     )
     where: list[str] = []
@@ -227,6 +246,7 @@ async def list_workloads(
             display_name=r["display_name"],
             image_digest=r["image_digest"],
             runtime_status=r["runtime_status"],
+            capabilities=decode_capabilities(r["capabilities"]),
             hosted_principals_count=count,
             hosted_principals_sample=sample,
             last_active=r["last_active_at"],
@@ -235,3 +255,62 @@ async def list_workloads(
         for r in rows
     ]
     return WorkloadListResponse(workloads=items, total=len(items))
+
+
+@router.patch(
+    "/{principal_id:path}/capabilities",
+    response_model=WorkloadOut,
+    dependencies=[Depends(_require_admin_secret)],
+)
+async def patch_workload_capabilities(
+    principal_id: str, body: WorkloadCapabilitiesPatch, request: Request,
+) -> WorkloadOut:
+    """Replace the workload principal's capability set (set, not delta).
+
+    Symmetric to ``PATCH /v1/admin/agents/{id}/capabilities`` and
+    ``PATCH /v1/admin/users/{id}/capabilities``.
+    """
+    async with get_db() as conn:
+        existing = (await conn.execute(
+            text(
+                "SELECT principal_id, workload_name, display_name, "
+                "       image_digest, runtime_status, capabilities, "
+                "       created_at, last_active_at "
+                "  FROM local_workload_principals WHERE principal_id = :pid"
+            ),
+            {"pid": principal_id},
+        )).mappings().first()
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="workload principal not found",
+            )
+        await conn.execute(
+            text(
+                "UPDATE local_workload_principals "
+                "   SET capabilities = :caps "
+                " WHERE principal_id = :pid"
+            ),
+            {"caps": json.dumps(body.capabilities), "pid": principal_id},
+        )
+        count, sample = await _hosted_principals(conn, "")
+
+    await log_audit(
+        agent_id="admin",
+        action="workload.capabilities_patched",
+        status="success",
+        detail=f"principal_id={principal_id} capabilities={body.capabilities}",
+    )
+
+    return WorkloadOut(
+        principal_id=existing["principal_id"],
+        workload_name=existing["workload_name"],
+        display_name=existing["display_name"],
+        image_digest=existing["image_digest"],
+        runtime_status=existing["runtime_status"],
+        capabilities=body.capabilities,
+        hosted_principals_count=count,
+        hosted_principals_sample=sample,
+        last_active=existing["last_active_at"],
+        created_at=existing["created_at"],
+    )

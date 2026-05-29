@@ -16,6 +16,7 @@ Auth: ``X-Admin-Secret`` (same contract as ``/v1/admin/agents``).
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -24,8 +25,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from mcp_proxy.admin._capabilities import (
+    CAPABILITIES_FIELD,
+    Capability,
+    decode_capabilities,
+)
 from mcp_proxy.config import get_settings
-from mcp_proxy.db import get_db
+from mcp_proxy.db import get_db, log_audit
 
 
 _log = logging.getLogger("mcp_proxy.admin.users")
@@ -58,6 +64,12 @@ class UserCreateRequest(BaseModel):
     display_name: str = Field("", max_length=256)
     reach: str = Field("intra")
     surface: Optional[str] = Field(None, max_length=64)
+    # v0.6.4 (#23 follow-up) — capability set granted to this user
+    # principal. Zero-trust default: an empty list denies on every
+    # capability gate (e.g. ``mcp.tools.list`` on POST /v1/mcp).
+    # Shape constrained by ``Capability`` + ``CAPABILITIES_FIELD``
+    # so an abusive admin push can't bloat the row.
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 class UserOut(BaseModel):
@@ -66,6 +78,7 @@ class UserOut(BaseModel):
     display_name: Optional[str]
     reach: str
     surface: Optional[str]
+    capabilities: list[str]
     last_active: Optional[str]
     created_at: str
 
@@ -73,6 +86,10 @@ class UserOut(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserOut]
     total: int
+
+
+class UserCapabilitiesPatch(BaseModel):
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -125,7 +142,7 @@ async def create_user(
         existing = (await conn.execute(
             text(
                 "SELECT principal_id, user_name, display_name, reach, "
-                "       surface, created_at, last_active_at "
+                "       surface, capabilities, created_at, last_active_at "
                 "  FROM local_user_principals WHERE principal_id = :pid"
             ),
             {"pid": pid},
@@ -136,9 +153,9 @@ async def create_user(
                     """
                     INSERT INTO local_user_principals (
                         principal_id, user_name, display_name,
-                        reach, surface, created_at
+                        reach, surface, capabilities, created_at
                     ) VALUES (
-                        :pid, :uname, :disp, :reach, :surface, :now
+                        :pid, :uname, :disp, :reach, :surface, :caps, :now
                     )
                     """
                 ),
@@ -148,6 +165,7 @@ async def create_user(
                     "disp": body.display_name or None,
                     "reach": body.reach,
                     "surface": body.surface,
+                    "caps": json.dumps(body.capabilities),
                     "now": now,
                 },
             )
@@ -157,6 +175,7 @@ async def create_user(
                 display_name=body.display_name or None,
                 reach=body.reach,
                 surface=body.surface,
+                capabilities=body.capabilities,
                 last_active=None,
                 created_at=now,
             )
@@ -166,6 +185,7 @@ async def create_user(
             display_name=existing["display_name"],
             reach=existing["reach"],
             surface=existing["surface"],
+            capabilities=decode_capabilities(existing["capabilities"]),
             last_active=existing["last_active_at"],
             created_at=existing["created_at"],
         )
@@ -189,7 +209,7 @@ async def list_users(
         )
     sql = (
         "SELECT principal_id, user_name, display_name, reach, surface, "
-        "       created_at, last_active_at "
+        "       capabilities, created_at, last_active_at "
         "  FROM local_user_principals "
     )
     where: list[str] = []
@@ -218,12 +238,70 @@ async def list_users(
             display_name=r["display_name"],
             reach=r["reach"],
             surface=r["surface"],
+            capabilities=decode_capabilities(r["capabilities"]),
             last_active=r["last_active_at"],
             created_at=r["created_at"],
         )
         for r in rows
     ]
     return UserListResponse(users=items, total=len(items))
+
+
+@router.patch(
+    "/{principal_id:path}/capabilities",
+    response_model=UserOut,
+    dependencies=[Depends(_require_admin_secret)],
+)
+async def patch_user_capabilities(
+    principal_id: str, body: UserCapabilitiesPatch,
+) -> UserOut:
+    """Replace the user principal's capability set (set, not delta).
+
+    Symmetric to ``PATCH /v1/admin/agents/{id}/capabilities``. The
+    new list takes effect on the next token mint — sessions issued
+    before the change continue to carry the old scope until their
+    natural expiry.
+    """
+    async with get_db() as conn:
+        existing = (await conn.execute(
+            text(
+                "SELECT principal_id, user_name, display_name, reach, "
+                "       surface, capabilities, created_at, last_active_at "
+                "  FROM local_user_principals WHERE principal_id = :pid"
+            ),
+            {"pid": principal_id},
+        )).mappings().first()
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="user principal not found",
+            )
+        await conn.execute(
+            text(
+                "UPDATE local_user_principals "
+                "   SET capabilities = :caps "
+                " WHERE principal_id = :pid"
+            ),
+            {"caps": json.dumps(body.capabilities), "pid": principal_id},
+        )
+
+    await log_audit(
+        agent_id="admin",
+        action="user.capabilities_patched",
+        status="success",
+        detail=f"principal_id={principal_id} capabilities={body.capabilities}",
+    )
+
+    return UserOut(
+        principal_id=existing["principal_id"],
+        user_name=existing["user_name"],
+        display_name=existing["display_name"],
+        reach=existing["reach"],
+        surface=existing["surface"],
+        capabilities=body.capabilities,
+        last_active=existing["last_active_at"],
+        created_at=existing["created_at"],
+    )
 
 
 @router.post(

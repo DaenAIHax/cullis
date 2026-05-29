@@ -31,6 +31,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from mcp_proxy.auth.builtin_capabilities import MCP_TOOLS_LIST
 from mcp_proxy.auth.dependencies import get_authenticated_agent
 from mcp_proxy.local.audit import append_local_audit
 from mcp_proxy.models import (
@@ -60,6 +61,7 @@ ERR_RESOURCE_UNREACHABLE = -32001
 ERR_RESOURCE_AUTH_FAILED = -32002
 ERR_RESOURCE_ERROR = -32003
 ERR_TOOL_NOT_FOUND = -32004
+ERR_CAPABILITY_MISSING = -32005
 
 
 def _rpc_error(req_id: Any, code: int, message: str, data: Any = None) -> dict:
@@ -95,16 +97,43 @@ async def _handle_initialize(req_id: Any) -> dict:
 
 
 async def _handle_tools_list(req_id: Any, agent: TokenPayload) -> dict:
+    agent_caps = set(agent.scope or [])
+
+    # Capability gate (#23) — fail-loud on missing ``mcp.tools.list``.
+    # Phase 1 left tools/list ungated at the method level; an agent
+    # without the discovery capability could still enumerate every
+    # tool it was bound to. From v0.6.4 the JSON-RPC method itself
+    # requires the capability, symmetric to ``llm.chat`` on the chat
+    # endpoint. Per-tool binding + ``required_capability`` filters
+    # still apply downstream.
+    if MCP_TOOLS_LIST not in agent_caps:
+        await append_local_audit(
+            event_type="mcp_tools_list",
+            result="denied",
+            agent_id=agent.agent_id,
+            org_id=agent.org,
+            details={
+                "principal_id": agent.agent_id,
+                "principal_type": agent.principal_type,
+                "reason": "capability_missing",
+                "required_capability": MCP_TOOLS_LIST,
+            },
+        )
+        return _rpc_error(
+            req_id, ERR_CAPABILITY_MISSING,
+            f"capability_missing: {MCP_TOOLS_LIST}",
+            data={"required_capability": MCP_TOOLS_LIST},
+        )
+
     bound = await _bound_resource_ids(
         agent.agent_id, agent.principal_type,
     )
-    agent_caps = set(agent.scope or [])
 
     tools_out: list[dict] = []
     for td in tool_registry.list_tools():
         if td.is_mcp_resource:
-            # MCP resource: binding is the only gate (capability stays
-            # informational in Phase 1; binding is the auth decision).
+            # MCP resource: binding remains the per-tool gate after
+            # the method-level capability check above.
             if td.resource_id not in bound:
                 continue
         else:

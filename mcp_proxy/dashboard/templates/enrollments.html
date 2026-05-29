@@ -106,7 +106,7 @@
                                 <div>
                                     <label class="block text-[10px] font-medium text-gray-400 mb-1 uppercase tracking-wider">Capabilities</label>
                                     <input type="text" name="capabilities"
-                                           placeholder="procurement.read, erp.query"
+                                           placeholder="llm.chat, mcp.tools.list"
                                            class="w-full bg-surface-950 border border-gray-700/60 rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 font-mono">
                                 </div>
                                 <div>
@@ -116,7 +116,8 @@
                                            class="w-full bg-surface-950 border border-gray-700/60 rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 font-mono">
                                 </div>
                             </div>
-                            <p class="text-[10px] text-gray-600">Comma-separated. Assigned values are authoritative &mdash; requester input is informational only.</p>
+                            <p class="text-[10px] text-gray-600">Comma-separated. Assigned values are authoritative; requester input is informational only. See the <a href="https://cullis.io/docs/reference/capabilities" target="_blank" rel="noopener" class="text-info-400 underline">capabilities catalog</a>.</p>
+                            {% include "_capabilities_datalist.html" %}
                             <div class="flex items-center gap-2 pt-1">
                                 <button type="submit"
                                         class="px-4 py-1.5 text-[11px] font-semibold rounded transition-all"

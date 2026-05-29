@@ -40,6 +40,26 @@ for name in alice bob; do
 done
 log_pass "alice + bob enrolled, cert+key on disk"
 
+# ── Verify capabilities round-trip (#22 / #23 gate inputs) ──────────────────
+# agent_enroll defaults to ["llm.chat","mcp.tools.list"]; the GET back
+# must echo the same set or downstream chat + tools/list scenarios will
+# fail capability_missing at runtime.
+resp="$(curl_admin GET "/v1/admin/agents" '')"
+alice_block="$(printf '%s' "$resp" | python3 -c "
+import sys, json
+rows = json.loads(sys.stdin.read())
+for r in rows:
+    if r['agent_id'] == '$alice_id':
+        print(json.dumps(r['capabilities']))
+        break
+" 2>/dev/null)"
+[[ -n "$alice_block" ]] || die "alice_id $alice_id not in /v1/admin/agents listing: $resp"
+echo "$alice_block" | grep -q 'llm.chat' \
+    || die "alice missing llm.chat: $alice_block"
+echo "$alice_block" | grep -q 'mcp.tools.list' \
+    || die "alice missing mcp.tools.list: $alice_block"
+log_pass "alice capabilities persisted: $alice_block"
+
 # ── Negative: duplicate enrollment returns 409 ──────────────────────────────
 body='{"agent_name":"alice","display_name":"dup","capabilities":[]}'
 resp="$(curl_admin_raw POST '/v1/admin/agents' "$body")"

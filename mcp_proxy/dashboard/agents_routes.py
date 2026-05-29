@@ -581,6 +581,92 @@ async def agent_identity_bundle_download(request: Request, agent_id: str):
 _VALID_REACH = {"intra", "cross", "both"}
 
 
+_CAPABILITY_RE = __import__("re").compile(r"^[a-z_][a-z0-9_.]{0,63}$")
+_MAX_CAP_ITEMS = 64
+
+
+def _parse_capabilities_form(raw: str) -> tuple[list[str], str | None]:
+    """Parse the comma-separated capability list from the dashboard form.
+
+    Returns ``(parsed, err)``. ``err`` is non-None when validation
+    fails — the caller renders the error back into the page rather
+    than touching the DB. Mirrors the constraints applied by
+    ``mcp_proxy.admin._capabilities.Capability`` so the dashboard
+    surface and the admin API cannot drift.
+    """
+    items = [c.strip() for c in raw.split(",") if c.strip()]
+    if len(items) > _MAX_CAP_ITEMS:
+        return [], f"too many capabilities (max {_MAX_CAP_ITEMS})"
+    for c in items:
+        if not _CAPABILITY_RE.match(c):
+            return (
+                [],
+                f"invalid capability {c!r}: must match "
+                f"[a-z_][a-z0-9_.]{{0,63}} (lowercase, dotted)",
+            )
+    return items, None
+
+
+@router.post("/agents/{agent_id:path}/capabilities")
+async def agent_set_capabilities(request: Request, agent_id: str):
+    """Replace the agent's capability set from the dashboard form.
+
+    Symmetric to the admin API ``PATCH /v1/admin/agents/{id}/capabilities``
+    — the dashboard talks to the DB directly (same pattern as
+    ``/reach`` above) to keep the form-POST flow simple and CSRF-bound.
+
+    Bumps ``federation_revision`` so the Phase 3 publisher will pick
+    the change up on its next pass. Audit row carries the new list
+    verbatim so an operator can replay history.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+    if not await verify_csrf(request, session):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    form = await request.form()
+    capabilities_raw = str(form.get("capabilities", "")).strip()
+    capabilities, err = _parse_capabilities_form(capabilities_raw)
+    if err is not None:
+        return RedirectResponse(
+            url=f"/proxy/agents/{agent_id}?error={err}",
+            status_code=303,
+        )
+
+    from mcp_proxy.db import get_agent, get_db, log_audit
+    from sqlalchemy import text as _text
+    import json as _json
+
+    agent = await get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    async with get_db() as conn:
+        await conn.execute(
+            _text(
+                """
+                UPDATE internal_agents
+                   SET capabilities = :caps,
+                       federation_revision = federation_revision + 1
+                 WHERE agent_id = :aid
+                """
+            ),
+            {"caps": _json.dumps(capabilities), "aid": agent_id},
+        )
+
+    await log_audit(
+        agent_id=agent_id,
+        action="agent.capabilities_set",
+        status="success",
+        detail=f"source=dashboard capabilities={capabilities}",
+    )
+
+    return RedirectResponse(
+        url=f"/proxy/agents/{agent_id}", status_code=303,
+    )
+
+
 @router.post("/agents/{agent_id:path}/reach")
 async def agent_set_reach(request: Request, agent_id: str):
     """Set ``internal_agents.reach`` from the dashboard.

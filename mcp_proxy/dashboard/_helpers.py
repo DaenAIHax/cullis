@@ -18,11 +18,20 @@ from mcp_proxy.dashboard.session import ProxyDashboardSession
 
 
 def _ctx(request: Request, session: ProxyDashboardSession, **kwargs) -> dict:
-    """Build the standard template context."""
+    """Build the standard template context.
+
+    Exposes ``builtin_capabilities`` to every template — the
+    ``_capabilities_datalist.html`` partial iterates over it to
+    render the suggestion chips, so a new built-in token added in
+    ``mcp_proxy.auth.builtin_capabilities`` shows up across all
+    five capability forms without a template edit.
+    """
+    from mcp_proxy.auth.builtin_capabilities import builtin_capability_list
     return {
         "request": request,
         "session": session,
         "csrf_token": session.csrf_token,
+        "builtin_capabilities": builtin_capability_list(),
         **kwargs,
     }
 

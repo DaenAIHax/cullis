@@ -40,6 +40,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from mcp_proxy.admin._capabilities import (
+    CAPABILITIES_FIELD,
+    Capability,
+)
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import get_db, log_audit
 
@@ -68,7 +72,9 @@ class AgentCreateRequest(BaseModel):
     # Short name only; the mastio scopes it to its own org_id.
     agent_name: str = Field(..., pattern=r"^[a-zA-Z0-9._-]{1,64}$")
     display_name: str = Field("", max_length=256)
-    capabilities: list[str] = Field(default_factory=list)
+    # v0.6.4 — shape constrained: lowercase identifier, max 64 items,
+    # max 64 chars each. See ``mcp_proxy.admin._capabilities``.
+    capabilities: list[Capability] = CAPABILITIES_FIELD
     federated: bool = False
     # Optional pre-generated cert+key pair, used by the sandbox bootstrap
     # that owns the same Org CA and wants to share the private key with
@@ -110,6 +116,10 @@ class AgentOut(BaseModel):
 
 class FederatedPatch(BaseModel):
     federated: bool
+
+
+class CapabilitiesPatch(BaseModel):
+    capabilities: list[Capability] = CAPABILITIES_FIELD
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -378,6 +388,78 @@ async def patch_federated(agent_id: str, body: FederatedPatch) -> AgentOut:
         action="agent.federated_patched",
         status="success",
         detail=f"agent_id={agent_id} federated={body.federated}",
+    )
+
+    return AgentOut(
+        agent_id=updated["agent_id"],
+        display_name=updated["display_name"],
+        capabilities=json.loads(updated["capabilities"] or "[]"),
+        federated=bool(updated["federated"]),
+        federated_at=str(updated["federated_at"]) if updated["federated_at"] else None,
+        federation_revision=int(updated["federation_revision"]),
+        is_active=bool(updated["is_active"]),
+        created_at=str(updated["created_at"]),
+    )
+
+
+@router.patch(
+    "/{agent_id}/capabilities",
+    response_model=AgentOut,
+    dependencies=[Depends(_require_admin_secret)],
+)
+async def patch_capabilities(
+    agent_id: str, body: CapabilitiesPatch,
+) -> AgentOut:
+    """Replace the agent's capability set.
+
+    Idempotent set-replacement (NOT a delta apply). Pass the full
+    desired list each time — the admin UX is "edit + save the
+    whole list", not "add one cap" / "remove one cap", which keeps
+    the wire contract trivial and the audit row self-describing.
+
+    Bumps ``federation_revision`` so the Phase 3 publisher will
+    pick the change up on its next pass for federated agents. Phase 1
+    (this PR) does NOT propagate cap changes to the Court — that is
+    a follow-up; today the cap is enforced locally on the Mastio that
+    owns the row, which is enough for the LLM + MCP gates.
+    """
+    async with get_db() as conn:
+        row = (await conn.execute(
+            text("SELECT 1 FROM internal_agents WHERE agent_id = :aid"),
+            {"aid": agent_id},
+        )).first()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="agent not found",
+            )
+        await conn.execute(
+            text(
+                """
+                UPDATE internal_agents
+                   SET capabilities = :caps,
+                       federation_revision = federation_revision + 1
+                 WHERE agent_id = :aid
+                """
+            ),
+            {"caps": json.dumps(body.capabilities), "aid": agent_id},
+        )
+        updated = (await conn.execute(
+            text(
+                """
+                SELECT agent_id, display_name, capabilities, is_active,
+                       federated, federated_at, federation_revision, created_at
+                  FROM internal_agents WHERE agent_id = :aid
+                """
+            ),
+            {"aid": agent_id},
+        )).mappings().first()
+
+    await log_audit(
+        agent_id="admin",
+        action="agent.capabilities_patched",
+        status="success",
+        detail=f"agent_id={agent_id} capabilities={body.capabilities}",
     )
 
     return AgentOut(

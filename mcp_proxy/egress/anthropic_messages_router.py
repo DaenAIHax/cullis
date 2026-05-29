@@ -37,10 +37,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from mcp_proxy.auth.builtin_capabilities import LLM_CHAT
 from mcp_proxy.auth.dpop_client_cert import get_agent_from_dpop_client_cert
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import log_audit
 from mcp_proxy.egress.ai_gateway import GatewayError, dispatch
+from mcp_proxy.egress.provider_catalog import parse_provider_from_model
 from mcp_proxy.egress.schemas import (
     ChatCompletionRequest,
     ChatMessage,
@@ -257,6 +259,74 @@ async def anthropic_messages(
     """
     settings = get_settings()
     trace_id = f"trace_{uuid.uuid4().hex[:16]}"
+
+    # Capability gate (#22) — symmetric to ``/v1/chat/completions``.
+    # The docstring above promises "Same security gates as
+    # ``/v1/chat/completions``" but pre-v0.6.4 neither the capability
+    # gate nor scope_providers was actually applied here. Any agent
+    # could egress via the Anthropic shape regardless of its
+    # capabilities. Fixed alongside #22 (audit 2026-05-28 BLOCKER B1).
+    if LLM_CHAT not in (agent.capabilities or []):
+        await log_audit(
+            agent_id=agent.agent_id,
+            action="egress_llm_chat",
+            status="denied",
+            details={
+                "event": "llm.chat_completion",
+                "surface": "anthropic_messages",
+                "principal_id": agent.agent_id,
+                "principal_type": agent.principal_type,
+                "model": req.model,
+                "trace_id": trace_id,
+                "reason": "capability_missing",
+                "required_capability": LLM_CHAT,
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "reason": "capability_missing",
+                "trace_id": trace_id,
+                "required_capability": LLM_CHAT,
+            },
+        )
+
+    # scope_providers gate — also previously documented but not
+    # enforced on this router. Mirrors the llm_chat_router behaviour.
+    if agent.scope_providers:
+        try:
+            req_provider = parse_provider_from_model(req.model)
+        except Exception as exc:  # noqa: BLE001 — parse failure → deny
+            _log.warning(
+                "parse_provider_from_model failed for %r: %s", req.model, exc,
+            )
+            req_provider = None
+        if req_provider is None or req_provider not in agent.scope_providers:
+            await log_audit(
+                agent_id=agent.agent_id,
+                action="egress_llm_chat",
+                status="denied",
+                details={
+                    "event": "llm.chat_completion",
+                    "surface": "anthropic_messages",
+                    "principal_id": agent.agent_id,
+                    "principal_type": agent.principal_type,
+                    "model": req.model,
+                    "trace_id": trace_id,
+                    "reason": "token_scope_provider_mismatch",
+                    "requested_provider": req_provider,
+                    "scope_providers": agent.scope_providers,
+                },
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "reason": "token_scope_provider_mismatch",
+                    "trace_id": trace_id,
+                    "requested_provider": req_provider,
+                    "allowed_providers": agent.scope_providers,
+                },
+            )
 
     if req.stream:
         raise HTTPException(
