@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -22,7 +21,7 @@ from mcp_proxy.observability.baseline_rollup import (
 )
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def engine(tmp_path):
     db_file = tmp_path / "baseline.db"
     url = f"sqlite+aiosqlite:///{db_file}"
