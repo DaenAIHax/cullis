@@ -16,7 +16,6 @@ Three-tier PKI hardening (audit 2026-05-18). Verifies:
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
 from mcp_proxy import db as core_db
 from mcp_proxy.kms.factory import reset_kms_provider
@@ -30,10 +29,7 @@ from mcp_proxy.kms.pki_at_rest import (
 )
 
 
-pytestmark = pytest.mark.asyncio
-
-
-@pytest_asyncio.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 async def _fresh_state(monkeypatch, tmp_path):
     reset_kms_provider()
     _reset_cache_for_tests()
