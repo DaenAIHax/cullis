@@ -15,7 +15,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -27,7 +26,7 @@ from mcp_proxy.observability.anomaly_evaluator import (
 )
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def engine(tmp_path):
     db_file = tmp_path / "anomaly.db"
     url = f"sqlite+aiosqlite:///{db_file}"
