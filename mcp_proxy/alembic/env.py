@@ -16,7 +16,15 @@ from alembic import context
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # ``disable_existing_loggers=False`` is load-bearing: init_db() runs the
+    # alembic upgrade in-process during the app lifespan (mcp_proxy/db.py,
+    # main.py: configure_json_logging -> ... -> init_db). The fileConfig
+    # default (True) would disable every already-created ``mcp_proxy.*``
+    # logger that is not named in alembic.ini, silently suppressing all
+    # application logs (denied reasons, decode failures, rate-limit warnings)
+    # for the lifetime of the worker. The audit chain (DB-backed) is
+    # unaffected; only the operator/SIEM log stream was being muted.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # DSN override: PROXY_DB_URL wins over alembic.ini value.
 database_url = os.environ.get("PROXY_DB_URL")
