@@ -16,7 +16,19 @@ and the ephemeral Postgres service is defined in ``test/compose-pg.yml``.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# F-A-507 — ``ProxySettings`` refuses to construct when
+# ``MCP_PROXY_ADMIN_SECRET`` is the well-known insecure default in any
+# environment. Tests that build ``ProxySettings`` directly (via
+# ``get_settings()`` after monkeypatching the proxy env) never set the
+# admin secret themselves, so seed a non-default value at import time.
+# ``setdefault`` so a test that explicitly exercises the rejection path
+# can still override it via ``monkeypatch.setenv``. Core-pure: touches
+# only the ``mcp_proxy`` config surface, no broker/Court state.
+os.environ.setdefault("MCP_PROXY_ADMIN_SECRET", "test-proxy-secret-not-default")
 
 
 @pytest.fixture

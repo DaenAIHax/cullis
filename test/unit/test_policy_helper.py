@@ -53,19 +53,27 @@ def test_missing_rego_wasm_returns_none():
 # ── malformed base64 ──────────────────────────────────────────────────────
 
 
-def test_malformed_base64_returns_none_and_logs(caplog):
+def test_malformed_base64_returns_none_and_logs(monkeypatch):
+    # ``mcp_proxy.policy`` logger has ``propagate=False`` (logging_setup.py),
+    # so pytest ``caplog`` (root-attached) never sees its records. Capture
+    # the warning by monkeypatching ``_log.warning`` directly — the suite
+    # convention for asserting on mcp_proxy.* log output.
     rules = {"rego_wasm_base64": "not===valid===base64==="}
-    import logging
-    with caplog.at_level(logging.WARNING, logger="mcp_proxy.policy"):
-        out = try_rego_decision(rules, {}, surface="session")
+    warnings: list[str] = []
+    import mcp_proxy.policy as _policy_mod
+    monkeypatch.setattr(
+        _policy_mod._log, "warning",
+        lambda msg, *a, **kw: warnings.append(str(msg) % a if a else str(msg)),
+    )
+    out = try_rego_decision(rules, {}, surface="session")
     assert out is None
-    assert any("decode failed" in rec.message for rec in caplog.records)
+    assert any("decode failed" in w for w in warnings)
 
 
 # ── Rego runtime error path ───────────────────────────────────────────────
 
 
-def test_rego_eval_error_returns_none_and_logs(monkeypatch, caplog):
+def test_rego_eval_error_returns_none_and_logs(monkeypatch):
     """A wedged Rego falls through to legacy, doesn't deny everything."""
     rules = {"rego_wasm_base64": _b64(b"\x00asm\x01\x00\x00\x00fake")}
 
@@ -76,11 +84,17 @@ def test_rego_eval_error_returns_none_and_logs(monkeypatch, caplog):
         "mcp_proxy.policy.evaluate_decision", _raise,
     )
 
-    import logging
-    with caplog.at_level(logging.WARNING, logger="mcp_proxy.policy"):
-        out = try_rego_decision(rules, {}, surface="session")
+    # See note in test_malformed_base64: capture mcp_proxy.policy warnings
+    # via monkeypatch, not caplog (logger has propagate=False).
+    warnings: list[str] = []
+    import mcp_proxy.policy as _policy_mod
+    monkeypatch.setattr(
+        _policy_mod._log, "warning",
+        lambda msg, *a, **kw: warnings.append(str(msg) % a if a else str(msg)),
+    )
+    out = try_rego_decision(rules, {}, surface="session")
     assert out is None
-    assert any("eval failed" in rec.message for rec in caplog.records)
+    assert any("eval failed" in w for w in warnings)
 
 
 # ── happy path: Rego decision passed through ──────────────────────────────

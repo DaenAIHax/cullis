@@ -18,6 +18,11 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-repeat>=0.9",
+    # asyncio + xdist are load-bearing for the core test suite:
+    # asyncio_mode=auto (see [tool.pytest.ini_options]) needs pytest-asyncio,
+    # and the CI/local full runs use `-n auto --dist=loadfile` (pytest-xdist).
+    "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
@@ -87,3 +92,12 @@ cullis-proxy = "mcp_proxy.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cullis_sdk"]
+
+[tool.pytest.ini_options]
+# Aligns the public test surface with the suite the repatriated core
+# tests were written under (cullis-enterprise uses asyncio_mode=auto).
+# Under the default "strict" mode, async fixtures declared with the
+# plain @pytest.fixture decorator are silently ignored (PytestRemovedIn9
+# error), breaking the guardian/kms test modules. "auto" treats async
+# defs (tests + fixtures) as asyncio without an explicit marker.
+asyncio_mode = "auto"
