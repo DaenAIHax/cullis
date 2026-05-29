@@ -87,3 +87,12 @@ cullis-proxy = "mcp_proxy.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cullis_sdk"]
+
+[tool.pytest.ini_options]
+# Aligns the public test surface with the suite the repatriated core
+# tests were written under (cullis-enterprise uses asyncio_mode=auto).
+# Under the default "strict" mode, async fixtures declared with the
+# plain @pytest.fixture decorator are silently ignored (PytestRemovedIn9
+# error), breaking the guardian/kms test modules. "auto" treats async
+# defs (tests + fixtures) as asyncio without an explicit marker.
+asyncio_mode = "auto"
