@@ -6,7 +6,7 @@ Org certificates are cached per test session
 (same org_id → same CA cert), avoiding drift across multiple tests.
 
 Typical usage in tests:
-    from tests.cert_factory import make_assertion, get_org_ca_pem, init_broker_keys
+    from cert_factory import make_assertion, get_org_ca_pem, init_broker_keys
 
     # In conftest.py (session scope):
     broker_priv, broker_pub = init_broker_keys()
