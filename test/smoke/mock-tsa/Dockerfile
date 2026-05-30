@@ -6,9 +6,11 @@
 #   :2560  — RFC 3161 TSA (signs TimeStampReq with a self-issued CA
 #            baked into the image, returns a TimeStampResp the
 #            real audit_anchor_watcher accepts).
-#   :2561  — OpenAI-compatible /v1/chat/completions stub. Returns a
-#            fixed completion so 40_chat_completion can assert a
-#            deterministic shape end-to-end.
+#   :2561  — LLM upstream stub. Serves both the OpenAI-compatible
+#            /v1/chat/completions and the Anthropic /v1/messages shapes
+#            (the default cullis_native backend dispatches the latter).
+#            Returns a fixed completion so 40_agent_llm_inference can
+#            assert a deterministic shape end-to-end.
 #
 # No external network, no real CA, no public TSA. The whole point is
 # that smoke runs in an air-gapped container build.

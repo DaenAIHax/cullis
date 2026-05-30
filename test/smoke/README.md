@@ -53,7 +53,7 @@ Pre-PR ritual:
 | 10 | `10_admin_bootstrap.sh`       | seeded admin password works, Org CA + `org_id` materialised, `X-Admin-Secret` gate |
 | 20 | `20_enroll_agent.sh`          | `POST /v1/admin/agents` mints 2 agent certs; duplicate → 409; wrong secret → 403 |
 | 30 | `30_policy_rego.sh`           | `/v1/data/cullis/policy/session` default-allow; unknown OPA path → `{"result": null}`; Rego dashboard route mounted |
-| 40 | `40_chat_completion.sh`       | mTLS → `/v1/chat/completions` → mock AI gateway round-trip; no-cert → 401 at nginx |
+| 40 | `40_agent_llm_inference.sh`   | autonomous agent (`pitch-book-builder`) governed LLM inference via default `cullis_native` → native Anthropic dispatch → mock; 503 `provider_sdk_missing` hard-fails (#1005 guard); no-cert → 401 at nginx |
 | 50 | `50_mcp_tool_call.sh`         | mTLS-authed `/v1/egress/peers` and `/agents/{id}/public-key`; foreign cert → 401 |
 | 60 | `60_audit_chain.sh`           | `audit_log` non-empty, every row has `chain_seq`/`row_hash`, in-process `/proxy/audit/verify` returns `ok: true` |
 | 70 | `70_tsa_anchor.sh`            | audit anchor watcher fires within 90 s, persisted token carries `T1\|` magic + sane shape |

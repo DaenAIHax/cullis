@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 40_chat_completion — agent → Mastio → AI gateway (mocked) round trip
+# 40_agent_llm_inference — autonomous agent → Mastio → AI gateway (mocked)
 # =============================================================================
 #
-# Posts an OpenAI-compatible chat completion to /v1/chat/completions
-# with alice's client cert. The smoke runs the PRODUCT DEFAULT backend
+# Cullis governs autonomous backend agents, not human chat. The actor
+# here is `pitch-book-builder` (one of the demo agents on the site,
+# alongside portfolio-rebalancer and kyc-screener): it makes a governed,
+# audited LLM inference call as part of its own work — not a person
+# typing into a chatbot. The OpenAI-compatible /v1/chat/completions
+# wire shape is just the SDK contract; the identity is an mTLS+DPoP
+# agent cert and every call lands in the audit chain.
+#
+# The smoke runs the PRODUCT DEFAULT backend
 # MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native, so the Mastio dispatches
 # through the native anthropic.AsyncAnthropic SDK (NOT the deprecated
 # portkey path). We seed an ai_provider_credentials row whose api_base
@@ -17,6 +24,7 @@
 # could never surface. End-to-end signal:
 #
 #   * mTLS handshake succeeds (nginx 401 gate passes)
+#   * the agent's identity clears the DPoP + llm.chat capability gate
 #   * cullis_native dispatch loads the native SDK + reaches the mock
 #   * Anthropic Messages response → OpenAI shape (choices[0].message…)
 #   * Audit row written (verified in 60_audit_chain)
@@ -27,16 +35,20 @@
 # =============================================================================
 set -euo pipefail
 
-SCENARIO_TAG="40_chat_completion"
+SCENARIO_TAG="40_agent_llm_inference"
 SMOKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 # shellcheck source=../lib/_agent.sh
 source "$SMOKE_LIB_DIR/_agent.sh"
 # shellcheck source=../lib/_admin.sh
 source "$SMOKE_LIB_DIR/_admin.sh"
 
-cert="$(agent_cert_path alice)"
-key="$(agent_key_path alice)"
-[[ -s "$cert" && -s "$key" ]] || die "alice cert/key missing — run 20_enroll_agent first"
+# Enroll the autonomous agent that performs the governed inference. Own
+# enrollment (like 41/42's nocap) so the actor reads as a real agent
+# doing its job, not the generic alice/bob test plumbing.
+agent_enroll pitch-book-builder "Pitch-Book Builder (autonomous agent, smoke #40)" '["llm.chat"]' >/dev/null
+cert="$(agent_cert_path pitch-book-builder)"
+key="$(agent_key_path pitch-book-builder)"
+[[ -s "$cert" && -s "$key" ]] || die "pitch-book-builder cert/key missing — enrollment failed"
 
 base="$(smoke_mastio_url)"
 
@@ -51,11 +63,13 @@ else
     die "failed to seed anthropic provider creds — cullis_native cannot reach the mock"
 fi
 
-# ── Happy path: mTLS chat completion ────────────────────────────────────────
+# ── Happy path: the agent's governed LLM inference call ─────────────────────
 # Use a recognised provider/model so parse_provider_from_model() in the
 # Mastio doesn't reject the request before reaching the gateway. The
-# stub doesn't care about the model name — it echoes whatever arrives.
-body='{"model":"anthropic/claude-haiku-4-5","messages":[{"role":"user","content":"smoke ping"}]}'
+# stub doesn't care about the model name or the prompt — it echoes a
+# fixed completion — but the prompt reads as the agent's actual task so
+# the scenario stays true to what Cullis governs: autonomous agent work.
+body='{"model":"anthropic/claude-haiku-4-5","messages":[{"role":"user","content":"Draft the executive summary for the Q3 pitch book."}]}'
 resp_file="$(mktemp)"
 trap 'rm -f "$resp_file"' EXIT
 
@@ -79,13 +93,13 @@ except Exception as exc:
     print(f'parse-error:{exc}')
 " 2>/dev/null)"
         if [[ "$content" == "smoke-mock-ok" ]]; then
-            log_pass "chat completion → 200, content='smoke-mock-ok' (mock gateway reachable)"
+            log_pass "pitch-book-builder governed inference → 200, content='smoke-mock-ok' (native dispatch reached mock)"
         else
             die "unexpected content from mock gateway: '$content' (full: $resp)"
         fi
         ;;
     401|403)
-        die "Mastio rejected mTLS chat call (HTTP $status). cert path: $cert. Response: $(cat "$resp_file")"
+        die "Mastio rejected the agent's mTLS inference call (HTTP $status). cert path: $cert. Response: $(cat "$resp_file")"
         ;;
     503)
         # Hard fail: under cullis_native with creds seeded + the mock
