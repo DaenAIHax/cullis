@@ -85,6 +85,7 @@ def _provider_view(provider: str, row: dict | None) -> dict:
         ],
         "static_models": list(spec.static_models),
         "dynamic_models": spec.dynamic_models,
+        "native_supported": spec.native_supported,
         "configured": row is not None,
         "enabled": bool(row["enabled"]) if row else False,
         "creds_masked": mask_creds(provider, row["creds"] or {}) if row else {},

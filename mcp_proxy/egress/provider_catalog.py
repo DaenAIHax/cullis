@@ -57,6 +57,15 @@ class ProviderSpec:
     dynamic_models: bool = False
     default_model_for_route: str | None = None
     docs_url: str = ""
+    # ADR-039: the default ``cullis_native`` backend dispatches through
+    # per-provider native adapters. anthropic / openai / ollama have one;
+    # gemini / bedrock / vertex do NOT yet and 501 at dispatch unless the
+    # operator pins ``MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded``. This
+    # flag drives an honest "native vs requires-litellm" label in the
+    # provider-config UI so an operator knows before configuring rather
+    # than from a runtime 501. MVP posture: surface the gap, don't hide
+    # the provider.
+    native_supported: bool = True
 
 
 # Curated chat-completion model lists. Operators can still call any
@@ -123,6 +132,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ),
         static_models=GEMINI_MODELS,
         docs_url="https://ai.google.dev/gemini-api/docs/api-key",
+        native_supported=False,
     ),
     "bedrock": ProviderSpec(
         provider="bedrock",
@@ -137,6 +147,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ),
         static_models=BEDROCK_MODELS,
         docs_url="https://docs.aws.amazon.com/bedrock/",
+        native_supported=False,
     ),
     "vertex": ProviderSpec(
         provider="vertex",
@@ -154,6 +165,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ),
         static_models=VERTEX_MODELS,
         docs_url="https://cloud.google.com/vertex-ai/docs",
+        native_supported=False,
     ),
     "ollama": ProviderSpec(
         provider="ollama",

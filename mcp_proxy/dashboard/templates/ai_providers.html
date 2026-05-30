@@ -48,8 +48,16 @@
                         {% else %}
                         <span class="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-800/40 text-gray-500 border border-gray-700/40">not configured</span>
                         {% endif %}
+                        {% if p.native_supported %}
+                        <span class="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent-400/10 text-accent-400 border border-accent-400/20" title="Dispatched natively by the default cullis_native backend.">native</span>
+                        {% else %}
+                        <span class="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20" title="No native adapter yet. Set MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded (and pip install litellm) to use this provider; otherwise calls return 501.">requires litellm</span>
+                        {% endif %}
                     </div>
                     <p class="text-[10px] text-gray-600 mt-0.5 font-mono">{{ p.provider }}</p>
+                    {% if not p.native_supported %}
+                    <p class="text-[10px] text-amber-400/70 mt-1">Not natively supported yet — requires the <span class="font-mono">litellm_embedded</span> backend.</p>
+                    {% endif %}
                 </div>
                 {% if p.docs_url %}
                 <a href="{{ p.docs_url }}" target="_blank" rel="noopener"
