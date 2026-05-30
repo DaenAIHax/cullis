@@ -7,6 +7,7 @@ source tree required.
 
 - **Docker** Engine 20.10+ with **docker compose v2** (`docker compose version`).
 - **bash** 4+, **curl**, **tar**, **gzip** — almost always already on the host.
+- **jq** — only for the SDK quickstart's `curl`-based agent provisioning (parsing the JSON enroll response). Not needed to deploy the bundle itself.
 - **openssl** is optional. When present `deploy.sh` uses `openssl rand` for the admin secrets; when absent it falls back to `/dev/urandom + base64`, so minimal NixOS / Alpine / distroless hosts work out of the box.
 
 ## Quickstart (2 commands, you already have this tarball)

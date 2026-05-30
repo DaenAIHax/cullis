@@ -49,7 +49,7 @@ The agent's runtime identity is **three files**:
 - `agent-key.pem` — private key matching the cert
 - `dpop.jwk` — EC P-256 private key bound to the cert thumbprint (DPoP, [RFC 9449](https://datatracker.ietf.org/doc/html/rfc9449) — a JWT that proves the request comes from the holder of the matching private key, not just a token bearer)
 
-**A note on agent IDs.** Cullis identifies agents as `<org-id>::<agent-name>` (e.g. `orga::kyc-screener`). When you call the **raw HTTP admin API** you pass the full `agent_id`. When you call the **SDK** you pass only `agent_name` — the SDK derives the org from the admin token and prepends it. The two paths show both styles below.
+**A note on agent IDs.** Cullis identifies agents as `<org-id>::<agent-name>` (e.g. `orga::kyc-screener`). Both the **raw HTTP admin API** and the **SDK** take only the short `agent_name` — the Mastio scopes it to its own `org_id` and returns the full `agent_id` in the response. You never pass the `<org>::` prefix yourself.
 
 **A note on `capabilities`.** Free-form strings. There is no closed vocabulary. The convention is `<area>.<verb>` (e.g. `kyc.read`, `kyc.submit`, `portfolio.place_order`) but Mastio does not validate the syntax at enrollment. What matters is that the strings here **match exactly** the capabilities required by the MCP tools the agent will call — Mastio's capability gate compares them literally when a tool is dispatched. Each MCP tool declares its required capability in its server manifest; ask the team that operates the MCP server for the list, or list them at runtime with `client.list_mcp_tools()`.
 
@@ -62,22 +62,34 @@ Pick one of the three provisioning paths depending on whether your org already h
 If your org doesn't have a Certificate Authority yet, let Mastio mint everything from its org-scoped CA. Run this once from an operator script:
 
 ```bash
-# One-off, from your operator workstation or a CI/CD provisioning step
-curl -X POST https://mastio.acme.corp/v1/admin/agents/create \
+# One-off, from your operator workstation or a CI/CD provisioning step.
+# Self-signed Org CA (the bundle default)? Add --cacert ./certs/org-ca.pem
+# to the curl, or -k to skip verification (dev only).
+curl -X POST https://mastio.acme.corp/v1/admin/agents \
   -H "X-Admin-Secret: $MASTIO_ADMIN_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
-        "agent_id": "orga::kyc-screener",
+        "agent_name": "kyc-screener",
         "display_name": "KYC Screener",
         "capabilities": ["kyc.read", "kyc.submit"]
       }' \
   > kyc-screener.json
 
-# The response carries cert_pem + key_pem + dpop_jwk. Persist to disk:
-jq -r .cert_pem  kyc-screener.json > /etc/cullis/agents/kyc/cert.pem
-jq -r .key_pem   kyc-screener.json > /etc/cullis/agents/kyc/agent-key.pem
-jq -r .dpop_jwk  kyc-screener.json > /etc/cullis/agents/kyc/dpop.jwk
+# The response carries cert_pem (leaf), cert_chain_pem (leaf + Mastio
+# Intermediate), and private_key_pem (the freshly minted key). Persist
+# to disk. Write the fullchain into cert.pem so strict TLS clients can
+# build leaf -> Intermediate -> Org Root; the `// .cert_pem` fallback
+# covers legacy single-tier deployments where cert_chain_pem is null.
+jq -r '.cert_chain_pem // .cert_pem' kyc-screener.json > /etc/cullis/agents/kyc/cert.pem
+jq -r '.private_key_pem'             kyc-screener.json > /etc/cullis/agents/kyc/agent-key.pem
 chmod 0600 /etc/cullis/agents/kyc/*
+
+# No dpop.jwk here — the curl mint path doesn't produce one (unlike the
+# SDK enroll_via_* helpers in paths b/c below, which persist it). While
+# the Mastio's egress_dpop_mode is `optional` (the bundle default) the
+# agent authenticates with mTLS alone, so omit dpop_key_path at runtime.
+# For DPoP binding, enroll via the SDK or register a public JWK via
+# POST /v1/admin/agents/<agent_id>/dpop-jwk.
 ```
 
 Mastio pins the cert thumbprint in its DB. From this moment any TLS handshake presenting that exact cert authenticates as `orga::kyc-screener`.
