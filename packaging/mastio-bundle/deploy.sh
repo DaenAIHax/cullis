@@ -32,7 +32,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-export COMPOSE_PROJECT_NAME="cullis-mastio"
+# Overridable so a second bundle on the same host (e.g. a cold-reader
+# dogfood alongside a live stack) can claim a distinct project name and
+# dodge the port-owner collision check. Defaults to ``cullis-mastio``.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cullis-mastio}"
 
 GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'
 BOLD=$'\033[1m'; GRAY=$'\033[90m'; RESET=$'\033[0m'
@@ -975,7 +978,10 @@ ok "Containers started"
 # ── Wait for health ─────────────────────────────────────────────────────────
 step "Waiting for services"
 
-PROXY_PORT="$(grep -E '^MCP_PROXY_PORT=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2-)"
+# ``|| true``: under ``set -euo pipefail`` a grep no-match exits 1 and
+# the pipefail propagates it, killing the script mid-report even though
+# the deploy already succeeded. These reads are informational only.
+PROXY_PORT="$(grep -E '^MCP_PROXY_PORT=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2- || true)"
 PROXY_PORT="${PROXY_PORT:-9443}"
 
 echo -n "  Mastio + nginx "
@@ -1049,7 +1055,7 @@ except Exception:
     fi
 fi
 
-PUBLIC_URL="$(grep -E '^MCP_PROXY_PROXY_PUBLIC_URL=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2-)"
+PUBLIC_URL="$(grep -E '^MCP_PROXY_PROXY_PUBLIC_URL=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2- || true)"
 PUBLIC_URL="${PUBLIC_URL:-https://localhost:${PROXY_PORT}}"
 
 # Browser-friendly URL. On Linux hosts without Docker Desktop, host.docker.internal
@@ -1074,7 +1080,11 @@ if [[ -f "$ORG_CA_HOST" ]]; then
     echo -e "                   ${GRAY}use as CULLIS_FRONTDESK_CA_BUNDLE_HOST when bringing up the Frontdesk bundle${RESET}"
 fi
 echo ""
-SEED_PWD="$(grep -E '^MCP_PROXY_INITIAL_ADMIN_PASSWORD=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2-)"
+# ``INITIAL_ADMIN_PASSWORD`` is legitimately absent when proxy.env comes
+# from ``generate-proxy-env.sh --defaults`` (the admin sets it at first
+# boot via /proxy/register). A no-match here must not abort the script:
+# ``|| true`` keeps the "Next steps" block reachable. See PROXY_PORT note.
+SEED_PWD="$(grep -E '^MCP_PROXY_INITIAL_ADMIN_PASSWORD=' "$SCRIPT_DIR/proxy.env" 2>/dev/null | cut -d= -f2- || true)"
 
 if [[ "$MODE" == "development" ]]; then
     echo "  Next steps (development):"
