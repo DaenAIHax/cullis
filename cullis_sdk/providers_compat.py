@@ -164,21 +164,27 @@ class _DpopTransport(httpx.BaseTransport):
 def _resolve_identity_files(
     identity_dir: str | pathlib.Path,
 ) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path | None, pathlib.Path]:
-    """Locate the four identity files inside ``identity_dir``.
+    """Locate the identity files inside ``identity_dir``.
 
-    Returns ``(cert, key, ca_chain_or_None, dpop_jwk)``. ``ca_chain`` is
-    optional: a customer running against a Mastio with a publicly
-    trusted TLS cert can omit it and rely on the system trust store.
-    The other three are mandatory and raise ``FileNotFoundError``.
+    Returns ``(cert, key, ca_chain_or_None, dpop_jwk_path)``. Only
+    ``agent.crt`` and ``agent.key`` are mandatory — they are the
+    credential (ADR-014) and cannot be regenerated client-side.
+    ``ca-chain.pem`` is optional (a Mastio with a publicly trusted TLS
+    cert lets the client rely on the system trust store). ``dpop.jwk``
+    is the returned *path* and may not exist yet: the caller generates +
+    persists it on first use, the same contract as
+    ``CullisClient.from_identity_dir`` and the identity-bundle.zip NB.
+    RFC 9449 keeps the DPoP key client-side, so the admin-minted bundle
+    does not ship one.
     """
     base = pathlib.Path(identity_dir).expanduser().resolve()
 
     if not base.is_dir():
         raise FileNotFoundError(
             f"identity_dir {base} is not a directory; expected the "
-            f"layout written by enrol_via_dashboard_approval / "
-            f"from_enrollment (agent.crt + agent.key + dpop.jwk "
-            f"+ optional ca-chain.pem)"
+            f"layout written by enrol_via_dashboard_approval / the "
+            f"admin-minted identity-bundle.zip (agent.crt + agent.key "
+            f"+ optional ca-chain.pem; dpop.jwk generated on first use)"
         )
 
     cert = base / "agent.crt"
@@ -186,12 +192,13 @@ def _resolve_identity_files(
     ca = base / "ca-chain.pem"
     dpop = base / "dpop.jwk"
 
-    missing = [p.name for p in (cert, key, dpop) if not p.exists()]
+    missing = [p.name for p in (cert, key) if not p.exists()]
     if missing:
         raise FileNotFoundError(
             f"identity_dir {base} missing {', '.join(missing)}; "
-            f"required layout: agent.crt + agent.key + dpop.jwk "
-            f"(and optional ca-chain.pem for Mastio Intermediate trust)"
+            f"required layout: agent.crt + agent.key "
+            f"(plus optional ca-chain.pem for Mastio Intermediate trust; "
+            f"dpop.jwk is generated on first use if absent)"
         )
 
     return cert, key, (ca if ca.exists() else None), dpop
@@ -226,7 +233,15 @@ def cullis_httpx_client(
         by this helper and cannot be overridden via this dict.
     """
     cert, key, ca, dpop_path = _resolve_identity_files(identity_dir)
-    dpop_key = DpopKey.load(dpop_path)
+    # Generate + persist the DPoP key on first use if the bundle did not
+    # ship one (it never does — RFC 9449 keeps the key client-side, and
+    # the identity-bundle.zip NB documents "generated on first use").
+    # Mirrors CullisClient.from_identity_dir; previously this helper hard
+    # -required dpop.jwk and FileNotFound'd the documented zip → drop-in
+    # flow. The Mastio TOFU-accepts the proof under egress_dpop_mode
+    # ``optional`` (the default); once the operator flips to ``required``
+    # the jkt must be registered at enrollment, same as any agent.
+    dpop_key = DpopKey.load(dpop_path) if dpop_path.exists() else DpopKey.generate(path=dpop_path)
 
     # Build an explicit ``ssl.SSLContext`` with the client cert chain
     # loaded into it. We avoid httpx's legacy ``cert=(crt, key)`` +

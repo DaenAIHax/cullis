@@ -3,10 +3,11 @@
 Covered:
 
 1. ``_resolve_identity_files`` raises clearly when the directory is missing.
-2. ``_resolve_identity_files`` raises clearly when ``dpop.jwk`` is missing
-   (the file with no auto-recovery — agent.crt / agent.key the operator
-   can re-mint, but dpop.jwk is client-generated and irreplaceable from
-   the server side).
+2. ``_resolve_identity_files`` raises clearly when ``agent.crt`` / ``agent.key``
+   are missing (the credential, ADR-014). ``dpop.jwk`` is NOT mandatory:
+   it is client-generated (RFC 9449) and the admin-minted bundle never
+   ships it, so ``cullis_httpx_client`` generates + persists it on first
+   use instead of raising — the same contract as ``from_identity_dir``.
 3. ``cullis_httpx_client`` returns a usable ``httpx.Client`` with a
    ``_DpopTransport`` wrapping the inner transport.
 4. ``_DpopTransport`` attaches a DPoP header to outbound requests.
@@ -83,17 +84,34 @@ def test_resolve_identity_files_missing_dir(tmp_path: Path) -> None:
     assert "not a directory" in str(exc.value)
 
 
-def test_resolve_identity_files_missing_dpop_jwk(tmp_path: Path) -> None:
+def test_resolve_identity_files_missing_cert_raises(tmp_path: Path) -> None:
+    # agent.crt / agent.key ARE mandatory (the credential, ADR-014) —
+    # missing them must still fail loud with an operator-facing hint that
+    # names the file and documents the required layout. A bare KeyError /
+    # OSError without that hint sends the customer grepping the source.
     _write_identity_dir(tmp_path)
-    (tmp_path / "dpop.jwk").unlink()
+    (tmp_path / "agent.crt").unlink()
 
     with pytest.raises(FileNotFoundError) as exc:
         _resolve_identity_files(tmp_path)
-    # The operator-facing error names the missing file specifically and
-    # documents the required layout. A bare ``KeyError`` or ``OSError``
-    # without that hint sends the customer grepping the source.
-    assert "dpop.jwk" in str(exc.value)
+    assert "agent.crt" in str(exc.value)
     assert "required layout" in str(exc.value)
+
+
+def test_cullis_httpx_client_generates_dpop_on_first_use(tmp_path: Path) -> None:
+    # dpop.jwk is client-generated (RFC 9449); the admin-minted bundle
+    # never ships it. The helper must generate + persist it on first use,
+    # not raise — otherwise the documented "download zip → drop-in" flow
+    # FileNotFound's (regression caught by the 2026-05-30 cold-reader).
+    _write_identity_dir(tmp_path)
+    (tmp_path / "dpop.jwk").unlink()
+    assert not (tmp_path / "dpop.jwk").exists()
+
+    client = cullis_httpx_client(identity_dir=tmp_path)
+    try:
+        assert (tmp_path / "dpop.jwk").exists()  # generated on first use
+    finally:
+        client.close()
 
 
 def test_resolve_identity_files_optional_ca_chain(tmp_path: Path) -> None:
