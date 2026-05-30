@@ -21,10 +21,23 @@ authlib>=1.3.0
 # the import path in mcp_proxy.redis.pool to resolve (audit F-B-12).
 redis>=5.0.0
 # ADR-039 — LiteLLM is no longer a runtime dependency of the Mastio
-# image. The default AI gateway backend ``cullis_native`` uses the
-# Anthropic / OpenAI / httpx-Ollama native adapters. Operators who
-# still pin ``MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded`` (for
-# Gemini / Bedrock / Vertex) install the package out-of-band with the
+# image. The default AI gateway backend ``cullis_native`` dispatches
+# through per-provider SDK adapters: the Anthropic and OpenAI adapters
+# import ``anthropic.AsyncAnthropic`` / ``openai.AsyncOpenAI`` lazily
+# at dispatch and raise GatewayError(503, "provider_sdk_missing") when
+# the package is absent. Because ``cullis_native`` is the default, both
+# SDKs are hard runtime deps of the image — without them a fresh bundle
+# 503s ``provider_sdk_missing`` on the very first chat completion. This
+# is invisible to smoke (scenario 40 runs the ``portkey`` backend against
+# a mock gateway, never cullis_native) and to unit tests (the dev venv
+# happens to have both SDKs); only the bundle dogfood 2026-05-30 hit it.
+# The Ollama and Portkey adapters use raw httpx and need no SDK. Floors
+# match the versions validated against the native adapters (PR-I client
+# cache); major caps guard against a breaking SDK bump.
+anthropic>=0.101.0,<1.0
+openai>=2.24.0,<3.0
+# Operators who still pin ``MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded``
+# (for Gemini / Bedrock / Vertex) install LiteLLM out-of-band with the
 # defensive floor PR #987 set against the April-May 2026 CVE cluster:
 #
 #   pip install 'litellm>=1.83.7,<2.0'
