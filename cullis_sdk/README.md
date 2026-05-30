@@ -76,11 +76,12 @@ If your agent code already uses `anthropic.Anthropic` or `openai.OpenAI` directl
 import anthropic
 from cullis_sdk.providers_compat import cullis_httpx_client
 
-# cullis_httpx_client reads agent.crt + agent.key + ca-chain.pem + dpop.jwk
-# from the directory you point at (same layout the admin-minted
-# identity-bundle.zip unpacks to). It wires mTLS, DPoP signing, and
-# the nonce-retry challenge so the vanilla provider SDK does not need
-# to know any of that.
+# cullis_httpx_client reads agent.crt + agent.key (+ optional ca-chain.pem)
+# from the directory you point at (the layout the admin-minted
+# identity-bundle.zip unpacks to). It generates + persists a dpop.jwk
+# there on first use if absent. It wires mTLS, DPoP signing, and the
+# nonce-retry challenge so the vanilla provider SDK does not need to
+# know any of that.
 http = cullis_httpx_client(identity_dir="/etc/cullis/agent")
 
 # Hand the httpx client to the vanilla Anthropic SDK. Streaming, tool
@@ -88,8 +89,11 @@ http = cullis_httpx_client(identity_dir="/etc/cullis/agent")
 # API directly. Every request flows through Mastio and lands in the
 # audit chain. The Mastio holds the upstream Anthropic key; the agent
 # host never sees it, hence ``api_key="unused"``.
+#
+# NB base_url has NO trailing /v1: the Anthropic SDK appends /v1/messages
+# itself. (The OpenAI SDK does NOT, so its base_url keeps /v1 — see below.)
 client = anthropic.Anthropic(
-    base_url="https://mastio.acme.local:9443/v1",
+    base_url="https://mastio.acme.local:9443",
     api_key="unused",
     http_client=http,
 )
@@ -101,7 +105,7 @@ msg = client.messages.create(
 )
 ```
 
-Same pattern with `openai.OpenAI(base_url="https://mastio.acme.local:9443/v1", api_key="unused", http_client=cullis_httpx_client(identity_dir="..."))`. See `docs/quickstart/provider-sdk-drop-in.md` on the site.
+Same pattern with `openai.OpenAI(base_url="https://mastio.acme.local:9443/v1", api_key="unused", http_client=cullis_httpx_client(identity_dir="..."))` — note the OpenAI base_url keeps the `/v1` suffix (the OpenAI SDK does not prepend it, unlike Anthropic). See `docs/quickstart/provider-sdk-drop-in.md` on the site.
 
 ---
 

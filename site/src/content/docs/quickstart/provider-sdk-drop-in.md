@@ -18,11 +18,13 @@ For a **greenfield agent** (new code, no provider SDK in flight), the recommende
 
 ## Prerequisites
 
-- An enrolled agent with the four-file identity layout on disk (`agent.crt`, `agent.key`, `ca-chain.pem`, `dpop.jwk`). If you don't have that yet, do [SDK quickstart](sdk) first.
+- An enrolled agent with the identity layout on disk (`agent.crt` + `agent.key`, plus optional `ca-chain.pem`). The helper generates and persists `dpop.jwk` in that directory on first use, so the admin-minted `identity-bundle.zip` does not need to ship one. If you don't have an identity yet, do [SDK quickstart](sdk) first.
 - The matching provider key configured on the Mastio side: e.g. `MCP_PROXY_ANTHROPIC_API_KEY=sk-ant-...` in `proxy.env` followed by `./deploy.sh --pull`. The agent never holds the key.
-- The Mastio reachable on the URL the agent will pass as `base_url` (typically `https://<mastio>:9443/v1`).
+- The Mastio reachable on the URL the agent passes as `base_url`. For the Anthropic SDK use the Mastio **root** (`https://<mastio>:9443`); for the OpenAI SDK keep the `/v1` suffix (`https://<mastio>:9443/v1`). See each section below.
 
 ## Anthropic SDK (uses Mastio `/v1/messages`)
+
+> **`base_url` has no `/v1` suffix for the Anthropic SDK.** The Anthropic SDK appends `/v1/messages` itself, so passing `.../9443/v1` produces `/v1/v1/messages` and the Mastio returns `404 Not Found`. Point `base_url` at the Mastio root. (The OpenAI SDK is the opposite — it keeps `/v1`; see the next section.)
 
 ```python
 import anthropic
@@ -31,7 +33,7 @@ from cullis_sdk.providers_compat import cullis_httpx_client
 http_client = cullis_httpx_client(identity_dir="~/.cullis/scenario-b")
 
 client = anthropic.Anthropic(
-    base_url="https://mastio.myorg.example.com:9443/v1",
+    base_url="https://mastio.myorg.example.com:9443",   # NO /v1 — SDK adds /v1/messages
     api_key="unused",            # Mastio ignores; mTLS + DPoP are the real auth
     http_client=http_client,
 )
@@ -78,7 +80,7 @@ from cullis_sdk.providers_compat import cullis_httpx_client
 
 llm = ChatAnthropic(
     model="claude-sonnet-4-6",
-    base_url="https://mastio.myorg.example.com:9443/v1",
+    base_url="https://mastio.myorg.example.com:9443",   # NO /v1 — Anthropic SDK adds /v1/messages
     anthropic_api_key="unused",
     http_client=cullis_httpx_client(identity_dir="~/.cullis/scenario-b"),
 )
@@ -91,7 +93,7 @@ When the framework does not surface `http_client`, two options:
 
 ## What the helper does under the hood
 
-1. Loads the four identity files from `identity_dir` (auto-discovery: `agent.crt`, `agent.key`, `ca-chain.pem` optional, `dpop.jwk`).
+1. Loads the identity files from `identity_dir` (auto-discovery: `agent.crt` + `agent.key` required, `ca-chain.pem` optional; `dpop.jwk` is loaded if present, otherwise generated + persisted there on first use).
 2. Builds an `httpx.HTTPTransport` with `cert=(agent.crt, agent.key)` and `verify=ca-chain.pem` (or system trust if the bundle is omitted).
 3. Wraps it in a `_DpopTransport` that, on every outbound request:
    - Computes a DPoP JWT for `(method, htu)` signed by the persistent EC P-256 key from `dpop.jwk` and attaches it as the `DPoP:` header.
