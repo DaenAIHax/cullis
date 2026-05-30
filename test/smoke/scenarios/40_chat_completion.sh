@@ -4,14 +4,21 @@
 # =============================================================================
 #
 # Posts an OpenAI-compatible chat completion to /v1/chat/completions
-# with alice's client cert. The Mastio dispatches via the configured
-# AI gateway (env.smoke pins MCP_PROXY_AI_GATEWAY_BACKEND=portkey +
-# ai_gateway_url=http://mock-tsa:2561), so the upstream is our in-stack
-# stub. Stub returns a fixed completion. End-to-end signal:
+# with alice's client cert. The smoke runs the PRODUCT DEFAULT backend
+# MCP_PROXY_AI_GATEWAY_BACKEND=cullis_native, so the Mastio dispatches
+# through the native anthropic.AsyncAnthropic SDK (NOT the deprecated
+# portkey path). We seed an ai_provider_credentials row whose api_base
+# points the SDK at the in-stack mock (mock-tsa:2561, /v1/messages
+# Anthropic shape) so the call stays offline + deterministic.
+#
+# This is the regression guard for packaging gaps like #1005: if the
+# image ships without the anthropic SDK, the native adapter returns
+# 503 provider_sdk_missing here — a failure the old portkey-only smoke
+# could never surface. End-to-end signal:
 #
 #   * mTLS handshake succeeds (nginx 401 gate passes)
-#   * Mastio dispatcher reaches the configured gateway URL
-#   * Response shape is OpenAI-compatible (choices[0].message.content)
+#   * cullis_native dispatch loads the native SDK + reaches the mock
+#   * Anthropic Messages response → OpenAI shape (choices[0].message…)
 #   * Audit row written (verified in 60_audit_chain)
 #
 # Asserts:
@@ -24,12 +31,25 @@ SCENARIO_TAG="40_chat_completion"
 SMOKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 # shellcheck source=../lib/_agent.sh
 source "$SMOKE_LIB_DIR/_agent.sh"
+# shellcheck source=../lib/_admin.sh
+source "$SMOKE_LIB_DIR/_admin.sh"
 
 cert="$(agent_cert_path alice)"
 key="$(agent_key_path alice)"
 [[ -s "$cert" && -s "$key" ]] || die "alice cert/key missing — run 20_enroll_agent first"
 
 base="$(smoke_mastio_url)"
+
+# ── Seed the native anthropic provider creds → mock upstream ─────────────────
+# cullis_native resolves the base_url from ai_provider_credentials, not
+# from MCP_PROXY_AI_GATEWAY_URL. Point it at the mock so the SDK call
+# stays in-stack. Without this row the native adapter would fall back to
+# settings.anthropic_api_key with no base_url and dial api.anthropic.com.
+if admin_seed_ai_provider_creds anthropic "http://mock-tsa:2561" >/dev/null; then
+    log_pass "seeded anthropic provider creds (api_base → mock-tsa:2561)"
+else
+    die "failed to seed anthropic provider creds — cullis_native cannot reach the mock"
+fi
 
 # ── Happy path: mTLS chat completion ────────────────────────────────────────
 # Use a recognised provider/model so parse_provider_from_model() in the
@@ -68,13 +88,13 @@ except Exception as exc:
         die "Mastio rejected mTLS chat call (HTTP $status). cert path: $cert. Response: $(cat "$resp_file")"
         ;;
     503)
-        # provider_key_missing or gateway unreachable — log + skip with
-        # warning rather than fail the run silently. The mock gateway
-        # might not be wired in older mains.
+        # Hard fail: under cullis_native with creds seeded + the mock
+        # reachable, a 503 is a real defect — and provider_sdk_missing
+        # is the #1005 packaging bug this scenario exists to catch. Do
+        # NOT skip it (the old portkey smoke skipped 503, which is how
+        # the missing anthropic/openai SDKs shipped unnoticed).
         body_text="$(cat "$resp_file")"
-        log_warn "AI gateway returned 503 (likely backend mismatch or upstream unreachable): $body_text"
-        log_skip "/v1/chat/completions returned 503 — chat path needs investigation in follow-up"
-        exit 2
+        die "/v1/chat/completions returned 503 under cullis_native: $body_text"
         ;;
     *)
         die "/v1/chat/completions returned HTTP $status: $(cat "$resp_file")"

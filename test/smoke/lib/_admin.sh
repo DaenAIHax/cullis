@@ -79,6 +79,47 @@ except Exception as exc:
     printf '%s' "$val"
 }
 
+# Seed an AI provider credentials row so the cullis_native backend
+# dispatches to a deterministic, offline upstream instead of the real
+# provider API. ``api_base`` points the native SDK (AsyncAnthropic /
+# AsyncOpenAI) at the in-stack mock-tsa:2561 endpoint.
+#
+# Why in-container Python instead of the dashboard form: the dispatcher
+# reads ``ai_provider_credentials`` directly, and the creds_json is
+# Fernet-wrapped at rest with the per-install master key the running
+# Mastio minted into proxy_config at first boot. Writing through the
+# app's own ``upsert_ai_provider_creds`` (which calls encrypt_at_rest)
+# guarantees the row round-trips with that exact key — same pattern as
+# admin_read_org_id running python in-container. PROXY_SKIP_MIGRATIONS=1
+# keeps this a metadata.create_all no-op (the DB is already migrated by
+# the running app) so the seed never contends on the alembic lock.
+admin_seed_ai_provider_creds() {
+    local provider="$1" api_base="$2" api_key="${3:-smoke-fake-anthropic-key}"
+    smoke_compose exec -T \
+        -e SEED_PROVIDER="$provider" \
+        -e SEED_API_BASE="$api_base" \
+        -e SEED_API_KEY="$api_key" \
+        -e PROXY_SKIP_MIGRATIONS=1 \
+        mcp-proxy python3 -c "
+import asyncio, os, sys
+from mcp_proxy.db import init_db, upsert_ai_provider_creds
+async def _seed():
+    await init_db(os.environ['MCP_PROXY_DATABASE_URL'])
+    await upsert_ai_provider_creds(
+        os.environ['SEED_PROVIDER'],
+        {'api_key': os.environ['SEED_API_KEY'],
+         'api_base': os.environ['SEED_API_BASE']},
+        updated_by='smoke',
+    )
+try:
+    asyncio.run(_seed())
+    print('ok')
+except Exception as exc:  # noqa: BLE001
+    print(f'seed-error: {exc}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1
+}
+
 # Verify the admin password seed was honoured. The Mastio writes the
 # bcrypt hash on first boot if MCP_PROXY_INITIAL_ADMIN_PASSWORD is
 # set; we hit /proxy/login with the seeded password and expect a 303
