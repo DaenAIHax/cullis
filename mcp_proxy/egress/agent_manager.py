@@ -477,30 +477,16 @@ class AgentManager:
                 serialization.PublicFormat.SubjectPublicKeyInfo,
             )
             derived = hashlib.sha256(pubkey_der).hexdigest()[:16]
-            # D-9 multi-worker race: every uvicorn worker runs lifespan
-            # in parallel and would otherwise upsert its own derived
-            # org_id (one per candidate key), then sign an intermediate
-            # whose CN says one thing while a sibling worker exports a
-            # cert with a different CN. Atomically claim the org_id row
-            # — winner stamps it, losers adopt the winning value before
-            # building the cert subject. Mirrors the Intermediate CA
-            # winner-election pattern in ``_mint_mastio_ca``.
-            from mcp_proxy.db import set_config_if_absent
-            wrote_org_id = await set_config_if_absent("org_id", derived)
-            if wrote_org_id:
-                self._org_id = derived
-                logger.info(
-                    "Derived deterministic org_id=%s from Org CA public key",
-                    derived,
-                )
-            else:
-                winner_org_id = await get_config("org_id")
-                self._org_id = winner_org_id or self._org_id
-                logger.info(
-                    "Org CA derive race lost — adopted winner org_id=%s "
-                    "(this worker's candidate=%s discarded)",
-                    self._org_id, derived,
-                )
+            # Each worker uses its OWN candidate org_id for the cert
+            # subject CN below. The AUTHORITATIVE org_id is NOT claimed
+            # here: claiming the ``org_id`` row as a race independent of
+            # the Org CA key/cert pair let one worker win ``org_id`` while
+            # a *different* worker won the pair (``_persist_org_ca``),
+            # persisting an org_id that did not derive from the persisted
+            # cert — the D-9 split-brain. org_id is instead derived from
+            # the WINNING pair after the election (below), so org_id, key,
+            # and cert all come from the same worker.
+            self._org_id = derived
 
         subject = x509.Name([
             x509.NameAttribute(NameOID.COMMON_NAME, f"{self._org_id} CA"),
@@ -598,6 +584,31 @@ class AgentManager:
                     "Org CA generate race lost — adopted winning pair (CN=%s)",
                     ca_cert.subject.rfc4514_string(),
                 )
+
+        # Authoritative org_id — bind it to the WINNING Org CA pair, not
+        # to each worker's own candidate. ``ca_cert`` here is the persisted
+        # winning cert for winner and loser alike (the loser adopted it
+        # above), so deriving org_id from its pubkey guarantees the
+        # persisted org_id always derives from the persisted cert — closing
+        # the D-9 split-brain where org_id and the pair were won by
+        # different workers. ``set_config_if_absent`` is idempotent here:
+        # every worker computes the SAME value from the SAME winning cert,
+        # so the write order does not matter.
+        if derive_org_id:
+            from mcp_proxy.db import set_config_if_absent
+            winning_pubkey_der = ca_cert.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            authoritative_org_id = hashlib.sha256(
+                winning_pubkey_der,
+            ).hexdigest()[:16]
+            await set_config_if_absent("org_id", authoritative_org_id)
+            self._org_id = authoritative_org_id
+            logger.info(
+                "Org CA org_id=%s bound to persisted winning pair (CN=%s)",
+                authoritative_org_id, ca_cert.subject.rfc4514_string(),
+            )
 
         # Three-tier PKI hardening — cache only the cert at steady state
         # when the encrypted KMS path is active (the unseal helper can
