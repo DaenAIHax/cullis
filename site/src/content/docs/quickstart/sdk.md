@@ -160,7 +160,7 @@ client = CullisClient.from_identity_dir(
 client.login_via_proxy_with_local_key()
 ```
 
-**Where does `ca_chain_path` come from?** It's the Org CA cert that signs Mastio's own TLS cert. Operators export it from the Mastio dashboard (PKI → Export CA Certificate) or fetch it from the bundle's `nginx-certs/org-ca.crt`. Distribute it alongside the three identity files. If you set `verify_tls=False` you don't need it, but that's for local dogfood only.
+**Where does `ca_chain_path` come from?** It's the Org CA cert that signs Mastio's own TLS cert. Operators export it from the Mastio dashboard (PKI → Export CA Certificate) or fetch it from the bundle's `certs/org-ca.pem` — the user-readable copy `deploy.sh` writes for exactly this (its "Next steps" banner points there too). The sibling `nginx-certs/org-ca.crt` holds the same cert but is owned by the in-container runtime UID and is not readable as your shell user. Distribute the file alongside the three identity files. If you set `verify_tls=False` you don't need it, but that's for local dogfood only.
 
 **Two-line mental model**:
 
