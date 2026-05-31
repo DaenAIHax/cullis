@@ -37,6 +37,7 @@ from mcp_proxy.egress.adapters import DispatchContext, resolve_adapter
 from mcp_proxy.egress.provider_catalog import (
     PROVIDERS,
     parse_provider_from_model,
+    strip_provider_prefix,
 )
 from mcp_proxy.egress.schemas import ChatCompletionRequest, ChatCompletionResponse
 
@@ -185,6 +186,27 @@ async def _resolve_provider_creds(
     return provider, dict(row["creds"] or {})
 
 
+def _normalize_model_for_backend(
+    req: ChatCompletionRequest,
+    backend: str,
+    provider: str,
+) -> ChatCompletionRequest:
+    """Strip the ``provider/`` routing prefix for native adapters.
+
+    Only the ``cullis_native`` backend talks to provider APIs directly, so
+    only it needs the bare model id (``claude-...`` rather than
+    ``anthropic/claude-...``). ``litellm_embedded`` and ``portkey`` route on
+    the prefix themselves and must keep it. Returns ``req`` unchanged when
+    there is nothing to strip, so the common bare-id path allocates nothing.
+    """
+    if backend != "cullis_native":
+        return req
+    bare = strip_provider_prefix(req.model, provider)
+    if bare == req.model:
+        return req
+    return req.model_copy(update={"model": bare})
+
+
 async def dispatch(
     *,
     req: ChatCompletionRequest,
@@ -200,6 +222,7 @@ async def dispatch(
     # (``litellm_embedded`` / ``portkey``) ignore the ``provider`` arg.
     provider, creds = await _resolve_provider_creds(req.model, settings)
     adapter = resolve_adapter(backend, provider)
+    req = _normalize_model_for_backend(req, backend, provider)
     ctx = DispatchContext(
         agent_id=agent_id,
         org_id=org_id,
@@ -234,6 +257,7 @@ async def dispatch_stream(
     backend = settings.ai_gateway_backend.lower()
     provider, creds = await _resolve_provider_creds(req.model, settings)
     adapter = resolve_adapter(backend, provider)
+    req = _normalize_model_for_backend(req, backend, provider)
     ctx = DispatchContext(
         agent_id=agent_id,
         org_id=org_id,
