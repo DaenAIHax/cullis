@@ -56,6 +56,21 @@ def _token_bucket_key(agent: InternalAgent) -> str:
     return f"principal:{agent.agent_id}:llm_tokens"
 
 
+def _gateway_error_detail(exc: GatewayError, trace_id: str) -> dict:
+    """Build the JSON error body for a caught :class:`GatewayError`.
+
+    Surfaces ``exc.hint`` — a caller-safe, self-authored explanation —
+    when the adapter set one, so the agent learns *why* the call failed
+    (e.g. an unrecognised model id) instead of a bare status code. Never
+    includes ``exc.detail``, which may carry upstream chatter and stays
+    in the audit row only (audit H-IO-2).
+    """
+    detail: dict = {"reason": exc.reason, "trace_id": trace_id}
+    if exc.hint:
+        detail["hint"] = exc.hint
+    return detail
+
+
 @router.post("/v1/chat/completions")
 @router.post("/v1/llm/chat")
 async def chat_completions(
@@ -204,7 +219,7 @@ async def chat_completions(
         )
         raise HTTPException(
             status_code=exc.status_code,
-            detail={"reason": exc.reason, "trace_id": trace_id},
+            detail=_gateway_error_detail(exc, trace_id),
         ) from exc
 
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -289,7 +304,7 @@ async def _handle_stream(
         )
         raise HTTPException(
             status_code=exc.status_code,
-            detail={"reason": exc.reason, "trace_id": trace_id},
+            detail=_gateway_error_detail(exc, trace_id),
         ) from exc
 
     # P1 Cullis Chat SSE backend — tool_call event emission.
@@ -414,11 +429,13 @@ async def _handle_stream(
             # provider chatter (timeouts, auth-key fragments, schema
             # mismatch text) back to the SSE consumer. Keep it in the
             # audit row below for ops triage; on the wire emit only the
-            # stable reason tag + trace id.
+            # stable reason tag + trace id, plus ``exc.hint`` when set —
+            # the hint is a self-authored, caller-safe line (no str(exc)),
+            # so it is fine on the wire and tells the consumer why.
             err_frame = {
                 "error": {
                     "type": exc.reason,
-                    "message": exc.reason,
+                    "message": exc.hint or exc.reason,
                     "trace_id": trace_id,
                 },
             }

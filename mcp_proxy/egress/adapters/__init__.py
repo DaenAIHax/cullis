@@ -73,15 +73,17 @@ def resolve_adapter(backend: str, provider: str | None = None) -> ProviderAdapte
         # customer asks; fall through to the explicit "no native
         # adapter" error so the dashboard surface gives a clear pointer
         # rather than a generic 501.
+        native_msg = (
+            f"The cullis_native backend has no adapter for provider "
+            f"{provider!r} yet. Pin "
+            f"MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded to keep "
+            f"using LiteLLM for this provider."
+        )
         raise GatewayError(
             501,
             f"provider_native_not_implemented:{provider or 'unknown'}",
-            detail=(
-                f"The cullis_native backend has no adapter for provider "
-                f"{provider!r} yet. Pin "
-                f"MCP_PROXY_AI_GATEWAY_BACKEND=litellm_embedded to keep "
-                f"using LiteLLM for this provider."
-            ),
+            detail=native_msg,
+            hint=native_msg,
         )
     raise GatewayError(
         501,

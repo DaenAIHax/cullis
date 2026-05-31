@@ -128,15 +128,80 @@ class StreamingDispatch:
 class GatewayError(Exception):
     """Raised on any non-recoverable failure talking to the gateway.
 
-    `status_code` is the HTTP code Mastio should return to its own
-    caller; `reason` is a short tag suitable for the audit row.
+    ``status_code`` is the HTTP code Mastio should return to its own
+    caller; ``reason`` is a short tag suitable for the audit row.
+
+    Two human-readable fields with deliberately different trust levels:
+
+    - ``detail`` is diagnostic. It may carry scrubbed-but-still-noisy
+      upstream chatter (``str(exc)`` of an httpx / SDK / pydantic error),
+      so it is for the audit row and operator logs only. The router never
+      puts it on the wire (audit H-IO-2).
+    - ``hint`` is a caller-facing, self-authored one-liner that contains
+      no exception text — only values Mastio already knows (the model id,
+      provider, status family) plus an actionable next step. Safe to
+      surface in the HTTP / SSE error response. ``None`` when the bare
+      ``reason`` tag already says everything useful.
     """
 
-    def __init__(self, status_code: int, reason: str, *, detail: str | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        reason: str,
+        *,
+        detail: str | None = None,
+        hint: str | None = None,
+    ):
         super().__init__(detail or reason)
         self.status_code = status_code
         self.reason = reason
         self.detail = detail
+        self.hint = hint
+
+
+# Reasons whose failure the caller can act on, mapped to a safe,
+# self-authored explanation. Keyed by the ``reason`` tag the adapters
+# emit. Anything not listed falls back to ``None`` (the reason tag is
+# enough). NOTHING here interpolates ``str(exc)`` — only the model id and
+# provider, which the caller already supplied / can see.
+def caller_hint(
+    reason: str,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+) -> str | None:
+    """Build a caller-safe hint for an upstream-mapped failure ``reason``.
+
+    Used by the native adapters when translating a provider SDK exception
+    into a :class:`GatewayError`, so the router can tell the agent *why*
+    the call failed (e.g. a bad model id) instead of a bare 404.
+    """
+    m = repr(model) if model else "the requested model"
+    p = repr(provider) if provider else "the provider"
+    if reason == "provider_not_found":
+        return (
+            f"{m} was not recognised by provider {p} (upstream 404). "
+            "Verify the model id is spelled correctly and supported by "
+            "that provider; use the bare id (e.g. 'claude-haiku-4-5-20251001'), "
+            "not a 'provider/model' form."
+        )
+    if reason == "provider_auth_failed":
+        return (
+            f"Provider {p} rejected the configured credentials (upstream 401). "
+            "Check the API key under Settings → AI Providers in the Mastio "
+            "dashboard."
+        )
+    if reason == "provider_permission_denied":
+        return (
+            f"Provider {p} denied access for {m} (upstream 403). The "
+            "configured key may lack access to this model."
+        )
+    if reason == "provider_bad_request":
+        return (
+            f"Provider {p} rejected the request as malformed (upstream 400). "
+            "Check the request parameters."
+        )
+    return None
 
 
 async def _resolve_provider_creds(
@@ -167,21 +232,14 @@ async def _resolve_provider_creds(
     if row is None:
         if provider == "anthropic" and settings.anthropic_api_key:
             return provider, {"api_key": settings.anthropic_api_key}
-        raise GatewayError(
-            503,
-            "provider_not_configured",
-            detail=(
-                f"Provider {provider!r} is not configured. "
-                "Add credentials in the Mastio dashboard "
-                "(Settings → AI Providers)."
-            ),
+        msg = (
+            f"Provider {provider!r} is not configured. "
+            "Add credentials in the Mastio dashboard (Settings → AI Providers)."
         )
+        raise GatewayError(503, "provider_not_configured", detail=msg, hint=msg)
     if not row["enabled"]:
-        raise GatewayError(
-            503,
-            "provider_disabled",
-            detail=f"Provider {provider!r} is configured but disabled.",
-        )
+        msg = f"Provider {provider!r} is configured but disabled."
+        raise GatewayError(503, "provider_disabled", detail=msg, hint=msg)
     return provider, dict(row["creds"] or {})
 
 
