@@ -308,6 +308,29 @@ def parse_provider_from_model(model: str) -> str:
     return "anthropic"
 
 
+def strip_provider_prefix(model: str, provider: str) -> str:
+    """Drop the ``provider/`` routing prefix before the upstream call.
+
+    The prefix in ids like ``anthropic/claude-...`` or ``openai/gpt-...``
+    exists only so :func:`parse_provider_from_model` can route the request
+    at the right provider. The upstream provider API never understands it:
+    the Anthropic Messages API 404s on ``anthropic/claude-...`` and only
+    knows the bare ``claude-...``. LiteLLM used to strip this for us; after
+    the native-adapter switch (ADR-039) the gateway must do it itself, or
+    the documented ``provider/model`` ids fail at dispatch.
+
+    Only a prefix that maps to the *already resolved* ``provider`` is
+    stripped, so a bare id that merely happens to contain a slash is left
+    untouched. Idempotent: a bare id (heuristic-routed) returns unchanged.
+    """
+    m = model.strip()
+    lower = m.lower()
+    for prefix, prov in _PROVIDER_PREFIXES:
+        if prov == provider and lower.startswith(prefix):
+            return m[len(prefix):]
+    return m
+
+
 # ── litellm kwargs translation ───────────────────────────────────────
 
 
