@@ -71,13 +71,16 @@ _STOP_REASON_MAP: dict[str, str] = {
 }
 
 
-def _map_anthropic_exception(exc: Exception) -> "GatewayError":
-    from mcp_proxy.egress.ai_gateway import GatewayError, scrub_secrets
+def _map_anthropic_exception(
+    exc: Exception, *, model: str | None = None
+) -> "GatewayError":
+    from mcp_proxy.egress.ai_gateway import GatewayError, caller_hint, scrub_secrets
 
     cls = type(exc).__name__
     status, reason = _ANTHROPIC_ERROR_MAP.get(cls, (502, "provider_unknown_error"))
     detail = scrub_secrets((str(exc) or cls)[:512])
-    return GatewayError(status, reason, detail=detail)
+    hint = caller_hint(reason, model=model, provider="anthropic")
+    return GatewayError(status, reason, detail=detail, hint=hint)
 
 
 # ── request translation: OpenAI → Anthropic ───────────────────────────
@@ -741,7 +744,7 @@ class AnthropicAdapter:
         try:
             message = await client.messages.create(**anthropic_kwargs)
         except Exception as exc:
-            gw_err = _map_anthropic_exception(exc)
+            gw_err = _map_anthropic_exception(exc, model=request_model)
             _log.warning(
                 "anthropic_native error agent=%s model=%s reason=%s detail=%s",
                 ctx.agent_id, request_model, gw_err.reason, gw_err.detail,
@@ -857,7 +860,7 @@ class AnthropicAdapter:
                 dispatch_obj.completion_tokens = acc.completion_tokens
                 yield final_chunk
             except Exception as exc:
-                raise _map_anthropic_exception(exc) from exc
+                raise _map_anthropic_exception(exc, model=request_model) from exc
             finally:
                 dispatch_obj.latency_ms = int(
                     (time.perf_counter() - dispatch_obj.started_at) * 1000

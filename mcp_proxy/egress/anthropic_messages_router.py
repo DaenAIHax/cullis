@@ -369,9 +369,14 @@ async def anthropic_messages(
                 "upstream_detail": exc.detail,
             },
         )
+        err_detail = {"reason": exc.reason, "trace_id": trace_id}
+        if exc.hint:
+            # Caller-safe, self-authored explanation (no str(exc)); see
+            # GatewayError.hint. Tells the agent why the call failed.
+            err_detail["hint"] = exc.hint
         raise HTTPException(
             status_code=exc.status_code,
-            detail={"reason": exc.reason, "trace_id": trace_id},
+            detail=err_detail,
         ) from exc
 
     latency_ms = int((time.perf_counter() - started) * 1000)

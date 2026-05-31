@@ -61,13 +61,16 @@ _OPENAI_ERROR_MAP: dict[str, tuple[int, str]] = {
 }
 
 
-def _map_openai_exception(exc: Exception) -> "GatewayError":
-    from mcp_proxy.egress.ai_gateway import GatewayError, scrub_secrets
+def _map_openai_exception(
+    exc: Exception, *, model: str | None = None
+) -> "GatewayError":
+    from mcp_proxy.egress.ai_gateway import GatewayError, caller_hint, scrub_secrets
 
     cls = type(exc).__name__
     status, reason = _OPENAI_ERROR_MAP.get(cls, (502, "provider_unknown_error"))
     detail = scrub_secrets((str(exc) or cls)[:512])
-    return GatewayError(status, reason, detail=detail)
+    hint = caller_hint(reason, model=model, provider="openai")
+    return GatewayError(status, reason, detail=detail, hint=hint)
 
 
 # ── client cache ──────────────────────────────────────────────────────
@@ -195,7 +198,7 @@ class OpenAIAdapter:
                 extra_headers=_cullis_headers(ctx),
             )
         except Exception as exc:
-            gw_err = _map_openai_exception(exc)
+            gw_err = _map_openai_exception(exc, model=model)
             _log.warning(
                 "openai_native error agent=%s model=%s reason=%s detail=%s",
                 ctx.agent_id, model, gw_err.reason, gw_err.detail,
@@ -289,7 +292,7 @@ class OpenAIAdapter:
                     extra_headers=_cullis_headers(ctx),
                 )
             except Exception as exc:
-                raise _map_openai_exception(exc) from exc
+                raise _map_openai_exception(exc, model=model) from exc
 
             try:
                 async for chunk in stream:
@@ -322,7 +325,7 @@ class OpenAIAdapter:
                             }
                     yield payload
             except Exception as exc:
-                raise _map_openai_exception(exc) from exc
+                raise _map_openai_exception(exc, model=model) from exc
             finally:
                 dispatch_obj.latency_ms = int(
                     (time.perf_counter() - dispatch_obj.started_at) * 1000
