@@ -133,10 +133,14 @@ services:
       MCP_PROXY_AUDIT_MERKLE_MIN_BATCH:         ${MCP_PROXY_AUDIT_MERKLE_MIN_BATCH:-2}
       MCP_PROXY_AUDIT_MERKLE_INTERVAL_SECONDS:  ${MCP_PROXY_AUDIT_MERKLE_INTERVAL_SECONDS:-15}
       MCP_PROXY_AUDIT_MERKLE_TSA_ENABLED:       ${MCP_PROXY_AUDIT_MERKLE_TSA_ENABLED:-true}
-      # AI gateway — point at the mock OpenAI-compatible endpoint on
-      # mock-tsa:2561. The Portkey backend respects ai_gateway_url
-      # (litellm_embedded uses provider SDKs directly).
-      MCP_PROXY_AI_GATEWAY_BACKEND:     ${MCP_PROXY_AI_GATEWAY_BACKEND:-portkey}
+      # AI gateway — default to the PRODUCT DEFAULT backend
+      # ``cullis_native`` (native provider SDKs) so the smoke covers the
+      # path bundles actually ship with. cullis_native ignores
+      # ai_gateway_url; the chat scenario seeds the per-provider
+      # api_base (→ mock-tsa:2561) into ai_provider_credentials instead.
+      # The legacy ``portkey`` backend is the one that respects
+      # ai_gateway_url; left here for the env override path only.
+      MCP_PROXY_AI_GATEWAY_BACKEND:     ${MCP_PROXY_AI_GATEWAY_BACKEND:-cullis_native}
       MCP_PROXY_AI_GATEWAY_URL:         ${MCP_PROXY_AI_GATEWAY_URL:-http://mock-tsa:2561}
       MCP_PROXY_ANTHROPIC_API_KEY:      ${MCP_PROXY_ANTHROPIC_API_KEY:-smoke-fake-anthropic-key}
       MCP_PROXY_AI_GATEWAY_REQUEST_TIMEOUT_S: ${MCP_PROXY_AI_GATEWAY_REQUEST_TIMEOUT_S:-5}

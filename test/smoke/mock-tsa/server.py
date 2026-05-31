@@ -278,7 +278,9 @@ async def _handle_chat(
         if method == "POST" and path in (
             "/v1/chat/completions", "/chat/completions",
         ):
-            # Parse the request just enough to echo the model name back.
+            # OpenAI-compatible shape — served for the legacy ``portkey``
+            # backend and the native OpenAI adapter (AsyncOpenAI posts
+            # here). Parse just enough to echo the model name back.
             try:
                 req = json.loads(body or b"{}")
                 model = req.get("model", "unknown")
@@ -302,6 +304,33 @@ async def _handle_chat(
                     "completion_tokens": 1,
                     "total_tokens": 2,
                 },
+            }
+            writer.write(_http_response(
+                "200 OK", json.dumps(payload).encode(),
+                b"application/json",
+            ))
+            return
+        if method == "POST" and path in ("/v1/messages", "/messages"):
+            # Anthropic Messages shape — served for the PRODUCT DEFAULT
+            # cullis_native backend. anthropic.AsyncAnthropic posts here
+            # (base_url + /v1/messages); the response must satisfy the
+            # SDK's Message model so AnthropicAdapter.translate_response
+            # can map it to the OpenAI shape the scenario asserts on
+            # (choices[0].message.content == "smoke-mock-ok").
+            try:
+                req = json.loads(body or b"{}")
+                model = req.get("model", "unknown")
+            except Exception:  # noqa: BLE001
+                model = "unknown"
+            payload = {
+                "id": "msg_smoke_" + secrets.token_hex(6),
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [{"type": "text", "text": "smoke-mock-ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
             }
             writer.write(_http_response(
                 "200 OK", json.dumps(payload).encode(),
