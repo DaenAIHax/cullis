@@ -2096,18 +2096,28 @@ class AgentManager:
         from mcp_proxy.config import get_settings
         from mcp_proxy.db import (
             _acquire_mastio_mint_lock,
+            _acquire_mastio_mint_lock_pg,
             _release_mastio_mint_lock,
+            _release_mastio_mint_lock_pg,
             _sqlite_path,
             deprecate_mastio_keys_by_kids,
             get_mastio_keys_active,
         )
 
+        # cullis#997 — serialise the leaf mint across the N uvicorn
+        # workers. SQLite uses a sidecar flock; Postgres (the pilot DB)
+        # uses a session-level pg advisory lock. Previously the Postgres
+        # path was unlocked → N>1 active rows → /v1/auth/token 503.
+        db_url = get_settings().database_url
         lock_fd: int | None = None
-        sqlite_path = _sqlite_path(get_settings().database_url)
+        pg_mint_lock = None
+        sqlite_path = _sqlite_path(db_url)
         if sqlite_path:
             lock_fd = await asyncio.to_thread(
                 _acquire_mastio_mint_lock, sqlite_path,
             )
+        else:
+            pg_mint_lock = await _acquire_mastio_mint_lock_pg(db_url)
         try:
             existing = await get_mastio_keys_active()
             if existing:
@@ -2205,6 +2215,8 @@ class AgentManager:
                 await asyncio.to_thread(
                     _release_mastio_mint_lock, lock_fd,
                 )
+            if pg_mint_lock is not None:
+                await _release_mastio_mint_lock_pg(pg_mint_lock)
 
     def _require_active(self) -> MastioKey:
         if self._active_key is None or self._mastio_ca_cert is None:
