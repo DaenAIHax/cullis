@@ -182,6 +182,46 @@ def _release_mastio_mint_lock(fd: int) -> None:
             pass
 
 
+async def _acquire_mastio_mint_lock_pg(url: str):
+    """Postgres analogue of :func:`_acquire_mastio_mint_lock`.
+
+    The SQLite flock above only serialises the cullis#997 leaf-mint
+    critical section on SQLite; Postgres deploys previously took the
+    racy branch (every worker minting an active row → N>1 active →
+    ``current_signer()`` raises → ``/v1/auth/token`` 503). The pilot DB
+    is Postgres + multi-worker, so close it here with a session-level
+    advisory lock (mirrors the ``pg_advisory_xact_lock(hashtext(
+    'mastio-rotate'))`` used by :func:`activate_staged_and_deprecate_old`
+    and the Alembic migration lock). A dedicated engine/connection so the
+    lock auto-releases when the session is disposed even if the explicit
+    unlock is skipped. Returns ``(engine, conn)`` to release, or ``None``
+    for non-Postgres URLs (SQLite uses the flock; in-memory is
+    single-process).
+    """
+    if not (url.startswith("postgresql") or "+asyncpg" in url):
+        return None
+    eng = create_async_engine(url, **_engine_kwargs(url))
+    conn = await eng.connect()
+    await conn.execute(text("SELECT pg_advisory_lock(hashtext('mastio-mint'))"))
+    return (eng, conn)
+
+
+async def _release_mastio_mint_lock_pg(handle) -> None:
+    """Release the advisory lock + dispose the dedicated session."""
+    if handle is None:
+        return
+    eng, conn = handle
+    try:
+        try:
+            await conn.execute(
+                text("SELECT pg_advisory_unlock(hashtext('mastio-mint'))"),
+            )
+        finally:
+            await conn.close()
+    finally:
+        await eng.dispose()
+
+
 def _run_migrations_sync_under_flock(url: str, sqlite_path: str) -> None:
     """Run ``_run_migrations_sync`` under an exclusive blocking flock.
 
