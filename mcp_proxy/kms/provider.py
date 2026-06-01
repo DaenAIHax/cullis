@@ -52,3 +52,12 @@ class KMSProvider(Protocol):
         replace any earlier value atomically.
         """
         ...
+
+    # NB: a provider MAY also implement ``store_org_ca_if_absent`` /
+    # ``store_intermediate_ca_if_absent`` (-> bool, True=won/False=lost)
+    # for an atomic create-only write that resolves the D-9 multi-worker
+    # boot race (Vault does, via KV v2 ``cas: 0``). They are intentionally
+    # NOT part of this runtime-checkable Protocol — adding ``...`` stubs
+    # here would make ``isinstance(local_provider, KMSProvider)`` in the
+    # factory fail for providers that don't implement them. ``AgentManager``
+    # probes via ``getattr`` and falls back to ``store_*`` + win-on-success.
