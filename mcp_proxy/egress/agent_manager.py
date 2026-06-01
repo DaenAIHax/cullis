@@ -77,6 +77,22 @@ def _strict_pki_enabled() -> bool:
     return raw in ("1", "true", "yes")
 
 
+def _pki_rekey_allowed() -> bool:
+    """``MCP_PROXY_ALLOW_PKI_REKEY=1`` — operator opt-out from the boot
+    orphan guard, for an INTENTIONAL CA re-key.
+
+    When set, the boot path is allowed to generate fresh Org Root /
+    Intermediate CA material even though enrolled agents already exist.
+    Every existing agent certificate then stops authenticating and all
+    agents must re-enroll, so this must be a deliberate operator
+    decision. Default OFF. Same accept-list as :func:`_strict_pki_enabled`
+    so a stray empty / malformed value cannot surprise an operator.
+    """
+    import os
+    raw = os.environ.get("MCP_PROXY_ALLOW_PKI_REKEY", "").strip().lower()
+    return raw in ("1", "true", "yes")
+
+
 def _priv_to_pem(key) -> str:
     return key.private_bytes(
         serialization.Encoding.PEM,
@@ -1777,6 +1793,81 @@ class AgentManager:
             "Migrated legacy mastio leaf into mastio_keys (kid=%s)", kid,
         )
 
+    async def ensure_ca_bootstrap_safe(
+        self, missing_label: str, restore_hint: str,
+    ) -> None:
+        """Fail-closed guard: refuse to bootstrap fresh CA material when
+        enrolled agents already exist.
+
+        The boot path generates a self-signed Org Root
+        (``generate_org_ca``) and mints a Mastio Intermediate
+        (``_mint_mastio_ca``) when the KMS reports no material. That is
+        correct on a FIRST boot (no agents), but catastrophic on a
+        PARTIAL disaster-restore or a lost Vault: agents enrolled earlier
+        hold leaf certs that chain to a CA which is now gone, so minting a
+        fresh one orphans the whole fleet — every agent mTLS handshake
+        then fails at the nginx boundary with a 400. The two states are
+        distinguished by whether any agent is enrolled:
+
+          * 0 enrolled agents -> genuine first boot, generation is
+            correct, return.
+          * >0 + ``MCP_PROXY_ALLOW_PKI_REKEY`` -> intentional re-key,
+            loud warning, return (every agent must re-enroll).
+          * >0 + production -> refuse to boot (``SystemExit``), so a
+            botched restore stops the deploy loudly instead of orphaning
+            the fleet silently. ``SystemExit`` derives from
+            ``BaseException``, so the broad ``except Exception`` around
+            ``ensure_mastio_identity`` in ``main.py`` does NOT swallow it.
+          * >0 + non-production -> loud warning, return (keeps
+            dev/test/sandbox booting; production is where the guarantee
+            matters).
+
+        ``missing_label`` names the absent material (for the log);
+        ``restore_hint`` is the remediation pointer (which secret to
+        restore). Mirrors the refuse-to-boot pattern of
+        ``_detect_legacy_ca_pathlen_zero`` + ``MCP_PROXY_STRICT_PKI``.
+        """
+        from mcp_proxy.db import count_enrolled_agents
+        try:
+            enrolled = await count_enrolled_agents()
+        except Exception as exc:  # noqa: BLE001 — DB not ready: can't assert, don't block boot
+            logger.warning(
+                "PKI bootstrap guard: agent count failed (%s) — proceeding "
+                "without the guard", exc,
+            )
+            return
+        if enrolled == 0:
+            return
+        if _pki_rekey_allowed():
+            logger.warning(
+                "PKI re-key authorised via MCP_PROXY_ALLOW_PKI_REKEY: %s is "
+                "absent but %d enrolled agent(s) exist. Minting fresh "
+                "material — every existing agent certificate will STOP "
+                "authenticating and all agents must re-enroll.",
+                missing_label, enrolled,
+            )
+            return
+        from mcp_proxy.config import get_settings
+        if get_settings().environment == "production":
+            logger.critical(
+                "PKI INCOHERENCE — refusing to boot. %s is absent but %d "
+                "enrolled agent(s) exist. Generating fresh CA material would "
+                "orphan every existing agent certificate (mTLS would fail for "
+                "the entire fleet). This is the signature of a partial "
+                "disaster-restore: Postgres data was restored but the CA "
+                "material in the KMS was not. Remediation: %s and restart. "
+                "To re-key intentionally instead (all agents re-enroll), set "
+                "MCP_PROXY_ALLOW_PKI_REKEY=1.",
+                missing_label, enrolled, restore_hint,
+            )
+            raise SystemExit(1)
+        logger.warning(
+            "PKI INCOHERENCE (non-production): %s is absent but %d enrolled "
+            "agent(s) exist — minting fresh material anyway. In production "
+            "this refuses to boot. Remediation if unintended: %s.",
+            missing_label, enrolled, restore_hint,
+        )
+
     async def _generate_mastio_identity(self) -> None:
         """Mint whichever Mastio pieces are missing — CA and/or leaf.
 
@@ -1787,6 +1878,15 @@ class AgentManager:
         now = datetime.now(timezone.utc)
 
         if self._mastio_ca_key is None or self._mastio_ca_cert is None:
+            # PKI bootstrap guard — see ``ensure_ca_bootstrap_safe``. Refuse
+            # (in production) to mint a fresh Intermediate when enrolled
+            # agents exist but the intermediate-ca material is gone, which
+            # would orphan every agent leaf (the DR-1 partial-restore case).
+            await self.ensure_ca_bootstrap_safe(
+                "the Mastio Intermediate CA",
+                "restore the intermediate-ca secret "
+                "(e.g. Vault secret/cullis-mastio/intermediate-ca)",
+            )
             await self._mint_mastio_ca(now)
 
         if self._active_key is None:
