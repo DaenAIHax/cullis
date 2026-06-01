@@ -44,11 +44,31 @@ services:
     networks:
       - proxy_net
 
+  # DPoP JTI + login-challenge nonce store, shared across the uvicorn
+  # workers (the bundle runs 4 by default). In production the in-memory
+  # fallback is refused — cross-worker replay of login nonces / DPoP jti
+  # (audit L1-M4 / U-DD-1) — so Redis is required there; development
+  # tolerates its absence. Ephemeral: no volume, no persistence, no backup.
+  redis:
+    image: redis:7-alpine
+    container_name: cullis-mastio-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - proxy_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   mcp-proxy:
     image: ghcr.io/cullis-security/cullis-mastio:${CULLIS_MASTIO_VERSION:-latest}
     depends_on:
       init-permissions:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     # ADR-014 — no host port publish. The Mastio listens on 9100 only
     # on proxy_net; the mastio-nginx sidecar below publishes 9443.
     expose:
@@ -104,6 +124,10 @@ services:
       # MCP_PROXY_DATABASE_URL stays as a backward-compat alias.
       MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
       PROXY_DB_URL:                ${PROXY_DB_URL:-}
+      # DPoP JTI + login-challenge nonce store (the ``redis`` service
+      # above). Required in production (the in-memory fallback is refused
+      # for the multi-worker default); dev tolerates an empty value.
+      MCP_PROXY_REDIS_URL:         ${MCP_PROXY_REDIS_URL:-redis://redis:6379/0}
       # Shared secret for the policy-bridge integration endpoints
       # (/v1/data/cullis/policy and /v1/integrations/cloudevents).
       # Empty by default — the endpoints accept unsigned calls during
