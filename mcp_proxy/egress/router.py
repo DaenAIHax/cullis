@@ -6,7 +6,7 @@ keys, DPoP, or any cryptography directly.
 All endpoints require client-cert authentication (via
 ``get_agent_from_dpop_client_cert``, ADR-014). That dep verifies the
 cert nginx forwarded in ``X-SSL-Client-Cert`` against
-``internal_agents.cert_pem`` and, when ``CULLIS_EGRESS_DPOP_MODE`` is
+``internal_agents.cert_pem`` and, when ``MCP_PROXY_EGRESS_DPOP_MODE`` is
 ``optional`` or ``required``, additionally validates a DPoP proof from
 the ``DPoP`` header pinned to the agent's registered ``dpop_jkt``.
 """
