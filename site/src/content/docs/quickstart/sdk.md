@@ -53,6 +53,8 @@ The agent's runtime identity is **three files**:
 
 **A note on `capabilities`.** Free-form strings. There is no closed vocabulary. The convention is `<area>.<verb>` (e.g. `kyc.read`, `kyc.submit`, `portfolio.place_order`) but Mastio does not validate the syntax at enrollment. What matters is that the strings here **match exactly** the capabilities required by the MCP tools the agent will call — Mastio's capability gate compares them literally when a tool is dispatched. Each MCP tool declares its required capability in its server manifest; ask the team that operates the MCP server for the list, or list them at runtime with `client.list_mcp_tools()`.
 
+**Reserved built-in capabilities.** A few capability strings are *not* free-form: Mastio matches them literally to gate its own built-in endpoints. The one you almost always need is **`llm.chat`**, required by every chat completion (`/v1/chat/completions`, `/v1/llm/chat`, `/v1/messages`) since Mastio v0.6.4 — an agent enrolled **without** it is denied `403 capability_missing` before any provider dispatch, so the [Chat completion](chat-completion) page will not work for it. The others are `mcp.tools.list` (MCP tool discovery), `mcp.tools.call` (MCP tool invocation), and `http.get` (the built-in HTTP-GET egress tool). **Include `llm.chat` in any agent that will make LLM calls** — the examples below do.
+
 **A note on `X-Admin-Secret`.** It's the Mastio operator secret. First-boot wizard bcrypts it into Vault; the env var (`MCP_PROXY_ADMIN_SECRET`) is consulted only when the hash is empty. Rotation is via dashboard / `proxy.env` rotate + restart. Full details: [Configuration reference](../reference/configuration) (search `MCP_PROXY_ADMIN_SECRET`) and [Runbook § Admin lockout](../operate/runbook#7-admin-lockout) for the recovery flow.
 
 Pick one of the three provisioning paths depending on whether your org already has a PKI.
@@ -71,7 +73,7 @@ curl -X POST https://mastio.acme.corp/v1/admin/agents \
   -d '{
         "agent_name": "kyc-screener",
         "display_name": "KYC Screener",
-        "capabilities": ["kyc.read", "kyc.submit"]
+        "capabilities": ["llm.chat", "kyc.read", "kyc.submit"]
       }' \
   > kyc-screener.json
 
@@ -116,7 +118,7 @@ CullisClient.enroll_via_byoca(
     display_name="KYC Screener",
     cert_pem=cert_pem,
     private_key_pem=private_key_pem,
-    capabilities=["kyc.read", "kyc.submit"],
+    capabilities=["llm.chat", "kyc.read", "kyc.submit"],
     persist_to="/etc/cullis/agents/kyc/",              # writes cert.pem + agent-key.pem + dpop.jwk
 )
 ```
