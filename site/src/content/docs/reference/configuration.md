@@ -58,7 +58,7 @@ Required variables in bold. Safe defaults mean "OK for sandbox / eval"; producti
 | Variable | Default | Purpose |
 |---|---|---|
 | `MCP_PROXY_STRICT_PKI` | `false` | `true` refuses to boot on a legacy Org CA with `pathLen=0`. See [Apply updates § Remediate a legacy Org CA](../operate/apply-updates#worked-example--org-ca-pathlen0). |
-| `MCP_PROXY_EGRESS_DPOP_MODE` | `bound` | `bound` or `none`. `none` disables DPoP on egress from the Mastio — only for legacy targets that can't verify DPoP. |
+| `MCP_PROXY_EGRESS_DPOP_MODE` | `optional` | `off` / `optional` / `required`. Whether the Mastio requires an RFC 9449 DPoP key-possession proof (bound to the agent's registered `dpop_jkt`) on `/v1/egress/*`. `required` refuses cert-only requests with `401`; set it for zero-trust / regulated deploys. |
 | `MCP_PROXY_PDP_URL` | *(none)* | Policy Decision Point webhook. Set to wire an external OPA / custom PDP. |
 | `CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS` | `300` | Minimum seconds between consecutive signing-key rotations. Rate-limits accidental back-to-back rotates. |
 
@@ -69,7 +69,6 @@ Required variables in bold. Safe defaults mean "OK for sandbox / eval"; producti
 | `CULLIS_PROXY_URL` | *(none)* | Default Mastio URL when `CullisClient.from_identity_dir(...)` is called without `mastio_url`. |
 | `CULLIS_ORG_ID` | *(none)* | Default org slug for SDK constructors. |
 | `CULLIS_AGENT_ID` | *(none)* | Default agent id. |
-| `CULLIS_EGRESS_DPOP_MODE` | `bound` | Same semantics as `MCP_PROXY_EGRESS_DPOP_MODE`, read SDK-side. |
 | `CULLIS_EXTENSION_URI` | `cullis-trust/v1` | A2A extension URI the SDK advertises. Override only when interop-testing against a non-default registry. |
 
 ## Environment templates
