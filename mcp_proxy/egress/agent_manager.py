@@ -1967,11 +1967,19 @@ class AgentManager:
             )
             return wrote_key and wrote_cert
 
-        # KMS providers (Vault / AWS-KMS / Azure-KV / etc) implement
-        # their own atomic-insert semantics under
-        # ``store_intermediate_ca``; if the provider doesn't expose a
-        # winner signal we assume win-on-success and leave the
-        # race-safe behaviour to the provider plugin.
+        # KMS providers that expose an atomic create-only variant
+        # (``store_intermediate_ca_if_absent`` — Vault via KV v2 cas:0)
+        # return whether THIS worker won the boot race, so the loser
+        # adopts the winner's pair instead of minting its own Intermediate
+        # under its own root. Providers without it keep the legacy
+        # win-on-success contract (race-safety left to the plugin). Closes
+        # the D-9 multi-worker split-brain that broke agent mTLS under
+        # ``kms_backend=vault`` (the leaf chain failed ECDSA verification
+        # at the nginx boundary because each worker signed off a different
+        # Intermediate).
+        store_if_absent = getattr(provider, "store_intermediate_ca_if_absent", None)
+        if store_if_absent is not None:
+            return await store_if_absent(key_pem, cert_pem)
         await provider.store_intermediate_ca(key_pem, cert_pem)
         return True
 
@@ -2031,16 +2039,22 @@ class AgentManager:
                 await set_config("org_ca_cert", winning["cert"])
             return False
 
-        # KMS providers (Vault / AWS-KMS / Azure-KV / etc) implement
-        # their own atomic-insert semantics under ``store_org_ca``;
-        # we assume win-on-success for the encrypted path and leave
-        # the race-safe behaviour to the provider plugin. The cert is
-        # still written race-safe to proxy_config for the back-compat
-        # readers.
-        await provider.store_org_ca(key_pem, cert_pem)
+        # KMS providers that expose an atomic create-only variant
+        # (``store_org_ca_if_absent`` — Vault via KV v2 cas:0) return
+        # whether THIS worker won the boot race, so the loser adopts the
+        # winner's pair instead of signing the Intermediate (and every
+        # agent leaf) off its own root. Providers without it keep the
+        # legacy win-on-success contract. The cert is still written
+        # race-safe to proxy_config for the back-compat readers.
+        store_if_absent = getattr(provider, "store_org_ca_if_absent", None)
+        if store_if_absent is not None:
+            won = await store_if_absent(key_pem, cert_pem)
+        else:
+            await provider.store_org_ca(key_pem, cert_pem)
+            won = True
         from mcp_proxy.db import set_config_if_absent
         await set_config_if_absent("org_ca_cert", cert_pem)
-        return True
+        return won
 
     async def _mint_mastio_leaf(self, now: datetime) -> None:
         """Mint a fresh EC P-256 leaf under the existing intermediate CA.

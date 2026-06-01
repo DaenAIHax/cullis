@@ -250,3 +250,60 @@ class VaultKMSProvider:
                 )
 
         _log.info("KMS[vault] %s stored to %s", label, path)
+
+    # ── Race-safe create-only (D-9 multi-worker boot) ───────────────────
+    # ``_store_path`` above is a read-modify-write whose first-write branch
+    # carries no ``cas`` constraint, so N uvicorn workers booting in
+    # parallel each create their own Org CA / Intermediate and last-write
+    # wins — leaving every worker with a different in-memory pair and the
+    # agent cert chain inconsistent (ECDSA verify failure at the nginx
+    # mTLS boundary). These ``*_if_absent`` variants do an atomic
+    # create-only write (KV v2 ``cas: 0`` = succeed only if the key does
+    # not yet exist) and return whether THIS worker won, so the caller can
+    # adopt the winner's pair instead of signing leaves off its own.
+
+    async def store_org_ca_if_absent(self, key_pem: str, cert_pem: str) -> bool:
+        """Create the Org CA keypair only if absent. True = won, False = lost."""
+        return await self._create_only(self._org_ca_path, key_pem, cert_pem, "Org CA")
+
+    async def store_intermediate_ca_if_absent(self, key_pem: str, cert_pem: str) -> bool:
+        """Create the Intermediate keypair only if absent. True = won, False = lost."""
+        return await self._create_only(
+            self._intermediate_ca_path, key_pem, cert_pem, "Intermediate CA",
+        )
+
+    async def _create_only(
+        self, path: str, key_pem: str, cert_pem: str, label: str,
+    ) -> bool:
+        url = f"/v1/{path}"
+        # cas:0 — Vault KV v2 writes only when the key has no current
+        # version, i.e. atomic create. A concurrent winner makes this
+        # return HTTP 400 (check-and-set mismatch) → we lost the race.
+        body = {
+            "options": {"cas": 0},
+            "data": {"key_pem": key_pem, "cert_pem": cert_pem},
+        }
+        async with self._client() as client:
+            try:
+                resp = await client.post(url, json=body)
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Vault create-only POST failed for {path} "
+                    f"({label}): {exc}",
+                ) from exc
+        if resp.status_code in (200, 204):
+            _log.info("KMS[vault] %s create-only WON (cas=0) at %s", label, path)
+            return True
+        # 400 with a check-and-set / cas message means the key already
+        # exists (a sibling worker won) — a clean loss, not an error.
+        body_text = (resp.text or "").lower()
+        if resp.status_code == 400 and ("check-and-set" in body_text or "cas" in body_text):
+            _log.info(
+                "KMS[vault] %s create-only LOST (already exists) at %s — "
+                "caller adopts the winning pair", label, path,
+            )
+            return False
+        raise RuntimeError(
+            f"Vault returned HTTP {resp.status_code} on create-only "
+            f"{path} ({label}): {resp.text[:200]}",
+        )
