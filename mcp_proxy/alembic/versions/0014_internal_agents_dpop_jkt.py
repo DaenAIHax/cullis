@@ -11,7 +11,7 @@ keypair (RFC 7638 JWK thumbprint). Without the binding, a leaked
 surface (audit F-B-11, issue #181).
 
 Nullable on purpose — Phase 3 wires the SDK to send the JWK at
-enrollment time and Phase 6 flips ``CULLIS_EGRESS_DPOP_MODE`` to
+enrollment time and Phase 6 flips ``MCP_PROXY_EGRESS_DPOP_MODE`` to
 ``required``. Until then, legacy bearer auth keeps working for any
 row with NULL ``dpop_jkt``. See
 ``mcp_proxy/auth/dpop_api_key.get_agent_from_dpop_api_key`` for the

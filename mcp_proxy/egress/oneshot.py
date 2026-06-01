@@ -13,7 +13,7 @@ Phase 2 wires them to the broker.
 
 Auth mirrors the rest of ``/v1/egress/*`` — mTLS client cert via
 ``get_agent_from_dpop_client_cert`` (ADR-014: cert at TLS handshake +
-DPoP proof when ``CULLIS_EGRESS_DPOP_MODE`` is ``optional`` or
+DPoP proof when ``MCP_PROXY_EGRESS_DPOP_MODE`` is ``optional`` or
 ``required``). Storage reuses the existing
 ``local_messages`` queue with ``session_id=NULL`` and ``is_oneshot=1``
 (see migration 0008). Audit is written through ``append_local_audit``

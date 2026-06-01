@@ -225,7 +225,7 @@ services:
       PROXY_TRANSPORT_INTRA_ORG:   ${PROXY_TRANSPORT_INTRA_ORG:-}
       PROXY_EGRESS_INSPECTION_ENABLED: ${PROXY_EGRESS_INSPECTION_ENABLED:-}
       PROXY_FEDERATION_SYNC:       ${PROXY_FEDERATION_SYNC:-}
-      CULLIS_EGRESS_DPOP_MODE:     ${CULLIS_EGRESS_DPOP_MODE:-}
+      MCP_PROXY_EGRESS_DPOP_MODE:     ${MCP_PROXY_EGRESS_DPOP_MODE:-}
     volumes:
       # ADR-030 — bind mount on the host so /data sits next to deploy.sh
       # (./data/mcp_proxy.db). Replaces the legacy ``mcp_proxy_data``

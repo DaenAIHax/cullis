@@ -160,7 +160,7 @@ def _resolve_mode() -> str:
     mode = (get_settings().egress_dpop_mode or "off").strip().lower()
     if mode not in _MODES:
         _log.warning(
-            "Unknown CULLIS_EGRESS_DPOP_MODE=%r — falling back to 'off'. "
+            "Unknown MCP_PROXY_EGRESS_DPOP_MODE=%r — falling back to 'off'. "
             "Valid values: off | optional | required.",
             mode,
         )
@@ -180,7 +180,7 @@ async def get_agent_from_dpop_client_cert(request: Request) -> InternalAgent:
       1. ADR-012 LOCAL_TOKEN short-circuit (cross-org Bearer JWT).
       2. ``get_agent_from_client_cert`` — identity from TLS-layer cert,
          pinned against ``internal_agents.cert_pem``, rate-limited.
-      3. When ``CULLIS_EGRESS_DPOP_MODE`` is ``optional`` or
+      3. When ``MCP_PROXY_EGRESS_DPOP_MODE`` is ``optional`` or
          ``required``, verify a DPoP proof from the ``DPoP`` header:
          htm/htu match, jti consumed once, iat in window, jkt matches
          the agent's registered ``dpop_jkt`` (when stored).

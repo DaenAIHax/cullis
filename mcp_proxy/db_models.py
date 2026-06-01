@@ -57,7 +57,7 @@ class InternalAgent(Base):
     # keypair. NULL during the Phase 2–6 grace period; populated by the
     # Phase 3 enrollment flow and checked by
     # ``mcp_proxy.auth.dpop_api_key.get_agent_from_dpop_api_key`` when
-    # ``CULLIS_EGRESS_DPOP_MODE`` is ``optional`` or ``required``.
+    # ``MCP_PROXY_EGRESS_DPOP_MODE`` is ``optional`` or ``required``.
     dpop_jkt = Column(Text, nullable=True)
     # ADR-011 Phase 1 — enrollment metadata. ``enrollment_method`` is one of
     # ``admin`` / ``connector`` / ``byoca`` / ``spiffe`` and records how the
