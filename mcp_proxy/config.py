@@ -890,6 +890,29 @@ class ProxySettings(BaseSettings):
             )
         return self
 
+    def ca_bootstrap_enabled(self) -> bool:
+        """Whether the boot path may auto-generate a fresh Org CA when none
+        is loaded (standalone first-boot).
+
+        DR-1 hardening — per-environment default. In PRODUCTION the
+        first-time generation of the org's crown-jewel Org CA must be an
+        explicit operator action, never an unattended side effect of a
+        restart that found no CA (a botched restore must not silently
+        re-bootstrap a new identity). So this is False in production
+        unless the operator opts in with ``MCP_PROXY_ALLOW_CA_BOOTSTRAP``.
+        In dev/test it defaults True so zero-config standalone keeps
+        working. An explicit value (``1``/``true``/``yes`` or
+        ``0``/``false``/``no``) always wins; an unset or empty value
+        (``${FOO:-}`` compose passthrough) falls back to the
+        per-environment default.
+        """
+        raw = os.environ.get("MCP_PROXY_ALLOW_CA_BOOTSTRAP", "").strip().lower()
+        if raw in ("1", "true", "yes"):
+            return True
+        if raw in ("0", "false", "no"):
+            return False
+        return self.environment != "production"
+
     @model_validator(mode="after")
     def _apply_proxy_db_url_override(self):
         override = os.environ.get("PROXY_DB_URL")

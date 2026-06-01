@@ -314,6 +314,30 @@ async def lifespan(app: FastAPI):
     # admin then copies this value into the broker's attach-ca invite so
     # future uplinks pin the same identity across proxy restarts.
     if settings.standalone and not agent_mgr.ca_loaded:
+        # PKI bootstrap guard — refuse to mint a fresh Org Root when
+        # enrolled agents already exist (the signature of a partial
+        # disaster-restore / lost Vault). Minting a new root would orphan
+        # every agent leaf. A genuine first boot (no agents) proceeds.
+        # See ``AgentManager.ensure_ca_bootstrap_safe``.
+        await agent_mgr.ensure_ca_bootstrap_safe(
+            "the Org Root CA",
+            "restore the org-ca secret (e.g. Vault secret/cullis-mastio/org-ca)",
+        )
+        # Explicit-provisioning gate (DR-1 / F2) — in production the
+        # first-time generation of the org's crown-jewel Org CA must be an
+        # explicit operator action, never an unattended side effect of a
+        # restart that found no CA. Dev/test auto-bootstraps so zero-config
+        # standalone keeps working. See ``ProxySettings.ca_bootstrap_enabled``.
+        if not settings.ca_bootstrap_enabled():
+            _log.critical(
+                "No Org CA is loaded and CA bootstrap is disabled "
+                "(production default). First-time CA provisioning must be "
+                "explicit: set MCP_PROXY_ALLOW_CA_BOOTSTRAP=1 to mint a fresh "
+                "self-signed Org CA on this boot, or restore existing CA "
+                "material (org-ca + intermediate-ca in the KMS) and restart. "
+                "Refusing to boot."
+            )
+            raise SystemExit(1)
         derive = not org_id  # derive only when the operator didn't pick one
         await agent_mgr.generate_org_ca(derive_org_id=derive)
         if derive:

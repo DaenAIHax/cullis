@@ -263,6 +263,7 @@ if [[ "$MODE" == "prod" ]]; then
     else
         warn "Production needs a Vault: KMS_BACKEND=vault custodies the Org CA private key. Set MCP_PROXY_VAULT_ADDR + MCP_PROXY_VAULT_TOKEN in ${OUT} before ./deploy.sh --prod."
     fi
+    warn "First-boot CA provisioning is explicit in production (DR safety): the Org CA is the org's crown jewel, so an unattended restart that finds no CA refuses to boot rather than silently minting a new one. For the FIRST ./deploy.sh --prod set MCP_PROXY_ALLOW_CA_BOOTSTRAP=1 in ${OUT} to mint the initial Org CA, then remove it after the first successful boot so a partial restore cannot re-bootstrap a fresh identity."
 fi
 
 ok "Wrote ${OUT}"

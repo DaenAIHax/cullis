@@ -14,6 +14,10 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+### Security
+
+- **Refuse-to-boot guards against PKI material loss** (DR-1). A disaster-recovery drill on a faithful prod-shape stack (Vault + Postgres + 4 workers + production) found that a partial restore (Postgres data restored but Vault CA material not) made the boot mint fresh CA material and silently orphan every enrolled agent's mTLS identity (mTLS 400 for the whole fleet). Two boot-time safety nets close it: (1) the boot refuses, in production, to generate an Org Root or mint a Mastio Intermediate when CA material is absent but enrolled agents already exist, rather than orphaning the fleet (`MCP_PROXY_ALLOW_PKI_REKEY` opts into an intentional re-key; non-production warns and proceeds); (2) first-time Org CA provisioning in production is now explicit (`MCP_PROXY_ALLOW_CA_BOOTSTRAP`), while dev/test keeps zero-config auto-bootstrap. The bundle's `generate-proxy-env --prod` warns about the explicit first-boot provisioning step.
+
 ## [v0.6.4] — Capability enforcement, opaque-404 fixes, cold-reader doc hardening — 2026-06-01
 
 Minor on top of v0.6.3, accumulating two-plus weeks of polish. The headline is **real capability enforcement** on the chat and MCP-discovery surfaces (previously decorative), plus the close-out of the opaque-404 the flag-mcp demo surfaced, plus a sweep of SDK-quickstart fixes found by fresh-install cold-reads. The whole release was dogfooded end-to-end on `mastio-demo` against a fresh install (deploy / mint / `pip install` / login / live Anthropic chat / audit chain) with zero workarounds.

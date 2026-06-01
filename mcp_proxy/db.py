@@ -897,6 +897,27 @@ async def list_agents() -> list[dict]:
         return [_agent_row_to_dict(row) for row in result.mappings().all()]
 
 
+async def count_enrolled_agents() -> int:
+    """Number of rows in ``internal_agents`` (enrolled agents, any state).
+
+    Used by the boot-time PKI bootstrap guard
+    (``AgentManager.ensure_ca_bootstrap_safe``). A non-zero count means
+    this is NOT a first boot: agents have been enrolled and hold leaf
+    certs that chain to the existing CA. If the CA material is then
+    found absent, minting a fresh one would orphan those certs, so the
+    guard refuses to boot in production. Counts all rows (not just
+    ``is_active``) so even revoked-only state is treated as "not a
+    clean first boot", and avoids a boolean predicate that differs
+    between Postgres and SQLite.
+    """
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("SELECT COUNT(*) AS n FROM internal_agents")
+        )
+        row = result.mappings().first()
+        return int(row["n"]) if row else 0
+
+
 async def list_user_principals() -> list[dict]:
     """List user principals registered on this Mastio.
 

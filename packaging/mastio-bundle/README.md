@@ -96,6 +96,7 @@ and [Postgres pilot](https://cullis.io/docs/operate/postgres-pilot).
 | Agent `SSL: CERTIFICATE_VERIFY_FAILED` / `hostname doesn't match` | Add the hostname to `MCP_PROXY_NGINX_SAN` (e.g. `mastio.acme.local,mastio.local,localhost`) and `./deploy.sh --pull` to re-mint the cert. |
 | `getaddrinfo failed` / `Name or service not known` | The public-URL hostname must resolve to this host's IP from the agent's machine (corporate DNS, public A record, or `/etc/hosts`). |
 | `Bind for 0.0.0.0:9443 failed: port is already allocated` | Set `MCP_PROXY_PORT=9444` in `proxy.env`, and update `MCP_PROXY_PROXY_PUBLIC_URL` to the same port. |
+| `Refusing to boot` / `CA bootstrap is disabled (production default)` | First standalone `--prod` boot only: set `MCP_PROXY_ALLOW_CA_BOOTSTRAP=1` in `proxy.env`, then `./deploy.sh --prod` to mint the initial Org CA. Remove it after the first successful boot so a partial restore can't silently re-mint the CA and orphan enrolled agents. |
 
 Full incident playbooks: [Runbook](https://cullis.io/docs/operate/runbook).
 

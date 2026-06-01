@@ -282,6 +282,11 @@ services:
       PROXY_EGRESS_INSPECTION_ENABLED: ${PROXY_EGRESS_INSPECTION_ENABLED:-}
       PROXY_FEDERATION_SYNC:       ${PROXY_FEDERATION_SYNC:-}
       MCP_PROXY_EGRESS_DPOP_MODE:     ${MCP_PROXY_EGRESS_DPOP_MODE:-}
+      # DR-1 — first-boot CA provisioning gate (F2). Unset/empty in dev
+      # (auto-bootstrap); the operator sets =1 for the first standalone
+      # --prod boot to mint the Org CA, then removes it to seal so a
+      # partial restore can't re-bootstrap. See ca_bootstrap_enabled.
+      MCP_PROXY_ALLOW_CA_BOOTSTRAP:   ${MCP_PROXY_ALLOW_CA_BOOTSTRAP:-}
     volumes:
       # ADR-030 — bind mount on the host so /data sits next to deploy.sh
       # (./data/mcp_proxy.db). Replaces the legacy ``mcp_proxy_data``
