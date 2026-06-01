@@ -50,6 +50,7 @@ def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MCP_PROXY_DB_ENCRYPTION_KEY", _DB_ENC_OK)
     monkeypatch.setenv("MCP_PROXY_WEBAUTHN_ENFORCEMENT", "required")
     monkeypatch.setenv("MCP_PROXY_WEBAUTHN_RP_ID", "mastio.example")
+    monkeypatch.setenv("MCP_PROXY_EGRESS_DPOP_MODE", "required")  # F-B-11
     monkeypatch.setenv("MCP_PROXY_PDP_WEBHOOK_HMAC_SECRET", _PDP_HMAC_OK)
     monkeypatch.setenv("MCP_PROXY_AUDIT_FAIL_DENY", "true")
     monkeypatch.setenv("MCP_PROXY_AUDIT_CHAIN_DISABLED", "true")

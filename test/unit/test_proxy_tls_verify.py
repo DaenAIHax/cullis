@@ -44,6 +44,10 @@ def _prod_settings(**overrides) -> ProxySettings:
         # in TLS-focused tests comes from the TLS knob under test, not
         # from KMS.
         kms_backend="vault",
+        # F-E-03 — prod refuses secret_backend=env; pin vault so the
+        # helper genuinely passes every gate and a SystemExit isolates the
+        # knob under test. The env-backend negative test overrides this.
+        secret_backend="vault",
         # Audit F-B-10 — prod now refuses empty signing key.
         dashboard_signing_key="strong-signing-key",
         # Three-tier PKI hardening (audit 2026-05-18) — prod now
@@ -53,6 +57,7 @@ def _prod_settings(**overrides) -> ProxySettings:
         pdp_webhook_hmac_secret="strong-pdp-hmac-secret",  # F-A-202
         webauthn_enforcement="required",  # F-A-205
         webauthn_rp_id="mastio.example.com",
+        egress_dpop_mode="required",  # F-B-11
     )
     base.update(overrides)
     return ProxySettings(**base)
@@ -102,6 +107,46 @@ def test_validate_config_refuses_env_backend_in_prod():
     settings = _prod_settings(secret_backend="env", vault_verify_tls=True)
     with pytest.raises(SystemExit):
         validate_config(settings)
+
+
+# ── F-B-11 egress DPoP enforcement gate ──────────────────────────────
+
+def test_validate_config_rejects_prod_with_egress_dpop_optional():
+    """Production must not boot on the quickstart ``optional`` posture:
+    cert-only egress with no RFC 9449 proof is accepted (F-B-11)."""
+    settings = _prod_settings(egress_dpop_mode="optional")
+    with pytest.raises(SystemExit):
+        validate_config(settings)
+
+
+def test_validate_config_rejects_prod_with_egress_dpop_off():
+    settings = _prod_settings(egress_dpop_mode="off")
+    with pytest.raises(SystemExit):
+        validate_config(settings)
+
+
+def test_validate_config_allows_prod_with_egress_dpop_required():
+    # Must not raise — _prod_settings already pins required, but be explicit.
+    settings = _prod_settings(egress_dpop_mode="required")
+    validate_config(settings)
+
+
+def test_validate_config_allows_prod_weak_egress_dpop_with_explicit_optin(monkeypatch):
+    """The agent-enrollment migration window may run weaker, but only when
+    the operator consciously opts in (mirrors WEBAUTHN_WARN_INSECURE_OK)."""
+    monkeypatch.setenv("MCP_PROXY_EGRESS_DPOP_INSECURE_OK", "true")
+    settings = _prod_settings(egress_dpop_mode="optional")
+    # Must not raise: explicit opt-in to the weaker migration-window posture.
+    validate_config(settings)
+
+
+def test_validate_config_dev_tolerates_optional_egress_dpop():
+    """Development keeps the quickstart ``optional`` default with no opt-in."""
+    settings = ProxySettings(
+        environment="development",
+        egress_dpop_mode="optional",
+    )
+    validate_config(settings)
 
 
 def test_validate_config_dev_tolerates_disabled_verify():

@@ -1186,6 +1186,40 @@ def validate_config(settings: ProxySettings) -> None:
                 )
                 raise SystemExit(1)
 
+        # F-B-11 (audit 2026-06-01). Egress DPoP enforcement mode.
+        # ``egress_dpop_mode`` defaults to ``optional`` — the quickstart
+        # posture, where a client-cert egress request that carries no DPoP
+        # proof is still accepted. In production that means a leaked or
+        # replayed agent client cert reaches the upstream LLM with no RFC
+        # 9449 key-possession proof bound to the agent's ``dpop_jkt``. A
+        # zero-trust / regulated deploy must run ``required`` (every
+        # ``/v1/egress/*`` call carries a valid proof; cert-only gets 401).
+        # The only legitimate weaker posture is the agent-enrollment
+        # migration window (rows with NULL ``dpop_jkt`` predating ADR-011
+        # Phase 3); declare it explicitly and track a sunset date, mirroring
+        # the WebAuthn opt-in above. (Phase 6 of the rollout flips this to
+        # ``required`` once every agent carries a registered jkt.)
+        egress_mode = (settings.egress_dpop_mode or "off").strip().lower()
+        if egress_mode != "required":
+            insecure_ok = (
+                os.environ.get("MCP_PROXY_EGRESS_DPOP_INSECURE_OK", "")
+                .strip()
+                .lower()
+            ) in {"1", "true", "yes"}
+            if not insecure_ok:
+                _log.critical(
+                    "MCP_PROXY_EGRESS_DPOP_MODE=%r is not permitted in "
+                    "production: cert-only egress is accepted with no RFC "
+                    "9449 key-possession proof, so a leaked or replayed "
+                    "agent cert reaches the upstream LLM unchallenged. Set "
+                    "MCP_PROXY_EGRESS_DPOP_MODE=required, or for the "
+                    "agent-enrollment migration window explicitly opt in via "
+                    "MCP_PROXY_EGRESS_DPOP_INSECURE_OK=true and track a "
+                    "sunset date (F-B-11).",
+                    egress_mode,
+                )
+                raise SystemExit(1)
+
         # F-A-202 (audit 2026-05-20). PDP webhook HMAC secret protects
         # /pdp/policy + /v1/policy/tool-call inbound calls with
         # X-ATN-Signature (audit 2026-04-30 lane 3 H3). Empty secret
