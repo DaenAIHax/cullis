@@ -112,6 +112,27 @@ proxy:
   # Empty = no CORS middleware (fail-safe).
   allowedOrigins: ""
 
+  # -- DPoP JTI + login-challenge nonce store URL. REQUIRED in production
+  # (multi-replica/multi-worker refuses the in-memory fallback → /v1/auth/
+  # login-challenge 500). Point at a managed Redis or an in-cluster redis,
+  # e.g. redis://cullis-redis-master.cullis.svc:6379/0
+  redisUrl: ""
+
+  # -- Egress DPoP enforcement (F-B-11). "required" is the zero-trust
+  # posture; production refuses "optional"/"off" (cert-only egress).
+  egressDpopMode: "required"
+
+  # -- WebAuthn on-behalf-of-user attribution (ADR-033 / F-A-205).
+  # Production refuses enforcement=warn/off UNLESS warnInsecureOk=true
+  # (the sanctioned posture for a single-Mastio pilot with no IdP-backed
+  # user registration — track a sunset date). Move to enforcement=required
+  # + rpId + expectedOrigin once a real user-credential flow exists.
+  webauthn:
+    enforcement: "warn"
+    warnInsecureOk: false
+    rpId: ""
+    expectedOrigin: ""
+
   # -- Verify broker TLS certificate. Disable ONLY for local dev with a
   # self-signed broker.
   brokerVerifyTls: true
@@ -410,8 +431,18 @@ secrets:
   adminSecret: ""
   # -- Persistent HMAC key for the proxy dashboard cookies. Without this
   # admin sessions are invalidated on every proxy restart because a random
-  # key is generated per-process. Pin it to survive rollouts.
+  # key is generated per-process. Pin it to survive rollouts. Empty →
+  # the chart mints a random one into the kept Secret (prod-boot safe).
   dashboardSigningKey: ""
+  # -- Fernet master passphrase (>=32 chars) wrapping the Org Root +
+  # Intermediate private keys in pki_key_store. REQUIRED in production
+  # (refuse-to-boot). Empty → chart mints a random one into the kept
+  # Secret. Pin explicitly if you manage at-rest keys externally.
+  dbEncryptionKey: ""
+  # -- Shared HMAC secret for the inbound PDP webhook (F-A-202). REQUIRED
+  # in production. Empty → chart mints a random one. Set to match the
+  # broker's POLICY_WEBHOOK_HMAC_SECRET when pairing with an external PDP.
+  pdpWebhookHmacSecret: ""
   # -- Org-level secret used by the proxy to authenticate to the broker
   # for admin/egress operations (when the broker is configured to require
   # one). Optional.
@@ -435,6 +466,14 @@ vault:
     # e.g. "https://vault.corp.example.com:8200"
   # -- KV v2 secret prefix the proxy reads tool secrets from.
   secretPrefix: "secret/data/mcp-proxy/tools"
+  # -- KV v2 path for the Org CA keypair (ADR-031). When vault.enabled,
+  # the Org CA private key is custodied here (kms_backend=vault) instead
+  # of the DB. Default matches a dev Vault's secret/ mount.
+  orgCaPath: "secret/data/cullis-mastio/org-ca"
+  # -- Pin a private CA for an HTTPS Vault fronted by a corporate root
+  # (path inside the container; mount via proxy.extraVolumes). Empty =
+  # system trust store.
+  caCertPath: ""
 
 # ---------------------------------------------------------------------------
 # Ingress — DISABLED by default after ADR-014. The nginx sidecar

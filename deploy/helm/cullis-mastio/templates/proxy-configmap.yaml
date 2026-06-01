@@ -73,6 +73,42 @@ data:
   MCP_PROXY_SECRET_BACKEND: "vault"
   MCP_PROXY_VAULT_ADDR: {{ .Values.vault.addr | quote }}
   MCP_PROXY_VAULT_SECRET_PREFIX: {{ .Values.vault.secretPrefix | quote }}
+  # ADR-031 — Org CA private key custodied in Vault. validate_config
+  # refuses to boot in production with kms_backend=local (the key would
+  # sit in the DB). Tied to vault.enabled so a production deploy that
+  # turns Vault on also moves the crown-jewel key there.
+  MCP_PROXY_KMS_BACKEND: "vault"
+  MCP_PROXY_VAULT_ORG_CA_PATH: {{ .Values.vault.orgCaPath | default "secret/data/cullis-mastio/org-ca" | quote }}
+  {{- if .Values.vault.caCertPath }}
+  MCP_PROXY_VAULT_CA_CERT_PATH: {{ .Values.vault.caCertPath | quote }}
+  {{- end }}
   {{- else }}
   MCP_PROXY_SECRET_BACKEND: "env"
+  {{- end }}
+
+  # DPoP JTI + login-challenge nonce store. Production refuses the
+  # in-memory fallback for multi-replica/multi-worker (cross-worker
+  # replay of login nonces), so REDIS_URL must point at a reachable
+  # Redis. K8s deploys bring their own (managed Redis or a subchart).
+  {{- if .Values.proxy.redisUrl }}
+  MCP_PROXY_REDIS_URL: {{ .Values.proxy.redisUrl | quote }}
+  {{- end }}
+
+  # Egress DPoP enforcement (F-B-11). ``required`` is the zero-trust
+  # posture; production refuses optional/off unless the operator opts
+  # into the agent-enrollment migration window via WEBAUTHN-style flag.
+  MCP_PROXY_EGRESS_DPOP_MODE: {{ .Values.proxy.egressDpopMode | default "required" | quote }}
+
+  # WebAuthn on-behalf-of-user attribution (ADR-033 / F-A-205). Default
+  # ``warn``; production refuses warn/off unless the operator opts in
+  # (single-Mastio pilots with no IdP-backed user registration).
+  MCP_PROXY_WEBAUTHN_ENFORCEMENT: {{ .Values.proxy.webauthn.enforcement | default "warn" | quote }}
+  {{- if .Values.proxy.webauthn.warnInsecureOk }}
+  MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK: "true"
+  {{- end }}
+  {{- if .Values.proxy.webauthn.rpId }}
+  MCP_PROXY_WEBAUTHN_RP_ID: {{ .Values.proxy.webauthn.rpId | quote }}
+  {{- end }}
+  {{- if .Values.proxy.webauthn.expectedOrigin }}
+  MCP_PROXY_WEBAUTHN_EXPECTED_ORIGIN: {{ .Values.proxy.webauthn.expectedOrigin | quote }}
   {{- end }}
