@@ -232,6 +232,39 @@ if [[ -f "$PROJECT_DIR/VERSION" ]]; then
     fi
 fi
 
+# Production hardening secrets (--prod only). validate_config(production)
+# refuses to boot unless secret_backend=vault, kms_backend=vault and a
+# DB_ENCRYPTION_KEY are set (and webauthn is required or explicitly opted
+# out). Until the bundle compose forwarded these (added alongside this
+# change), ``./deploy.sh --prod`` set environment=production and then
+# SystemExit'd on the first gate, so production mode was unreachable.
+# WebAuthn posture for a single-Mastio pilot: explicit opt-in to the warn
+# default (no IdP-backed user registration); track a sunset date.
+if [[ "$MODE" == "prod" ]]; then
+    DB_ENC_KEY="$(gen_secret)$(gen_secret)"   # 64 chars, comfortably over the >= 32 floor
+    _prod_set() {  # strip any existing line (commented or not), append uncommented
+        sed -i.bak "/^#*[[:space:]]*${1%%=*}=/d" "$OUT"; rm -f "${OUT}.bak"
+        echo "$1" >> "$OUT"
+    }
+    _prod_set "MCP_PROXY_SECRET_BACKEND=vault"
+    _prod_set "MCP_PROXY_KMS_BACKEND=vault"
+    _prod_set "MCP_PROXY_DB_ENCRYPTION_KEY=${DB_ENC_KEY}"
+    _prod_set "MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK=true"
+    _prod_set "MCP_PROXY_EGRESS_DPOP_MODE=required"
+    # F-A-202 — production refuses an empty PDP webhook HMAC secret
+    # (inbound /pdp/policy + /v1/policy/tool-call would accept unsigned
+    # calls). Mint one; an operator pairing with an external broker PDP
+    # overwrites it to match the broker's POLICY_WEBHOOK_HMAC_SECRET.
+    _prod_set "MCP_PROXY_PDP_WEBHOOK_HMAC_SECRET=$(gen_secret)$(gen_secret)"
+    if [[ -n "${VAULT_ADDR:-}" && -n "${VAULT_TOKEN:-}" ]]; then
+        _prod_set "MCP_PROXY_VAULT_ADDR=${VAULT_ADDR}"
+        _prod_set "MCP_PROXY_VAULT_TOKEN=${VAULT_TOKEN}"
+        ok "Production: minted DB_ENCRYPTION_KEY, set KMS+secret backend=vault, DPoP=required, webauthn opt-in"
+    else
+        warn "Production needs a Vault: KMS_BACKEND=vault custodies the Org CA private key. Set MCP_PROXY_VAULT_ADDR + MCP_PROXY_VAULT_TOKEN in ${OUT} before ./deploy.sh --prod."
+    fi
+fi
+
 ok "Wrote ${OUT}"
 echo ""
 echo -e "  ${BOLD}MCP_PROXY_ADMIN_SECRET${RESET}            ${GRAY}${ADMIN_SECRET:0:8}…${RESET}"
