@@ -13,6 +13,7 @@ updated: "2026-05-23"
 **Prerequisites**:
 
 - An enrolled agent with the three identity files on disk and a working `from_identity_dir(...)` + `login_via_proxy_with_local_key()`. If you don't have that yet, do [SDK quickstart](sdk) first — this page picks up where that one ends.
+- The agent's capabilities must include **`llm.chat`** (a reserved built-in capability). Since Mastio v0.6.4 the chat endpoints are gated on it: an agent enrolled without `llm.chat` gets `403 capability_missing` before any provider dispatch. Add it at enrollment — see the note in [SDK quickstart § capabilities](sdk).
 - A provider key configured on the Mastio side: `MCP_PROXY_ANTHROPIC_API_KEY` in `proxy.env` for Anthropic upstream, or a reachable Ollama daemon for local models. Without that, every call returns `503 provider_key_missing`.
 
 ## 1. The minimal call
