@@ -371,6 +371,22 @@ pre code {
 .reveal[data-delay="4"] { transition-delay: 0.32s; }
 .reveal[data-delay="5"] { transition-delay: 0.4s; }
 
+/* Staggered reveal — children of a grid cascade in instead of fading as a block.
+   Swap a container's `reveal` for `reveal-stagger`; the observer toggles .visible. */
+.reveal-stagger > * {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal-stagger.visible > * { opacity: 1; transform: translateY(0); }
+.reveal-stagger.visible > *:nth-child(1) { transition-delay: 0.04s; }
+.reveal-stagger.visible > *:nth-child(2) { transition-delay: 0.12s; }
+.reveal-stagger.visible > *:nth-child(3) { transition-delay: 0.20s; }
+.reveal-stagger.visible > *:nth-child(4) { transition-delay: 0.28s; }
+.reveal-stagger.visible > *:nth-child(5) { transition-delay: 0.36s; }
+.reveal-stagger.visible > *:nth-child(6) { transition-delay: 0.44s; }
+
 /* Ledger table */
 .ledger {
   width: 100%;
@@ -426,6 +442,7 @@ pre code {
 
 @media (prefers-reduced-motion: reduce) {
   .reveal, .reveal.visible { opacity: 1; transform: none; transition: none; }
+  .reveal-stagger > *, .reveal-stagger.visible > * { opacity: 1; transform: none; transition: none; }
   .pulse-dot { animation: none; }
 }
 
