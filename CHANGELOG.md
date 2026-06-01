@@ -14,6 +14,47 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+## [v0.6.4] — Capability enforcement, opaque-404 fixes, cold-reader doc hardening — 2026-06-01
+
+Minor on top of v0.6.3, accumulating two-plus weeks of polish. The headline is **real capability enforcement** on the chat and MCP-discovery surfaces (previously decorative), plus the close-out of the opaque-404 the flag-mcp demo surfaced, plus a sweep of SDK-quickstart fixes found by fresh-install cold-reads. The whole release was dogfooded end-to-end on `mastio-demo` against a fresh install (deploy / mint / `pip install` / login / live Anthropic chat / audit chain) with zero workarounds.
+
+### Security
+
+- **`llm.chat` and `mcp.tools.list` capability gates are now enforced** (#1002, closes #22 / #23). Pre-fix these checks were Phase-1 decorative: an authenticated, bound agent reached the chat endpoints (`/v1/chat/completions`, `/v1/llm/chat`, `/v1/messages`) and MCP `tools/list` regardless of its capabilities. Now the gate is the first check after mTLS+DPoP auth and fail-closed: an agent without `llm.chat` gets `403 capability_missing` before any provider dispatch, and the denial is audited (`egress_llm_chat status=denied`). Symmetric fix on the Anthropic-shape router (audit 2026-05-28 BLOCKER B1).
+- **Org CA `org_id` bound to the winning CA pair** (#1007, close D-9 split-brain). A multi-worker cold boot could derive the `org_id` from a different CA pair than the one that won the mint race, leaving a fresh install with two views of org identity. The `org_id` now derives from the adopted (surviving) Org CA pair.
+
+### AI gateway / egress
+
+- **Strip the `provider/` routing prefix for native adapters** (#1012). `cullis_native` passed the model id through verbatim, so `anthropic/claude-…` reached the Anthropic API as a literal model name and 404'd upstream. The prefix is now stripped for the native adapters (litellm / portkey keep it for their own routing). Resolves axis (a) of the opaque 404.
+- **Caller-safe hint on gateway errors** (#1013). The router discarded `exc.detail`, surfacing a bare 404 with no clue. A self-authored `GatewayError.hint` (model + provider + status only, never `str(exc)`) is now exposed in the HTTP/SSE body while `detail` stays log-only (H-IO-2 preserved). A non-existent model now returns a 404 whose hint names the model and suggests the bare id. Resolves axis (b).
+- **Pin `anthropic` + `openai` for the `cullis_native` default** (#1005). The two provider SDKs were missing from the runtime requirements, so the now-default native backend raised `503 provider_sdk_missing` on a clean install.
+
+### SDK & quickstart (cold-reader findings)
+
+- **Vanilla provider drop-in works from the documented zip layout** (#1006). The Anthropic/OpenAI drop-in failed from the exact `identity-bundle.zip` layout the docs ship (`dpop.jwk` required, doubled `/v1` on the Anthropic base_url → 404).
+- **SDK quickstart + `deploy.sh` synced to the real agent-create contract** (#1010, #1011). Endpoint is `POST /v1/admin/agents` (not `/create`); response carries `cert_pem` / `cert_chain_pem` / `private_key_pem`; `deploy.sh` guards three informational `grep` reads so a no-match under `set -euo pipefail` no longer truncates the "Next steps" banner; Org CA is read from the user-readable `certs/org-ca.pem`, not the uid-10001 `nginx-certs/org-ca.crt`.
+- **Document the `llm.chat` capability in the SDK quickstart** (#1014). Following the quickstart verbatim minted an agent without `llm.chat`, then the companion chat page taught `chat_completion`, which now 403s. The quickstart and chat-completion prerequisites now include `llm.chat` and explain the reserved built-in capabilities.
+
+### Dashboard
+
+- **Backends nav labelled "Backends", not "Tools"** (#1016). The MCP-backend registration page (where you set a tool's `required_capability` and manage agent bindings) was labelled "Tools" in the sidebar and overview topology, colliding with the adjacent "Tool Registry" entry. Both labels are now "Backends".
+- **Provider rows labelled native-support vs requires-litellm** (#1008). The AI Providers page distinguishes providers with a native adapter from those still needing the legacy LiteLLM backend.
+
+### Observability & deps
+
+- **App loggers survive the in-process Alembic upgrade** (#1003). Alembic's `fileConfig` ran with `disable_existing_loggers` defaulting to True, silencing every `mcp_proxy.*` logger after the in-process migration on boot (audit DB itself intact). The migration now preserves the application loggers.
+
+### Tests / CI
+
+- **Core Mastio unit tests repatriated into the public repo** (#1004). After the 2026-05-29 finding that `.core-ref` was 261 commits behind and core coverage only ran in the enterprise repo, 127 core-pure unit tests now live and run in the public CI on every PR.
+- **Smoke runs the default `cullis_native` backend + capability unit tests land** (#1009). The smoke suite now exercises the shipped default backend, and the capability-enforcement / patch-endpoint unit tests are wired into `test/unit`.
+
+### CHANGELOG hygiene
+
+- `CHANGELOG.md` — new `[v0.6.4]` section above `[v0.6.3]`.
+- `README.md` — quickstart curl + project-component table flipped to `mastio-v0.6.4`.
+- `site/src/pages/index.astro` + `index-dark.astro` — hero quickstart curl flipped to `mastio-v0.6.4`.
+
 ## [v0.6.3] — Fix mastio_keys mint race + LOCAL_TOKEN auth recovery — 2026-05-28
 
 Same-day patch on top of v0.6.2. Restores `/v1/auth/token` and every downstream surface that depends on it (SDK `list_mcp_tools` / `call_mcp_tool`, Connector login, dashboard signing) on fresh installs. Issue cullis#997.
