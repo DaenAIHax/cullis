@@ -44,11 +44,31 @@ services:
     networks:
       - proxy_net
 
+  # DPoP JTI + login-challenge nonce store, shared across the uvicorn
+  # workers (the bundle runs 4 by default). In production the in-memory
+  # fallback is refused — cross-worker replay of login nonces / DPoP jti
+  # (audit L1-M4 / U-DD-1) — so Redis is required there; development
+  # tolerates its absence. Ephemeral: no volume, no persistence, no backup.
+  redis:
+    image: redis:7-alpine
+    container_name: cullis-mastio-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - proxy_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   mcp-proxy:
     image: ghcr.io/cullis-security/cullis-mastio:${CULLIS_MASTIO_VERSION:-latest}
     depends_on:
       init-permissions:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     # ADR-014 — no host port publish. The Mastio listens on 9100 only
     # on proxy_net; the mastio-nginx sidecar below publishes 9443.
     expose:
@@ -104,6 +124,10 @@ services:
       # MCP_PROXY_DATABASE_URL stays as a backward-compat alias.
       MCP_PROXY_DATABASE_URL:      ${MCP_PROXY_DATABASE_URL:-sqlite+aiosqlite:////data/mcp_proxy.db}
       PROXY_DB_URL:                ${PROXY_DB_URL:-}
+      # DPoP JTI + login-challenge nonce store (the ``redis`` service
+      # above). Required in production (the in-memory fallback is refused
+      # for the multi-worker default); dev tolerates an empty value.
+      MCP_PROXY_REDIS_URL:         ${MCP_PROXY_REDIS_URL:-redis://redis:6379/0}
       # Shared secret for the policy-bridge integration endpoints
       # (/v1/data/cullis/policy and /v1/integrations/cloudevents).
       # Empty by default — the endpoints accept unsigned calls during
@@ -178,6 +202,38 @@ services:
       MCP_PROXY_SECRET_BACKEND:    ${MCP_PROXY_SECRET_BACKEND:-env}
       MCP_PROXY_VAULT_ADDR:        ${MCP_PROXY_VAULT_ADDR:-}
       MCP_PROXY_VAULT_TOKEN:       ${MCP_PROXY_VAULT_TOKEN:-}
+      # Production gate vars. ``validate_config(production)`` refuses to
+      # boot unless these are set, but until this block existed they were
+      # NOT forwarded into the container (docker compose --env-file only
+      # substitutes ${...}; it does not inject), so ``./deploy.sh --prod``
+      # set MCP_PROXY_ENVIRONMENT=production and then SystemExit'd on the
+      # first unsatisfiable gate — production mode was unreachable and
+      # every deploy fell back to development. Defaults below keep dev
+      # behaviour identical (local KMS, empty key, webauthn warn); the
+      # production path supplies real values via generate-proxy-env.sh
+      # --prod + the operator's Vault.
+      # KMS backend for the Org CA private key (ADR-031). ``local`` keeps
+      # it in the DB (dev/test); ``vault`` is required in production.
+      MCP_PROXY_KMS_BACKEND:       ${MCP_PROXY_KMS_BACKEND:-local}
+      MCP_PROXY_VAULT_ORG_CA_PATH: ${MCP_PROXY_VAULT_ORG_CA_PATH:-secret/data/cullis-mastio/org-ca}
+      # Pin a private CA for an HTTPS Vault fronted by a corporate root.
+      # Empty → system trust store. Path is inside the container (mount
+      # under /certs). Distinct from VAULT_VERIFY_TLS (the boolean).
+      MCP_PROXY_VAULT_CA_CERT_PATH: ${MCP_PROXY_VAULT_CA_CERT_PATH:-}
+      MCP_PROXY_VAULT_VERIFY_TLS:  ${MCP_PROXY_VAULT_VERIFY_TLS:-true}
+      # Fernet master passphrase wrapping the Org Root + Intermediate
+      # private keys in pki_key_store (>= 32 chars). Empty in dev; production
+      # refuses an empty value. generate-proxy-env.sh --prod mints one.
+      MCP_PROXY_DB_ENCRYPTION_KEY: ${MCP_PROXY_DB_ENCRYPTION_KEY:-}
+      # WebAuthn enforcement for on-behalf-of-user attribution (ADR-033).
+      # Default ``warn``; production refuses warn/off unless the operator
+      # opts in via WEBAUTHN_WARN_INSECURE_OK (single-Mastio pilots with no
+      # IdP-backed user registration) or sets enforcement=required with the
+      # RP fields below.
+      MCP_PROXY_WEBAUTHN_ENFORCEMENT:      ${MCP_PROXY_WEBAUTHN_ENFORCEMENT:-warn}
+      MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK: ${MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK:-}
+      MCP_PROXY_WEBAUTHN_RP_ID:            ${MCP_PROXY_WEBAUTHN_RP_ID:-}
+      MCP_PROXY_WEBAUTHN_EXPECTED_ORIGIN:  ${MCP_PROXY_WEBAUTHN_EXPECTED_ORIGIN:-}
       # Anthropic upstream key for the embedded AI gateway (ADR-017).
       # Empty default disables /v1/chat/completions cleanly (the rest of
       # the Mastio still works — registry, MCP, audit). Without this
