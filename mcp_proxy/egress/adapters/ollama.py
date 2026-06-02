@@ -176,7 +176,7 @@ def _get_http_client(api_base: str, timeout: float) -> httpx.AsyncClient:
     # validates the base once; the transport re-validates + pins on every
     # request (handles a base that resolves differently at connect time).
     from mcp_proxy.config import get_settings
-    from mcp_proxy.egress.adapters._ssrf_transport import (
+    from mcp_proxy.utils.ssrf_transport import (
         SSRFPinnedTransport,
         allow_private_from_settings,
     )

@@ -9,14 +9,14 @@ adapters install it.
 import httpx
 import pytest
 
-from mcp_proxy.egress.adapters._ssrf_transport import SSRFPinnedTransport
+from mcp_proxy.utils.ssrf_transport import SSRFPinnedTransport
 from mcp_proxy.utils.url_safety import UnsafeUrlError
 
 
 @pytest.mark.asyncio
 async def test_transport_pins_to_validated_ip(monkeypatch):
     monkeypatch.setattr(
-        "mcp_proxy.egress.adapters._ssrf_transport.assert_safe_outbound_url",
+        "mcp_proxy.utils.ssrf_transport.assert_safe_outbound_url",
         lambda url, allow_private=False: "93.184.216.34",
     )
     captured: dict = {}
@@ -45,7 +45,7 @@ async def test_transport_refuses_unsafe_before_connect(monkeypatch):
         raise UnsafeUrlError("resolves to 169.254.169.254 (metadata)")
 
     monkeypatch.setattr(
-        "mcp_proxy.egress.adapters._ssrf_transport.assert_safe_outbound_url", _refuse,
+        "mcp_proxy.utils.ssrf_transport.assert_safe_outbound_url", _refuse,
     )
     reached = {"super": False}
 

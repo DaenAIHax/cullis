@@ -139,8 +139,21 @@ def anchor_row_hash(
     req = builder.build()
     req_der = req.as_bytes()
 
+    # SSRF rebinding pin (audit 2026-06-02): the TSA URL is operator-set
+    # (MCP_PROXY_AUDIT_ANCHOR_TSA_URL); validate it and pin the connect to
+    # the validated IP on every anchor tick. Sync transport because this is
+    # the codebase's one sync httpx.Client. allow_private follows the shared
+    # knob so dev/sandbox (mock TSA on the compose network) keeps working.
+    from mcp_proxy.config import get_settings
+    from mcp_proxy.utils.ssrf_transport import SSRFPinnedSyncTransport
+    _allow_private = bool(
+        getattr(get_settings(), "policy_webhook_allow_private_ips", False)
+    )
     try:
-        with httpx.Client(timeout=timeout_seconds) as client:
+        with httpx.Client(
+            timeout=timeout_seconds,
+            transport=SSRFPinnedSyncTransport(allow_private=_allow_private),
+        ) as client:
             resp = client.post(
                 tsa_url,
                 content=req_der,
