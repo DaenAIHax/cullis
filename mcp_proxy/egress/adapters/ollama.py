@@ -171,7 +171,19 @@ def _get_http_client(api_base: str, timeout: float) -> httpx.AsyncClient:
     client = _HTTP_CLIENT_CACHE.get(key)
     if client is not None:
         return client
-    client = httpx.AsyncClient(timeout=timeout)
+    # M7/M8 (audit 2026-06-02): pin the connect to the IP the SSRF guard
+    # validated, closing the DNS-rebinding TOCTOU. _safe_api_base already
+    # validates the base once; the transport re-validates + pins on every
+    # request (handles a base that resolves differently at connect time).
+    from mcp_proxy.config import get_settings
+    from mcp_proxy.egress.adapters._ssrf_transport import (
+        SSRFPinnedTransport,
+        allow_private_from_settings,
+    )
+    transport = SSRFPinnedTransport(
+        allow_private=allow_private_from_settings(get_settings()),
+    )
+    client = httpx.AsyncClient(timeout=timeout, transport=transport)
     _HTTP_CLIENT_CACHE[key] = client
     return client
 
