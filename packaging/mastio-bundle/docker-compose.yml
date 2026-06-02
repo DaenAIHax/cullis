@@ -349,10 +349,15 @@ services:
       - ${MASTIO_NGINX_CERTS_DIR:-./nginx-certs}:/etc/nginx/certs:ro
       # Wave 2 fix 6 — polling reload watcher script. Pairs with the
       # Mastio-side ``nginx_cert_watcher`` lifespan task: that task
-      # rewrites ``mastio-server.crt`` when expiry approaches, and the
-      # mtime change here triggers ``nginx -s reload`` without docker
-      # socket exposure or a custom image.
-      - ../nginx-reload-watcher/reload-watcher.sh:/usr/local/bin/nginx-reload-watcher.sh:ro
+      # rewrites ``mastio-server.crt`` when expiry approaches OR the org/CA
+      # changes, and the mtime change here triggers ``nginx -s reload``
+      # without docker socket exposure or a custom image. Shipped inside
+      # the bundle at ``nginx/reload-watcher.sh`` so it survives tarball
+      # extraction — the old ``../nginx-reload-watcher/`` sibling path did
+      # not exist after extraction, so Docker auto-created a root-owned
+      # empty dir there and the reload watcher never ran (cert rotation +
+      # org-change hot reload were silently dead, since #884).
+      - ./nginx/reload-watcher.sh:/usr/local/bin/nginx-reload-watcher.sh:ro
     command:
       - /bin/sh
       - -c
