@@ -21,6 +21,7 @@ the Court, preserving behavior for every caller who hasn't opted in.
 from __future__ import annotations
 
 import base64
+import hmac
 import logging
 import time
 from typing import Any
@@ -80,9 +81,42 @@ def _load_chain(cert_bytes_list: list[bytes]) -> list[x509.Certificate]:
     return [x509.load_der_x509_certificate(b) for b in cert_bytes_list]
 
 
+def _assert_ca_issuer(cert: x509.Certificate) -> None:
+    """Reject a cert that is being used to sign another cert but is not a
+    valid CA.
+
+    Audit H1 (2026-06-02): ``_verify_chain`` previously verified only the
+    signature links, never the X.509 issuing constraints. That let any
+    enrolled agent forge a leaf carrying a *victim's* identity, sign it
+    with its own (non-CA) leaf key, and present ``[forged, attacker_leaf]``
+    — the chain walked to the Org CA and validated, so the Mastio minted a
+    LOCAL_TOKEN for the victim. Requiring ``BasicConstraints(ca=True)`` (and
+    ``keyCertSign`` when KeyUsage is present) on every issuing cert closes
+    that forgery vector at the root: a non-CA leaf can no longer act as an
+    issuer. This also protects typed principals (user/workload), which
+    carry no pinned ``cert_pem`` and so rely solely on the chain check.
+    """
+    try:
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+    except x509.ExtensionNotFound as exc:
+        raise ValueError("issuing cert has no BasicConstraints (not a CA)") from exc
+    if not bc.ca:
+        raise ValueError("issuing cert is not a CA (BasicConstraints ca=False)")
+    try:
+        ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        ku = None
+    if ku is not None and not ku.key_cert_sign:
+        raise ValueError("issuing cert KeyUsage lacks keyCertSign")
+
+
 def _verify_chain(chain: list[x509.Certificate], ca_cert: x509.Certificate) -> None:
     """Walk ``chain`` (leaf → intermediates) and verify the last link is
     signed by ``ca_cert``. Raises ValueError on any failure.
+
+    Every issuing cert (the intermediates in ``chain`` and the pinned Org
+    CA anchor) must be a valid CA — see ``_assert_ca_issuer`` for the H1
+    forgery this prevents.
     """
     if not chain:
         raise ValueError("empty chain")
@@ -92,10 +126,14 @@ def _verify_chain(chain: list[x509.Certificate], ca_cert: x509.Certificate) -> N
         if cert.not_valid_before_utc > now or cert.not_valid_after_utc < now:
             raise ValueError("certificate outside validity window")
 
-    # leaf → intermediates: each cert must be signed by its successor.
+    # leaf → intermediates: each cert must be signed by its successor, and
+    # every successor (i.e. every issuing cert) must itself be a CA.
     for i in range(len(chain) - 1):
-        _verify_sig(chain[i], chain[i + 1].public_key())
-    # last link of x5c must be signed by the pinned Org CA.
+        issuer = chain[i + 1]
+        _assert_ca_issuer(issuer)
+        _verify_sig(chain[i], issuer.public_key())
+    # last link of x5c must be signed by the pinned Org CA (also a CA).
+    _assert_ca_issuer(ca_cert)
     _verify_sig(chain[-1], ca_cert.public_key())
 
 
@@ -233,6 +271,47 @@ async def issue_local_token(body: TokenRequest, request: Request) -> TokenRespon
         )
         raise _unauthorized("sub does not match client cert")
 
+    # Audit H1 (2026-06-02) — leaf-pin. The sub==cert-identity check above
+    # only proves the assertion's ``sub`` matches the identity *inside the
+    # presented leaf*; it does NOT prove the presented leaf is the cert
+    # actually enrolled for that agent. Combined with the chain walk, an
+    # enrolled agent could sign a forged leaf carrying a victim's identity
+    # with its own key and present ``[forged, attacker_leaf]`` to mint a
+    # LOCAL_TOKEN as the victim. Pin the presented leaf DER against the
+    # enrolled ``internal_agents.cert_pem``, mirroring challenge_response.py
+    # and client_cert.py. Typed principals (user/workload) rotate ~hourly
+    # and carry no pinned cert_pem; their forgery defence is the
+    # CA-constraint chain check in ``_verify_chain``.
+    from mcp_proxy.db import get_agent as _get_agent
+    record = await _get_agent(agent_id)
+    is_typed_principal = "::user::" in agent_id or "::workload::" in agent_id
+    if not is_typed_principal:
+        if record is None or not record.get("is_active", True):
+            raise _unauthorized("agent not registered or deactivated")
+        pinned_pem = record.get("cert_pem")
+        if not pinned_pem:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="agent has no pinned cert_pem on record",
+            )
+        try:
+            pinned_cert = x509.load_pem_x509_certificate(pinned_pem.encode())
+        except Exception as exc:  # noqa: BLE001 — malformed pin is a server fault
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="pinned cert_pem is malformed",
+            ) from exc
+        pinned_der = pinned_cert.public_bytes(serialization.Encoding.DER)
+        leaf_der = leaf.public_bytes(serialization.Encoding.DER)
+        if not hmac.compare_digest(pinned_der, leaf_der):
+            _log.warning(
+                "local /auth/token rejected sub=%s: leaf cert != pinned",
+                agent_id,
+            )
+            raise _unauthorized(
+                "leaf certificate does not match pinned internal_agents.cert_pem"
+            )
+
     ttl = _resolve_ttl(request)
 
     # Wave B C1 (audit 2026-05-11) — bind the issued LOCAL_TOKEN to the
@@ -269,17 +348,10 @@ async def issue_local_token(body: TokenRequest, request: Request) -> TokenRespon
     # ``/v1/principals/csr`` refuses every user-cert mint. Sandbox
     # dogfood caught this — local_agent_dep.py was already fixed for
     # the Bearer LOCAL_TOKEN path, this is the JWT-mint counterpart.
-    try:
-        from mcp_proxy.db import get_agent as _get_agent
-        record = await _get_agent(agent_id)
-        if record and record.get("principal_type"):
-            extra_claims["principal_type"] = record["principal_type"]
-            extra_claims["org"] = record.get("agent_id", agent_id).split("::", 1)[0]
-    except Exception as exc:  # noqa: BLE001 — defensive
-        _log.warning(
-            "local /auth/token: principal_type lookup failed for %s: %s",
-            agent_id, exc,
-        )
+    # ``record`` was already loaded for the leaf-pin above (single lookup).
+    if record and record.get("principal_type"):
+        extra_claims["principal_type"] = record["principal_type"]
+        extra_claims["org"] = record.get("agent_id", agent_id).split("::", 1)[0]
 
     token = issuer.issue(
         agent_id=agent_id, ttl_seconds=ttl,
