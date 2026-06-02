@@ -226,3 +226,172 @@ def test_reuse_path_regenerates_when_legacy_cert_has_ip_in_dns_san(tmp_path):
         "legacy cert with IP-as-DNSName was reused instead of being "
         "replaced — operator stays stuck with CERTIFICATE_VERIFY_FAILED"
     )
+
+
+# ── Multi-worker boot race: torn cert/key pair ──────────────────────
+#
+# Cold first boot with N uvicorn workers and an empty cert dir: every
+# worker fails the reuse check, enters the mint path, generates its OWN
+# leaf keypair and writes the three shared output files. The per-file
+# tmp+rename is atomic but the three-file set is not, so the writes
+# interleave across workers and leave ``mastio-server.crt`` carrying
+# worker B's leaf pubkey next to ``mastio-server.key`` holding worker
+# A's private key — a torn pair nginx rejects with "key values
+# mismatch" on the 9443 mTLS port. The fix: (1) fence reuse-recheck +
+# mint + write under a cross-worker boot lock so exactly one worker
+# mints, and (2) make the reuse check validate that the on-disk private
+# key actually owns the leaf's public key, so a torn pair from a
+# pre-fix boot is regenerated instead of reused forever.
+
+
+def _pair_consistent(crt_path: Path, key_path: Path) -> bool:
+    """True when the on-disk private key owns the leaf cert's pubkey."""
+    cert = x509.load_pem_x509_certificate(crt_path.read_bytes())
+    priv = serialization.load_pem_private_key(
+        key_path.read_bytes(), password=None,
+    )
+    spki = serialization.PublicFormat.SubjectPublicKeyInfo
+    return (
+        priv.public_key().public_bytes(serialization.Encoding.DER, spki)
+        == cert.public_key().public_bytes(serialization.Encoding.DER, spki)
+    )
+
+
+def _write_valid_leaf_for_key(
+    mgr: AgentManager, out: Path, leaf_key, sans: list[str],
+) -> int:
+    """Write a full, valid nginx triple on disk for ``leaf_key`` and
+    return the leaf serial. Mirrors the mint output shape (crt = leaf ||
+    Intermediate bundle, ca = Org || Intermediate) so it passes every
+    reuse check EXCEPT whatever the caller deliberately breaks."""
+    out.mkdir(parents=True, exist_ok=True)
+    san_hosts, san_ips = [], []
+    for entry in sans:
+        try:
+            ipaddress.ip_address(entry)
+            san_ips.append(entry)
+        except ValueError:
+            san_hosts.append(entry)
+    now = datetime.now(timezone.utc)
+    leaf = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([
+            x509.NameAttribute(x509.NameOID.COMMON_NAME, sans[0]),
+        ]))
+        .issuer_name(mgr._mastio_ca_cert.subject)
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=30))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.DNSName(h) for h in san_hosts]
+                + [x509.IPAddress(ipaddress.ip_address(ip)) for ip in san_ips],
+            ),
+            critical=False,
+        )
+        .sign(mgr._mastio_ca_key, hashes.SHA256())
+    )
+    bundle = (
+        leaf.public_bytes(serialization.Encoding.PEM)
+        + mgr._mastio_ca_cert.public_bytes(serialization.Encoding.PEM)
+    )
+    (out / "mastio-server.crt").write_bytes(bundle)
+    (out / "org-ca.crt").write_bytes(
+        mgr._org_ca_cert.public_bytes(serialization.Encoding.PEM)
+        + mgr._mastio_ca_cert.public_bytes(serialization.Encoding.PEM)
+    )
+    return leaf.serial_number
+
+
+def test_minted_pair_is_internally_consistent(tmp_path):
+    """Sanity: a freshly minted triple has a key that owns the cert."""
+    mgr = _make_manager_with_ca()
+    _emit(mgr, tmp_path, ["mastio.local", "192.168.122.154"])
+    assert _pair_consistent(
+        tmp_path / "mastio-server.crt", tmp_path / "mastio-server.key",
+    )
+
+
+def test_reuse_rejects_torn_keypair_and_regenerates(tmp_path):
+    """The core multi-worker race fix: a torn cert/key pair on disk
+    (valid cert, but the private key belongs to a DIFFERENT keypair)
+    must NOT be reused — it must be regenerated into a consistent pair.
+    Without the key↔cert match in the reuse check, the torn pair passes
+    issuer/expiry/CA/SAN/bundle validation and nginx stays broken
+    across every restart."""
+    mgr = _make_manager_with_ca()
+    sans = ["mastio.local", "192.168.122.154"]
+
+    # Lay down a torn pair: a valid leaf cert for key A, but the .key
+    # file holds an unrelated key B.
+    key_a = ec.generate_private_key(ec.SECP256R1())
+    key_b = ec.generate_private_key(ec.SECP256R1())
+    torn_serial = _write_valid_leaf_for_key(mgr, tmp_path, key_a, sans)
+    (tmp_path / "mastio-server.key").write_bytes(key_b.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ))
+    crt_path = tmp_path / "mastio-server.crt"
+    key_path = tmp_path / "mastio-server.key"
+    assert not _pair_consistent(crt_path, key_path), "fixture not torn"
+
+    _emit(mgr, tmp_path, sans)
+
+    # Regenerated: new serial AND a consistent pair.
+    new_serial = x509.load_pem_x509_certificate(
+        crt_path.read_bytes(),
+    ).serial_number
+    assert new_serial != torn_serial, (
+        "torn cert/key pair was reused instead of regenerated — nginx "
+        "would stay broken with key/cert mismatch across restarts"
+    )
+    assert _pair_consistent(crt_path, key_path), (
+        "regenerated pair is still torn"
+    )
+
+
+def test_reuse_accepts_consistent_pair_no_regen(tmp_path):
+    """A matching (non-torn) pair with the right SANs is reused — the
+    key match must not cause spurious regeneration on every boot."""
+    mgr = _make_manager_with_ca()
+    sans = ["mastio.local", "192.168.122.154"]
+    _emit(mgr, tmp_path, sans)
+    crt_path = tmp_path / "mastio-server.crt"
+    serial1 = x509.load_pem_x509_certificate(
+        crt_path.read_bytes(),
+    ).serial_number
+    _emit(mgr, tmp_path, sans)
+    serial2 = x509.load_pem_x509_certificate(
+        crt_path.read_bytes(),
+    ).serial_number
+    assert serial1 == serial2, "consistent pair was needlessly regenerated"
+
+
+def test_concurrent_emits_converge_to_consistent_pair(tmp_path):
+    """N workers provisioning into the same dir concurrently must leave
+    a single consistent pair (the double-checked-lock + adopt contract).
+    In-process asyncio can't reproduce the cross-process interleave the
+    flock/advisory lock guards against, but it pins the convergence
+    contract and the recheck-adopt path."""
+    mgr = _make_manager_with_ca()
+    sans = ["mastio.local", "10.1.2.3"]
+
+    async def _run():
+        await asyncio.gather(*[
+            mgr.ensure_nginx_server_cert(
+                out_dir=tmp_path, sans=sans,
+                validity_days=30, renew_within_days=7,
+            )
+            for _ in range(4)
+        ])
+
+    asyncio.run(_run())
+    crt_path = tmp_path / "mastio-server.crt"
+    key_path = tmp_path / "mastio-server.key"
+    assert _pair_consistent(crt_path, key_path), (
+        "concurrent provisioning left a torn pair"
+    )
+    dns, ips = _read_sans(crt_path)
+    assert dns == {"mastio.local"} and ips == {"10.1.2.3"}

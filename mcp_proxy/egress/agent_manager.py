@@ -783,12 +783,6 @@ class AgentManager:
 
         from pathlib import Path
 
-        def _aware(dt: datetime) -> datetime:
-            """cryptography <42 returns naive UTC datetimes from cert
-            properties; ≥42 returns aware. Normalize to aware for math
-            and ISO formatting."""
-            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
-
         san_list = list(sans) if sans else ["mastio.local"]
 
         # Split SANs into IP literals vs hostnames. RFC 6125 / RFC 5280:
@@ -815,86 +809,198 @@ class AgentManager:
         crt_path = out / "mastio-server.crt"
         key_path = out / "mastio-server.key"
 
-        # ── Reuse path: validate existing files in one shot ─────────
-        reuse = False
-        if ca_path.exists() and crt_path.exists() and key_path.exists():
+        # ── Fast path: reuse valid on-disk material without taking the
+        # cross-worker lock (steady-state boot, the common case). ───────
+        if self._nginx_cert_reusable(
+            ca_path, crt_path, key_path,
+            san_hosts=san_hosts, san_ips=san_ips,
+            renew_within_days=renew_within_days,
+        ):
+            return False
+
+        # ── Mint path, serialised across the N uvicorn workers ─────────
+        # Cold boot with an empty cert dir: every worker fails the reuse
+        # check above and would otherwise each generate its own leaf
+        # keypair and write the three output files concurrently. The
+        # tmp+rename is atomic per file but NOT across the three files,
+        # and the tmp name used to be shared between workers — so the
+        # writes interleave and leave a torn pair (cert carrying Kᴮ's
+        # pubkey next to Kᴬ's private key), which breaks the nginx 9443
+        # TLS handshake. Same multi-worker boot-race class as the leaf
+        # mint (cullis#997) and the D-9 CA mint. Fence reuse-recheck +
+        # mint + write under the shared boot lock so exactly one worker
+        # mints and the others adopt its files.
+        from mcp_proxy.config import get_settings
+        from mcp_proxy.db import (
+            _acquire_boot_advisory_lock_pg,
+            _acquire_boot_flock,
+            _release_boot_advisory_lock_pg,
+            _release_boot_flock,
+            _sqlite_path,
+        )
+
+        db_url = get_settings().database_url
+        lock_fd: int | None = None
+        pg_lock = None
+        sqlite_path = _sqlite_path(db_url) if db_url else None
+        is_pg = bool(db_url) and (
+            db_url.startswith("postgresql") or "+asyncpg" in db_url
+        )
+        # ``:memory:`` (and a missing URL) is single-process by
+        # definition — each worker has its own DB, there is no shared
+        # state to fence — so skip the lock; an on-disk SQLite file or
+        # Postgres is the real multi-worker shape.
+        if sqlite_path and sqlite_path != ":memory:":
+            lock_fd = await asyncio.to_thread(
+                _acquire_boot_flock, sqlite_path, "nginx_cert",
+            )
+        elif is_pg:
+            pg_lock = await _acquire_boot_advisory_lock_pg(db_url, "nginx-cert")
+        try:
+            # Double-checked: a sibling worker may have minted + written
+            # the complete pair while this worker waited for the lock.
+            if self._nginx_cert_reusable(
+                ca_path, crt_path, key_path,
+                san_hosts=san_hosts, san_ips=san_ips,
+                renew_within_days=renew_within_days,
+            ):
+                return False
+            return self._mint_nginx_server_cert(
+                ca_path=ca_path, crt_path=crt_path, key_path=key_path,
+                san_list=san_list, san_hosts=san_hosts, san_ips=san_ips,
+                validity_days=validity_days, out_dir=out_dir,
+            )
+        finally:
+            if lock_fd is not None:
+                await asyncio.to_thread(_release_boot_flock, lock_fd)
+            if pg_lock is not None:
+                await _release_boot_advisory_lock_pg(pg_lock)
+
+    def _nginx_cert_reusable(
+        self,
+        ca_path,
+        crt_path,
+        key_path,
+        *,
+        san_hosts: list[str],
+        san_ips: list[str],
+        renew_within_days: int,
+    ) -> bool:
+        """True when the on-disk nginx server-cert triple is a valid,
+        current, reusable pair — so the caller can skip minting.
+
+        Validates in one shot: the cert bundle parses and carries both
+        the leaf and the Intermediate (2 PEM blocks), the leaf is issued
+        by the current Mastio Intermediate, it is not expiring within
+        ``renew_within_days``, the SANs match exactly (DNS vs IP in the
+        right type), the CA bundle matches the in-memory Org CA, AND the
+        private key on disk actually owns the leaf's public key. The
+        last check is the multi-worker hardening: a torn cert/key pair
+        left by a pre-fix concurrent boot would otherwise pass every
+        other check and be reused forever, keeping nginx permanently
+        broken across restarts.
+        """
+        def _aware(dt: datetime) -> datetime:
+            # cryptography <42 returns naive UTC datetimes from cert
+            # properties; ≥42 returns aware. Normalize for math/ISO.
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+        if not (ca_path.exists() and crt_path.exists() and key_path.exists()):
+            return False
+        try:
+            # The on-disk crt is a bundle (leaf + Intermediate). A pre-fix
+            # single-cert file falls through to the mint path because it
+            # is missing the Intermediate strict TLS clients need.
+            existing_bundle_bytes = crt_path.read_bytes()
+            bundle_blocks = existing_bundle_bytes.count(
+                b"-----BEGIN CERTIFICATE-----",
+            )
+            existing = x509.load_pem_x509_certificate(existing_bundle_bytes)
             try:
-                # The on-disk crt is a bundle (leaf + Intermediate, audit
-                # 2026-05-18 follow-up #2). A pre-fix single-cert file
-                # falls through to the mint path because it is missing
-                # the Intermediate that strict TLS clients need to build
-                # the chain.
-                existing_bundle_bytes = crt_path.read_bytes()
-                bundle_blocks = existing_bundle_bytes.count(
-                    b"-----BEGIN CERTIFICATE-----",
+                san_ext = existing.extensions.get_extension_for_class(
+                    SubjectAlternativeName,
+                ).value
+                existing_hosts = set(san_ext.get_values_for_type(x509.DNSName))
+                existing_ips = {
+                    str(ip) for ip in san_ext.get_values_for_type(x509.IPAddress)
+                }
+            except x509.ExtensionNotFound:
+                existing_hosts, existing_ips = set(), set()
+            issuer_ok = (
+                existing.issuer.rfc4514_string()
+                == self._mastio_ca_cert.subject.rfc4514_string()
+            )
+            now = datetime.now(timezone.utc)
+            expires_in = _aware(existing.not_valid_after) - now
+            expiry_ok = expires_in > timedelta(days=renew_within_days)
+            ca_ondisk = x509.load_pem_x509_certificate(ca_path.read_bytes())
+            ca_ok = (
+                ca_ondisk.public_bytes(serialization.Encoding.DER)
+                == self._org_ca_cert.public_bytes(serialization.Encoding.DER)
+            )
+            sans_ok = (
+                existing_hosts == set(san_hosts)
+                and existing_ips == set(san_ips)
+            )
+            bundle_ok = bundle_blocks == 2
+            # Key↔cert match — the private key on disk must own the leaf's
+            # public key. Closes the torn-pair multi-worker boot race.
+            try:
+                priv = serialization.load_pem_private_key(
+                    key_path.read_bytes(), password=None,
                 )
-                existing = x509.load_pem_x509_certificate(existing_bundle_bytes)
-                # SAN match — read DNSName + IPAddress because the same
-                # ``san_list`` may contain both (now that we split). A
-                # cert that already carries the right entries — even if
-                # we used to write IPs as DNSName before this fix —
-                # should NOT trigger a regeneration here; the post-
-                # mint reuse check below catches the type mismatch.
-                try:
-                    san_ext = existing.extensions.get_extension_for_class(
-                        SubjectAlternativeName,
-                    ).value
-                    existing_hosts = set(san_ext.get_values_for_type(x509.DNSName))
-                    existing_ips = {
-                        str(ip) for ip in san_ext.get_values_for_type(x509.IPAddress)
-                    }
-                except x509.ExtensionNotFound:
-                    existing_hosts, existing_ips = set(), set()
-                # Issuer match (current Mastio Intermediate's subject).
-                # Pre-three-tier-hardening this checked against the Org
-                # CA subject; after PR fix the leaf is signed by the
-                # Intermediate. Either issuer counts as a hit during
-                # the rollout window so a freshly-upgraded Mastio
-                # doesn't unnecessarily regenerate when the prior
-                # nginx leaf was Org-issued.
-                issuer_ok = (
-                    existing.issuer.rfc4514_string()
-                    == self._mastio_ca_cert.subject.rfc4514_string()
+                key_ok = (
+                    priv.public_key().public_bytes(
+                        serialization.Encoding.DER,
+                        serialization.PublicFormat.SubjectPublicKeyInfo,
+                    )
+                    == existing.public_key().public_bytes(
+                        serialization.Encoding.DER,
+                        serialization.PublicFormat.SubjectPublicKeyInfo,
+                    )
                 )
-                # Expiry guard
-                now = datetime.now(timezone.utc)
-                expires_in = _aware(existing.not_valid_after) - now
-                expiry_ok = expires_in > timedelta(days=renew_within_days)
-                # CA bundle file matches the in-memory CA
-                ca_ondisk = x509.load_pem_x509_certificate(ca_path.read_bytes())
-                ca_ok = (
-                    ca_ondisk.public_bytes(serialization.Encoding.DER)
-                    == self._org_ca_cert.public_bytes(serialization.Encoding.DER)
-                )
-
-                # Strict equality: same hosts AND same IPs in the right
-                # SAN type. A pre-fix cert that had IPs in ``DNSName``
-                # falls through to the mint path, which is the right
-                # outcome — that cert is the bug we're closing.
-                sans_ok = (
-                    existing_hosts == set(san_hosts)
-                    and existing_ips == set(san_ips)
-                )
-
-                bundle_ok = bundle_blocks == 2
-                if issuer_ok and expiry_ok and ca_ok and sans_ok and bundle_ok:
-                    reuse = True
-            except Exception as exc:  # treat any parse failure as "regenerate"
+            except Exception:
+                key_ok = False
+            if (
+                issuer_ok and expiry_ok and ca_ok
+                and sans_ok and bundle_ok and key_ok
+            ):
                 logger.info(
-                    "nginx server cert on disk failed validation (%s) — "
-                    "will regenerate",
-                    exc,
+                    "nginx server cert reused (expiring=%s)",
+                    _aware(existing.not_valid_after).isoformat(
+                        timespec="seconds",
+                    ),
                 )
-
-        if reuse:
+                return True
+            return False
+        except Exception as exc:  # treat any parse failure as "regenerate"
             logger.info(
-                "nginx server cert reused (sans=%s, expiring=%s)",
-                ",".join(san_list),
-                _aware(existing.not_valid_after).isoformat(timespec="seconds"),
+                "nginx server cert on disk failed validation (%s) — "
+                "will regenerate", exc,
             )
             return False
 
-        # ── Mint path ───────────────────────────────────────────────
+    def _mint_nginx_server_cert(
+        self,
+        *,
+        ca_path,
+        crt_path,
+        key_path,
+        san_list: list[str],
+        san_hosts: list[str],
+        san_ips: list[str],
+        validity_days: int,
+        out_dir: str,
+    ) -> bool:
+        """Mint a fresh nginx leaf + write the three output files.
+
+        Caller MUST hold the ``nginx_cert`` boot lock — this signs a new
+        keypair and overwrites the shared output files, so concurrent
+        workers would torn-write the pair. Returns ``True`` (rewritten).
+        """
+        def _aware(dt: datetime) -> datetime:
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
         # ECDSA P-256 leaf — fast, modern, matches the Connector cert
         # algorithm so nginx negotiates TLS 1.3 + ECDSA cleanly.
         leaf_key = ec.generate_private_key(ec.SECP256R1())
@@ -955,31 +1061,17 @@ class AgentManager:
         )
         leaf_cert = builder.sign(self._mastio_ca_key, hashes.SHA256())
 
-        # Write atomically: tmp file then rename. The mtime change is
-        # the signal the sidecar ``nginx-reload-watcher.sh`` (Wave 2
-        # fix 6) picks up to trigger ``nginx -s reload`` — no SIGHUP
-        # from this side, no docker socket. At boot we still need the
-        # writes consistent so a restart-within-restart never observes
-        # a torn pair.
-        #
-        # Three-tier PKI hardening (audit 2026-05-18): ``org-ca.crt`` now
-        # holds the **full chain** (Org Root || Intermediate) so a
-        # client doing strict path validation against an arbitrary
-        # leaf still sees the issuer chain. The legacy single-cert
-        # mode (Root only) would fail validation now that leaves are
-        # Intermediate-issued.
+        # Three-tier PKI hardening (audit 2026-05-18): ``org-ca.crt`` holds
+        # the full chain (Org Root || Intermediate); ``mastio-server.crt``
+        # is the leaf || Intermediate bundle strict TLS clients need to
+        # build ``Leaf -> Intermediate -> Org Root``. Writes use tmp+rename
+        # per file; the caller's boot lock makes the three-file set atomic
+        # across workers. The mtime change is the signal the sidecar
+        # ``nginx-reload-watcher.sh`` picks up to trigger ``nginx -s reload``.
         ca_pem = (
             self._org_ca_cert.public_bytes(serialization.Encoding.PEM)
             + self._mastio_ca_cert.public_bytes(serialization.Encoding.PEM)
         )
-        # Three-tier PKI hardening (audit 2026-05-18) follow-up #2:
-        # ``mastio-server.crt`` is now a full chain bundle
-        # (leaf || Intermediate). Strict TLS clients (Python ssl,
-        # OpenSSL, Go crypto/tls) require the Intermediate to build the
-        # path ``Leaf -> Intermediate -> Org Root`` when only the Org
-        # Root is in the trust store. Standard PEM ordering: leaf first,
-        # then Intermediate; the root is omitted because it lives in the
-        # client trust store.
         crt_pem = (
             leaf_cert.public_bytes(serialization.Encoding.PEM)
             + self._mastio_ca_cert.public_bytes(serialization.Encoding.PEM)
@@ -990,12 +1082,17 @@ class AgentManager:
             serialization.NoEncryption(),
         )
 
+        # tmp name is pid-suffixed so even a non-flock backend never
+        # collides on the same tmp file; the boot lock already serialises
+        # this, the suffix is belt-and-braces.
+        import os
+        pid = os.getpid()
         for path, payload, mode in (
             (ca_path, ca_pem, 0o644),
             (crt_path, crt_pem, 0o644),
             (key_path, key_pem, 0o600),
         ):
-            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp = path.with_suffix(path.suffix + f".tmp.{pid}")
             tmp.write_bytes(payload)
             tmp.chmod(mode)
             tmp.replace(path)
@@ -1712,7 +1809,25 @@ class AgentManager:
             # at-rest so the lifespan's ``load_org_ca_from_config``
             # finds the keypair on the very next call.
             try:
-                await provider.store_org_ca(legacy_org_key, legacy_org_cert)
+                # Prefer the atomic create-only variant (Vault KV v2
+                # cas:0) so N workers migrating the SAME legacy material
+                # at boot don't take the racy read-modify-write first-
+                # write branch (no cas) — which interleaves into a cas
+                # version mismatch → RuntimeError → wipe aborted on some
+                # workers and completed on others = inconsistent at-rest
+                # hardening state across the fleet. "Lost" here is a
+                # clean no-op (a sibling already migrated the identical
+                # PEM), not a failure. Mirrors the D-9 fix in
+                # ``_persist_org_ca``; providers without it keep the
+                # legacy path (local backend is race-safe via the
+                # pki_key_store PK collision on the identical key_id).
+                store_if_absent = getattr(
+                    provider, "store_org_ca_if_absent", None,
+                )
+                if store_if_absent is not None:
+                    await store_if_absent(legacy_org_key, legacy_org_cert)
+                else:
+                    await provider.store_org_ca(legacy_org_key, legacy_org_cert)
             except Exception as exc:  # noqa: BLE001 — refuse-to-wipe on failure
                 logger.error(
                     "Phase 0 migration failed for org_ca: %s. Aborting "
@@ -1754,9 +1869,19 @@ class AgentManager:
 
         if legacy_int_key and legacy_int_cert:
             try:
-                await provider.store_intermediate_ca(
-                    legacy_int_key, legacy_int_cert,
+                # Same D-9 atomic create-only treatment as org_ca above:
+                # cas:0 when the provider exposes it, legacy path
+                # otherwise. Avoids the read-modify-write cas mismatch
+                # that aborted the wipe on a subset of workers.
+                store_int_if_absent = getattr(
+                    provider, "store_intermediate_ca_if_absent", None,
                 )
+                if store_int_if_absent is not None:
+                    await store_int_if_absent(legacy_int_key, legacy_int_cert)
+                else:
+                    await provider.store_intermediate_ca(
+                        legacy_int_key, legacy_int_cert,
+                    )
             except Exception as exc:  # noqa: BLE001 — refuse-to-wipe on failure
                 logger.error(
                     "Phase 0 migration failed for intermediate_ca: %s. "
