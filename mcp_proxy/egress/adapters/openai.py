@@ -140,6 +140,21 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
     timeout = getattr(settings, "ai_gateway_request_timeout_s", None)
     if timeout:
         kwargs["timeout"] = float(timeout)
+    # M7 (audit 2026-06-02): give the SDK an httpx client whose transport
+    # validates the outbound URL against the SSRF guard and pins the
+    # connect to the validated IP. Without this, an operator-set (or
+    # DB-row-injected) base_url could be DNS-rebound to an internal/IMDS
+    # address at connect time with the provider API key on the wire.
+    import httpx as _httpx
+    from mcp_proxy.egress.adapters._ssrf_transport import (
+        SSRFPinnedTransport,
+        allow_private_from_settings,
+    )
+    kwargs["http_client"] = _httpx.AsyncClient(
+        transport=SSRFPinnedTransport(
+            allow_private=allow_private_from_settings(settings),
+        ),
+    )
     client = AsyncOpenAI(**kwargs)
     _CLIENT_CACHE[fingerprint] = client
     return client
