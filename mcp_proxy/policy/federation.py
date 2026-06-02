@@ -106,9 +106,13 @@ async def call_remote_tool_call_policy(
             reached_remote=False,
         )
 
+    # SSRF rebinding pin (audit 2026-06-02): connect to the IP just
+    # validated above, not whatever the peer hostname re-resolves to.
+    from mcp_proxy.utils.ssrf_transport import SSRFPinnedTransport
     try:
         async with httpx.AsyncClient(
             timeout=_FEDERATION_TIMEOUT, follow_redirects=False,
+            transport=SSRFPinnedTransport(allow_private=allow_private),
         ) as client:
             resp = await client.post(
                 federation_url, content=body_bytes, headers=headers,

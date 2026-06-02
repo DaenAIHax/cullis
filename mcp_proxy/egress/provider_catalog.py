@@ -415,8 +415,14 @@ async def fetch_ollama_models(api_base: str, *, timeout_s: float = 2.0) -> list[
         return []
 
     url = api_base.rstrip("/") + "/api/tags"
+    # SSRF rebinding pin (audit 2026-06-02): connect to the IP just
+    # validated, not whatever the hostname re-resolves to at connect.
+    from mcp_proxy.utils.ssrf_transport import SSRFPinnedTransport
     try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout_s,
+            transport=SSRFPinnedTransport(allow_private=allow_private),
+        ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             payload = resp.json()

@@ -101,8 +101,15 @@ async def _fetch_upstream_schema(endpoint_url: str, tool_name: str) -> dict | No
         )
         return None
 
+    # SSRF rebinding pin (audit 2026-06-02): pin the connect to the
+    # validated IP. The runtime forwarder is already pinned (H8); this
+    # startup schema fetch is the matching defence-in-depth.
+    from mcp_proxy.utils.ssrf_transport import SSRFPinnedTransport
     try:
-        async with _httpx.AsyncClient(timeout=3.0) as client:
+        async with _httpx.AsyncClient(
+            timeout=3.0,
+            transport=SSRFPinnedTransport(allow_private=allow_private),
+        ) as client:
             r = await client.post(
                 endpoint_url,
                 headers={

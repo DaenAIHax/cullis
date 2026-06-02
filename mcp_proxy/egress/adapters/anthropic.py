@@ -711,6 +711,20 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
     timeout = getattr(settings, "ai_gateway_request_timeout_s", None)
     if timeout:
         kwargs["timeout"] = float(timeout)
+    # SSRF rebinding pin (audit 2026-06-02): mirror the OpenAI adapter —
+    # give the SDK an httpx client whose transport validates the base_url
+    # against the SSRF guard and pins the connect to the validated IP, so a
+    # rebound base_url can't reach an internal/IMDS host with the API key.
+    import httpx as _httpx
+    from mcp_proxy.utils.ssrf_transport import (
+        SSRFPinnedTransport,
+        allow_private_from_settings,
+    )
+    kwargs["http_client"] = _httpx.AsyncClient(
+        transport=SSRFPinnedTransport(
+            allow_private=allow_private_from_settings(settings),
+        ),
+    )
     client = AsyncAnthropic(**kwargs)
     _CLIENT_CACHE[fingerprint] = client
     return client

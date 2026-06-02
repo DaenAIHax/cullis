@@ -146,7 +146,7 @@ def _client(creds: dict[str, str], settings: "Settings") -> Any:
     # DB-row-injected) base_url could be DNS-rebound to an internal/IMDS
     # address at connect time with the provider API key on the wire.
     import httpx as _httpx
-    from mcp_proxy.egress.adapters._ssrf_transport import (
+    from mcp_proxy.utils.ssrf_transport import (
         SSRFPinnedTransport,
         allow_private_from_settings,
     )
