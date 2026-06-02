@@ -2,7 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="Cullis — Governance layer for autonomous AI agents in regulated industries" theme="light">
+<Layout title="Cullis — A governance layer for autonomous AI agents in regulated industries" theme="light">
 
   <!-- Fixed page backdrop: cyan/indigo gradient blob that stays in viewport
        while the page scrolls. Sections with opaque backgrounds (gray-blue,
@@ -18,8 +18,8 @@ import Layout from '../layouts/Layout.astro';
       </div>
 
       <h1 class="hero-title reveal" data-delay="1">
-        The governance layer<br />
-        autonomous AI agents need to ship<br />
+        A governance layer for<br />
+        autonomous AI agents<br />
         in regulated industries.
       </h1>
 
@@ -124,7 +124,7 @@ import Layout from '../layouts/Layout.astro';
             x509 + SPIFFE ID per agent process. mTLS RFC 8705 and DPoP RFC
             9449. The caller authenticated at the gateway is the agent
             itself, not a shared service account. Rotation on its own
-            schedule, revocation propagates in seconds. Maps to EU AI Act
+            schedule, revocation propagates in seconds. Designed around EU AI Act
             Art. 12 and DORA Art. 28 + Art. 30 (ICT third-party risk +
             key contractual provisions).
           </p>
@@ -135,7 +135,7 @@ import Layout from '../layouts/Layout.astro';
             PDP fires before the LLM API or MCP tool runs. Per-principal
             scopes (this agent can read claim files, that agent cannot).
             4-eye approval capability. OPA-compatible bundles or built-in
-            DSL. Maps to EU AI Act Art. 14 (human oversight) and Art. 26
+            DSL. Designed around EU AI Act Art. 14 (human oversight) and Art. 26
             (deployer obligations on high-risk systems).
           </p>
           <a class="feature-link" href="https://github.com/cullis-security/cullis#cullis-mastio">Policy model →</a>
@@ -145,7 +145,7 @@ import Layout from '../layouts/Layout.astro';
             Every event (auth, enroll, message, tool call, LLM token)
             hashed and chained. Optional RFC 3161 TSA anchoring. Your
             auditor verifies the chain externally, without trusting
-            Cullis or your IT team. Maps to EU AI Act Art. 12
+            Cullis or your IT team. Designed around EU AI Act Art. 12
             (record-keeping) + Art. 15 (accuracy, robustness,
             cybersecurity) and EIOPA Opinion BoS-25-360 (6 Aug 2025).
           </p>
@@ -314,7 +314,7 @@ import Layout from '../layouts/Layout.astro';
             </div>
           </div>
           <ul class="topo-bullets">
-            <li>Zero added latency on the LLM call path. Agent uses the provider's native SDK.</li>
+            <li>No latency added to the LLM call itself in this mode. The agent uses the provider's native SDK.</li>
             <li>Mastio attests identity, evaluates policy and receives audit events out-of-band.</li>
             <li>Best when latency budget is tight, or when the provider call must remain unchanged.</li>
           </ul>
@@ -336,7 +336,7 @@ import Layout from '../layouts/Layout.astro';
   <section class="use-cases" data-section-theme="dark">
     <div class="container">
       <div class="use-cases-head">
-        <p class="eyebrow reveal">Reference scenarios · Claude for Financial Services on Cullis</p>
+        <p class="eyebrow reveal">Reference scenarios · regulated finance</p>
         <h2 class="reveal" data-delay="1">
           Four workflows regulated EU teams<br />
           are trying to graduate.
@@ -358,7 +358,7 @@ import Layout from '../layouts/Layout.astro';
           <p>
             Entity file assembly + AML escalation on the Anthropic
             template. Per-agent cert binds every screening action.
-            Maps to <strong>EU AI Act Art. 14 + Art. 12</strong>.</p>
+            Designed around <strong>EU AI Act Art. 14 + Art. 12</strong>.</p>
         </article>
 
         <article class="use-case-card">
@@ -366,7 +366,7 @@ import Layout from '../layouts/Layout.astro';
           <h3>Pitchbook + Chinese Walls</h3>
           <p>
             Cross-desk capability gate blocks MNPI leakage —
-            Industrials agent cannot read Tech docs. Maps to
+            Industrials agent cannot read Tech docs. Designed around
             <strong>MAR Art. 16 + Art. 18</strong>.</p>
         </article>
 
@@ -375,7 +375,7 @@ import Layout from '../layouts/Layout.astro';
           <h3>DORA Vendor Reporter</h3>
           <p>
             Cullis-specific. Runs on <strong>open-weight LLM on-prem
-            (Ollama)</strong> — no SaaS sees vendor risk data. Maps to
+            (Ollama)</strong> — no SaaS sees vendor risk data. Designed around
             <strong>DORA Art. 28 + Art. 30</strong>.</p>
         </article>
 
@@ -385,7 +385,7 @@ import Layout from '../layouts/Layout.astro';
           <p>
             Signal → reasoning → risk_check → place_order, every step
             hash-chained. PDP blocks orders when kill-switch on. Mock
-            OMS — not production trading. Maps to <strong>MiFID II
+            OMS — not production trading. Designed around <strong>MiFID II
             Art. 17 + RTS 6 Art. 23</strong> (pre-trade controls).
           </p>
         </article>
