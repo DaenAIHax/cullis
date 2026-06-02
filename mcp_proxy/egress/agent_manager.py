@@ -1809,7 +1809,25 @@ class AgentManager:
             # at-rest so the lifespan's ``load_org_ca_from_config``
             # finds the keypair on the very next call.
             try:
-                await provider.store_org_ca(legacy_org_key, legacy_org_cert)
+                # Prefer the atomic create-only variant (Vault KV v2
+                # cas:0) so N workers migrating the SAME legacy material
+                # at boot don't take the racy read-modify-write first-
+                # write branch (no cas) — which interleaves into a cas
+                # version mismatch → RuntimeError → wipe aborted on some
+                # workers and completed on others = inconsistent at-rest
+                # hardening state across the fleet. "Lost" here is a
+                # clean no-op (a sibling already migrated the identical
+                # PEM), not a failure. Mirrors the D-9 fix in
+                # ``_persist_org_ca``; providers without it keep the
+                # legacy path (local backend is race-safe via the
+                # pki_key_store PK collision on the identical key_id).
+                store_if_absent = getattr(
+                    provider, "store_org_ca_if_absent", None,
+                )
+                if store_if_absent is not None:
+                    await store_if_absent(legacy_org_key, legacy_org_cert)
+                else:
+                    await provider.store_org_ca(legacy_org_key, legacy_org_cert)
             except Exception as exc:  # noqa: BLE001 — refuse-to-wipe on failure
                 logger.error(
                     "Phase 0 migration failed for org_ca: %s. Aborting "
@@ -1851,9 +1869,19 @@ class AgentManager:
 
         if legacy_int_key and legacy_int_cert:
             try:
-                await provider.store_intermediate_ca(
-                    legacy_int_key, legacy_int_cert,
+                # Same D-9 atomic create-only treatment as org_ca above:
+                # cas:0 when the provider exposes it, legacy path
+                # otherwise. Avoids the read-modify-write cas mismatch
+                # that aborted the wipe on a subset of workers.
+                store_int_if_absent = getattr(
+                    provider, "store_intermediate_ca_if_absent", None,
                 )
+                if store_int_if_absent is not None:
+                    await store_int_if_absent(legacy_int_key, legacy_int_cert)
+                else:
+                    await provider.store_intermediate_ca(
+                        legacy_int_key, legacy_int_cert,
+                    )
             except Exception as exc:  # noqa: BLE001 — refuse-to-wipe on failure
                 logger.error(
                     "Phase 0 migration failed for intermediate_ca: %s. "
