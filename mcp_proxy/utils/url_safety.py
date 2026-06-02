@@ -39,6 +39,7 @@ __all__ = [
     "UnsafeUrlError",
     "assert_safe_outbound_url",
     "is_safe_ip",
+    "pin_request_to_ip",
 ]
 
 _log = logging.getLogger(__name__)
@@ -211,3 +212,35 @@ def assert_safe_outbound_url(
         raise UnsafeUrlError(f"hostname {hostname!r} produced no usable address")
 
     return pinned_ip
+
+
+def pin_request_to_ip(request, pinned_ip: str) -> None:
+    """Rewrite an ``httpx.Request`` to connect to ``pinned_ip`` while keeping
+    the original Host header and TLS SNI / cert hostname.
+
+    H8 (audit 2026-06-02): ``assert_safe_outbound_url`` validates a resolved
+    IP and returns it precisely so the socket connect can be pinned to that
+    address — but every caller used to discard it, letting httpx re-resolve
+    the hostname at connect time. A DNS-rebinding record that answers a
+    public IP during validation and an internal/IMDS IP at connect would
+    then slip past the guard (TOCTOU). Pinning the URL host to the
+    already-validated IP closes that window; ``sni_hostname`` (read by
+    httpcore as the TLS ``server_hostname``) and the ``Host`` header keep
+    cert verification and HTTP routing pointed at the real hostname, so TLS
+    and virtual-hosting still work.
+
+    No-op when the host is already an IP literal (nothing was resolved, so
+    there is no rebinding window) or equals the pinned IP.
+    """
+    original_host = request.url.host
+    if not original_host or original_host == pinned_ip:
+        return
+    # Preserve Host header (host[:port]) for HTTP routing — capture it from
+    # the original URL before the host is rewritten.
+    request.headers["Host"] = request.url.netloc.decode("ascii")
+    # Pin TLS verification to the original hostname: httpcore reads
+    # ``sni_hostname`` as ``server_hostname`` and validates the peer cert
+    # against it, not against the IP we connect to.
+    request.extensions = {**request.extensions, "sni_hostname": original_host}
+    # Connect to the validated IP (httpcore connects to request.url.host).
+    request.url = request.url.copy_with(host=pinned_ip)
