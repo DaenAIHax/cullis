@@ -51,6 +51,7 @@ class WhitelistedTransport(httpx.AsyncHTTPTransport):
         from mcp_proxy.utils.url_safety import (
             UnsafeUrlError,
             assert_safe_outbound_url,
+            pin_request_to_ip,
         )
         from mcp_proxy.config import get_settings
 
@@ -58,7 +59,9 @@ class WhitelistedTransport(httpx.AsyncHTTPTransport):
             getattr(get_settings(), "policy_webhook_allow_private_ips", False)
         )
         try:
-            assert_safe_outbound_url(str(request.url), allow_private=allow_private)
+            pinned_ip = assert_safe_outbound_url(
+                str(request.url), allow_private=allow_private,
+            )
         except UnsafeUrlError as exc:
             _log.warning(
                 "WhitelistedTransport refused unsafe URL %s: %s",
@@ -67,6 +70,16 @@ class WhitelistedTransport(httpx.AsyncHTTPTransport):
             raise ToolExecutionError(
                 f"Refused URL {request.url!s}: {exc}"
             ) from exc
+
+        # H8 (audit 2026-06-02): pin the connect to the IP we just
+        # validated. Without this, the check above is a check-then-connect
+        # TOCTOU — httpx would re-resolve the hostname at connect time, so a
+        # DNS-rebinding record (public IP at check, internal/IMDS IP at
+        # connect) would reach the internal target carrying the per-tool
+        # credential. Pinning forces the socket to the validated address;
+        # the Host header + sni_hostname keep TLS/routing on the real
+        # hostname.
+        pin_request_to_ip(request, pinned_ip)
 
         return await super().handle_async_request(request)
 
