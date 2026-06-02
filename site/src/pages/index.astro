@@ -2,7 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="Cullis — Governance layer for autonomous AI agents in regulated industries" theme="light">
+<Layout title="Cullis — A governance layer for autonomous AI agents in regulated industries" theme="light">
 
   <!-- Fixed page backdrop: cyan/indigo gradient blob that stays in viewport
        while the page scrolls. Sections with opaque backgrounds (gray-blue,
@@ -18,8 +18,8 @@ import Layout from '../layouts/Layout.astro';
       </div>
 
       <h1 class="hero-title reveal" data-delay="1">
-        The governance layer<br />
-        autonomous AI agents need to ship<br />
+        A governance layer for<br />
+        autonomous AI agents<br />
         in regulated industries.
       </h1>
 
@@ -41,7 +41,7 @@ import Layout from '../layouts/Layout.astro';
         <div class="screen-frame">
           <img src="/screenshots/mastio-overview.png" alt="Mastio overview dashboard, showing agent identity registry and live audit chain" loading="eager" />
         </div>
-        <div class="screen-caption">Mastio control plane · one container per organisation</div>
+        <div class="screen-caption">Mastio control plane · one self-hosted container</div>
         <p class="screen-disclaimer">Illustrative screenshots from the Cullis demo stack. Agent identities, tool calls, and audit events shown are reproducible from the public repo, not a customer deployment.</p>
       </div>
     </div>
@@ -95,7 +95,7 @@ import Layout from '../layouts/Layout.astro';
           For the agent, by the agent.
         </h2>
         <p class="showcase-lead reveal" data-delay="2">
-          One Docker container per organisation. Authority over agent identity,
+          One self-hosted Docker container. Authority over agent identity,
           policy enforced before the LLM call lands, an append-only audit
           chain externally verifiable by your auditor or regulator. Works
           underneath any agent stack — Claude Agent SDK, OpenAI Agents SDK,
@@ -124,7 +124,7 @@ import Layout from '../layouts/Layout.astro';
             x509 + SPIFFE ID per agent process. mTLS RFC 8705 and DPoP RFC
             9449. The caller authenticated at the gateway is the agent
             itself, not a shared service account. Rotation on its own
-            schedule, revocation propagates in seconds. Maps to EU AI Act
+            schedule, revocation propagates in seconds. Designed around EU AI Act
             Art. 12 and DORA Art. 28 + Art. 30 (ICT third-party risk +
             key contractual provisions).
           </p>
@@ -134,9 +134,9 @@ import Layout from '../layouts/Layout.astro';
           <p>
             PDP fires before the LLM API or MCP tool runs. Per-principal
             scopes (this agent can read claim files, that agent cannot).
-            4-eye approval capability. OPA-compatible bundles or built-in
-            DSL. Maps to EU AI Act Art. 14 (human oversight) and Art. 26
-            (deployer obligations on high-risk systems).
+            OPA-compatible bundles or built-in DSL. Designed around EU AI Act
+            Art. 14 (human oversight) and Art. 26 (deployer obligations on
+            high-risk systems).
           </p>
           <a class="feature-link" href="https://github.com/cullis-security/cullis#cullis-mastio">Policy model →</a>
         </div>
@@ -145,7 +145,7 @@ import Layout from '../layouts/Layout.astro';
             Every event (auth, enroll, message, tool call, LLM token)
             hashed and chained. Optional RFC 3161 TSA anchoring. Your
             auditor verifies the chain externally, without trusting
-            Cullis or your IT team. Maps to EU AI Act Art. 12
+            Cullis or your IT team. Designed around EU AI Act Art. 12
             (record-keeping) + Art. 15 (accuracy, robustness,
             cybersecurity) and EIOPA Opinion BoS-25-360 (6 Aug 2025).
           </p>
@@ -314,7 +314,7 @@ import Layout from '../layouts/Layout.astro';
             </div>
           </div>
           <ul class="topo-bullets">
-            <li>Zero added latency on the LLM call path. Agent uses the provider's native SDK.</li>
+            <li>No latency added to the LLM call itself in this mode. The agent uses the provider's native SDK.</li>
             <li>Mastio attests identity, evaluates policy and receives audit events out-of-band.</li>
             <li>Best when latency budget is tight, or when the provider call must remain unchanged.</li>
           </ul>
@@ -325,7 +325,7 @@ import Layout from '../layouts/Layout.astro';
         <p class="topo-foot-label">Even behind a hardened enterprise gateway, three properties stay Cullis-only:</p>
         <ul class="topo-foot-list">
           <li><strong>Tamper-evident audit chain</strong><span>Hash-chained, externally verifiable end-to-end. Optional RFC 3161 TSA anchoring when a timestamp authority is configured.</span></li>
-          <li><strong>Cross-org A2A federation</strong><span>Bilateral signed envelope between Mastios in different organisations. Zero AI gateway covers this.</span></li>
+          <li><strong>Policy enforced before the call</strong><span>The PDP gates each request per-principal before the LLM or MCP tool runs. A gateway forwards; Mastio decides first.</span></li>
           <li><strong>Per-agent crypto identity</strong><span>x509 + SPIFFE + DPoP per agent. Gateways see the user; only Mastio attests the agent.</span></li>
         </ul>
       </div>
@@ -336,7 +336,7 @@ import Layout from '../layouts/Layout.astro';
   <section class="use-cases" data-section-theme="dark">
     <div class="container">
       <div class="use-cases-head">
-        <p class="eyebrow reveal">Reference scenarios · Claude for Financial Services on Cullis</p>
+        <p class="eyebrow reveal">Reference scenarios · regulated finance</p>
         <h2 class="reveal" data-delay="1">
           Four workflows regulated EU teams<br />
           are trying to graduate.
@@ -358,7 +358,7 @@ import Layout from '../layouts/Layout.astro';
           <p>
             Entity file assembly + AML escalation on the Anthropic
             template. Per-agent cert binds every screening action.
-            Maps to <strong>EU AI Act Art. 14 + Art. 12</strong>.</p>
+            Designed around <strong>EU AI Act Art. 14 + Art. 12</strong>.</p>
         </article>
 
         <article class="use-case-card">
@@ -366,7 +366,7 @@ import Layout from '../layouts/Layout.astro';
           <h3>Pitchbook + Chinese Walls</h3>
           <p>
             Cross-desk capability gate blocks MNPI leakage —
-            Industrials agent cannot read Tech docs. Maps to
+            Industrials agent cannot read Tech docs. Designed around
             <strong>MAR Art. 16 + Art. 18</strong>.</p>
         </article>
 
@@ -375,7 +375,7 @@ import Layout from '../layouts/Layout.astro';
           <h3>DORA Vendor Reporter</h3>
           <p>
             Cullis-specific. Runs on <strong>open-weight LLM on-prem
-            (Ollama)</strong> — no SaaS sees vendor risk data. Maps to
+            (Ollama)</strong> — no SaaS sees vendor risk data. Designed around
             <strong>DORA Art. 28 + Art. 30</strong>.</p>
         </article>
 
@@ -385,7 +385,7 @@ import Layout from '../layouts/Layout.astro';
           <p>
             Signal → reasoning → risk_check → place_order, every step
             hash-chained. PDP blocks orders when kill-switch on. Mock
-            OMS — not production trading. Maps to <strong>MiFID II
+            OMS — not production trading. Designed around <strong>MiFID II
             Art. 17 + RTS 6 Art. 23</strong> (pre-trade controls).
           </p>
         </article>
@@ -466,26 +466,28 @@ result = client.call_mcp_tool("sanctions_lookup", &#123;"full_name": "Acme Holdi
       const items = grid.querySelectorAll<HTMLElement>('[data-feature]');
       const descs = grid.querySelectorAll<HTMLElement>('[data-feature-desc]');
       const imgs = grid.querySelectorAll<HTMLImageElement>('[data-frame-img]');
+      const order = ['pki', 'agents', 'audit'];
 
+      const activate = (key: string) => {
+        items.forEach((i) => i.classList.toggle('active', i.dataset.feature === key));
+        descs.forEach((d) => d.classList.toggle('active', d.dataset.featureDesc === key));
+        imgs.forEach((img) => img.classList.toggle('active', img.dataset.frameImg === key));
+      };
+
+      // Auto-rotate until the visitor clicks a tab, then stop so they can read.
+      let paused = false;
       items.forEach((item) => {
         item.addEventListener('click', () => {
-          const key = item.dataset.feature || '';
-          items.forEach((i) => i.classList.toggle('active', i === item));
-          descs.forEach((d) => d.classList.toggle('active', d.dataset.featureDesc === key));
-          imgs.forEach((img) => img.classList.toggle('active', img.dataset.frameImg === key));
+          paused = true;
+          activate(item.dataset.feature || '');
         });
       });
 
-      let auto = true;
-      grid.addEventListener('click', () => { auto = false; }, { once: true });
       let idx = 0;
-      const order = ['pki', 'agents', 'audit'];
       setInterval(() => {
-        if (!auto) return;
+        if (paused) return;
         idx = (idx + 1) % order.length;
-        const next = grid.querySelector<HTMLElement>(`[data-feature="${order[idx]}"]`);
-        if (next) (next as HTMLElement).click();
-        auto = true;
+        activate(order[idx]);
       }, 6000);
     }
   </script>

@@ -197,7 +197,7 @@ Anything below this line assumes the above hold.
 | Tampering with the DPoP proof | Replay a captured proof from elsewhere | Redis-backed JTI cache rejects any DPoP `jti` seen in the configured window (`mcp_proxy/auth/dpop_jti_store.py`, `_DEFAULT_TTL = 300` seconds = 5 minutes; `SET NX EX` semantics). `htu` is checked literally including scheme + host + port: a middlebox that strips port 9443 fails. | Replay protection cold-starts empty; first-N requests in the window after a proxy restart have lower replay protection until the cache fills. We do not currently warm the cache from a persistent store. |
 | Repudiation by an agent | Agent claims it never made a call | Each call is signed end-to-end (DPoP) and logged to the append-only audit chain with `agent_id`, action, tool name, status, request ID, duration, and the verified DPoP `jkt` thumbprint denormalised onto the row (`local_audit.dpop_jkt`, migration `0033_audit_dpop_jkt`). The chain `previous_hash` / `entry_hash` columns lock historical records under SHA-256. | If the agent claims key compromise, the audit chain attributes the call to the agent's registry ID and to the DPoP `jkt` that was present at request time. Customers needing per-person attribution should pair Cullis with their IdP (SAML SSO or similar) so that the user principal is bound to the agent enrollment. |
 | Information disclosure of the cert + key on enrollment | Material shipped over an insecure channel | The dashboard offers the new cert + key PEMs as a one-time download with `Content-Disposition: attachment`, and writes nothing to the response body that gets cached. The operator copies the bytes onto the agent host out-of-band. | A screenshot of the download page leaks the material. We rely on operator hygiene; runbook guidance is in `operate/rotate-keys.md` and the bundle README. |
-| DoS via enrollment flood | Attacker hammers the enrollment endpoints | Both `/v1/enrollment/start` and `/v1/enrollment/{id}/status` are rate-limited per source IP (`mcp_proxy/enrollment/router.py`, calling `get_agent_rate_limiter()`). | A compromised admin token bypasses the rate limit. The 4-eyes plugin (open-core hook) can be configured to gate the enrollment approve step as a compensating control. |
+| DoS via enrollment flood | Attacker hammers the enrollment endpoints | Both `/v1/enrollment/start` and `/v1/enrollment/{id}/status` are rate-limited per source IP (`mcp_proxy/enrollment/router.py`, calling `get_agent_rate_limiter()`). | A compromised admin token bypasses the rate limit. The four-eyes plugin (enterprise build; the hook is wired in open-core) can be configured to gate the enrollment approve step as a compensating control. |
 | Elevation of privilege | Agent claims a role / capability it was not enrolled with | Roles and capabilities are stored on the registry record server-side; the agent cannot include a claim that overrides what the registry says. The PDP looks up the registry, not the proof. | A SQL-injection or registry-tampering vector would defeat this. We mitigate with parameterised queries throughout (SQLAlchemy), `/security-review` on every PR, and the audit chain providing forensic detection. |
 
 ### References
@@ -507,7 +507,11 @@ credentials are:
   **Verify chain** action and the standalone CLI catch it.
 - **4-eyes approval hook**: at configurable depth, a set of
   state-changing actions requires a second admin's signoff before
-  they take effect. The currently wired set is `policies.save`,
+  they take effect. The hook and its action constants are wired in the
+  open-core build, but the plugin that implements the approval workflow
+  (and the multi-admin / second-approver model it depends on) ships in
+  the enterprise build; open-core alone has a single admin and does not
+  gate. The currently wired set is `policies.save`,
   `pki.rotate_ca`, `mastio_key.rotate`, `vault.migrate_keys`,
   `users.delete`, `agents.delete`, `agent.enroll`,
   `license.import`. Federation peer changes (`federation.peer`) are

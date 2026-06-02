@@ -1,0 +1,212 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// Open-core vs enterprise boundary mirrors the license feature flags in
+// mcp_proxy/dashboard/templates/settings.html (has_feature(...)). Keep this
+// list in sync with those flags — it is the source of truth, not a sales matrix.
+const openCore = [
+  {
+    name: 'Per-agent cryptographic identity',
+    detail: 'x509 leaf + SPIFFE ID per agent process, mTLS (RFC 8705) + DPoP (RFC 9449), thumbprint pinning, explicit rotation. The caller is the agent itself, not a shared service account.',
+  },
+  {
+    name: 'Policy enforcement (PDP)',
+    detail: 'Per-principal capabilities and a policy decision point that fires before the LLM API or MCP tool runs. OPA-compatible Rego bundles or a built-in rule set.',
+  },
+  {
+    name: 'Tamper-evident audit chain',
+    detail: 'Append-only, hash-chained events with Merkle batch sealing and optional RFC 3161 TSA anchoring. Verifiable externally, without trusting Cullis or your IT team.',
+  },
+  {
+    name: 'Embedded AI gateway',
+    detail: 'Native per-provider adapters (Anthropic and OpenAI SDKs, raw HTTP for Ollama on-prem). LLM-agnostic, no third-party gateway in the critical path.',
+  },
+  {
+    name: 'MCP reverse-proxy',
+    detail: 'Aggregates MCP tool servers behind the same identity, capability gate, and audit chain.',
+  },
+];
+
+// The nine license-gated plugins (settings.html has_feature flags). Implemented,
+// shipped only in the enterprise build, not yet released as a packaged product.
+const enterprise = [
+  { name: 'SAML 2.0 SSO', detail: 'Federate dashboard sign-in with a corporate IdP (Okta, Azure AD, Keycloak, OneLogin).' },
+  { name: 'SCIM 2.0 provisioning', detail: 'Automated user lifecycle (provision / deprovision / group sync) from the corporate IdP.' },
+  { name: 'Multi-admin RBAC + four-eyes', detail: 'More than one admin, with a configurable second-admin approval gate on sensitive actions (enrollment, CA rotation, license import).' },
+  { name: 'Cloud KMS (AWS / Azure / GCP)', detail: 'Custody of the org CA private key in a managed cloud KMS instead of Vault or filesystem.' },
+  { name: 'Audit archive', detail: 'Long-term retention and archival of the audit chain to an external sink.' },
+  { name: 'Audit export to Datadog', detail: 'Stream audit events to Datadog for SIEM / monitoring.' },
+  { name: 'LLM Guardian', detail: 'Inline content inspection hook on the message path (plug in a detector such as a guardrail provider).' },
+];
+---
+
+<Layout title="Cullis — Open core and enterprise" theme="light">
+  <main class="editions">
+    <div class="container narrow">
+      <header class="ed-head">
+        <p class="ed-eyebrow">Open core &amp; enterprise</p>
+        <h1>What is implemented, and where it runs.</h1>
+        <p class="ed-lead">
+          Cullis is <strong>pre-1.0 and not yet validated in production</strong>.
+          Treat everything below as an early MVP, not a finished product. The
+          open-core build is what you can pull and run today under FSL-1.1 +
+          Apache-2.0. The enterprise capabilities are implemented as
+          license-gated plugins, but the enterprise build is not yet released
+          as a packaged product. Neither side has been validated in a real
+          deployment. This page exists so the boundary is explicit instead of
+          something you have to infer from the code.
+        </p>
+      </header>
+
+      <section class="ed-block">
+        <div class="ed-block-head">
+          <h2>Open core</h2>
+          <span class="ed-tag ed-tag-core">runs from the public image, no license</span>
+        </div>
+        <ul class="ed-list">
+          {openCore.map((f) => (
+            <li>
+              <span class="ed-name">{f.name}</span>
+              <span class="ed-detail">{f.detail}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section class="ed-block">
+        <div class="ed-block-head">
+          <h2>Enterprise build</h2>
+          <span class="ed-tag ed-tag-ent">implemented, license-gated, not yet released</span>
+        </div>
+        <ul class="ed-list">
+          {enterprise.map((f) => (
+            <li>
+              <span class="ed-name">{f.name}</span>
+              <span class="ed-detail">{f.detail}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <footer class="ed-foot">
+        <p>
+          The split above mirrors the license feature flags in the code, not a
+          price list. If something here looks wrong or oversold, that is exactly
+          the feedback we want.
+        </p>
+        <a class="ed-cta" href="https://github.com/cullis-security/cullis" target="_blank" rel="noopener">Read the code on GitHub ↗</a>
+      </footer>
+    </div>
+  </main>
+</Layout>
+
+<style>
+  .editions {
+    padding: clamp(7rem, 12vh, 10rem) 0 6rem;
+    color: #0A2540;
+  }
+  .container.narrow {
+    max-width: 820px;
+    margin: 0 auto;
+    padding-left: clamp(1.25rem, 4vw, 2rem);
+    padding-right: clamp(1.25rem, 4vw, 2rem);
+  }
+  .ed-head { margin-bottom: 3.5rem; }
+  .ed-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #0891B2;
+    margin: 0 0 1rem;
+  }
+  .ed-head h1 {
+    font-size: clamp(1.9rem, 4vw, 2.7rem);
+    line-height: 1.1;
+    margin: 0 0 1.5rem;
+    color: #0A2540;
+  }
+  .ed-lead {
+    font-size: 1.05rem;
+    line-height: 1.7;
+    color: #425466;
+    margin: 0;
+  }
+  .ed-block { margin-bottom: 3rem; }
+  .ed-block-head {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+    border-bottom: 1px solid rgba(10, 37, 64, 0.12);
+    padding-bottom: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .ed-block-head h2 {
+    font-size: 1.4rem;
+    margin: 0;
+    color: #0A2540;
+  }
+  .ed-tag {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .ed-tag-core {
+    color: #0891B2;
+    background: rgba(8, 145, 178, 0.08);
+    border-color: rgba(8, 145, 178, 0.3);
+  }
+  .ed-tag-ent {
+    color: #B45309;
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .ed-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1.4rem;
+  }
+  .ed-list li {
+    display: grid;
+    gap: 0.35rem;
+  }
+  .ed-name {
+    font-weight: 600;
+    font-size: 1.02rem;
+    color: #0A2540;
+  }
+  .ed-detail {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: #425466;
+  }
+  .ed-foot {
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(10, 37, 64, 0.12);
+  }
+  .ed-foot p {
+    font-size: 0.98rem;
+    line-height: 1.7;
+    color: #425466;
+    margin: 0 0 1.5rem;
+  }
+  .ed-cta {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #0891B2;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(8, 145, 178, 0.4);
+    padding-bottom: 2px;
+  }
+  .ed-cta:hover { color: #0A2540; border-bottom-color: #0A2540; }
+</style>
