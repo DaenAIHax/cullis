@@ -466,26 +466,28 @@ result = client.call_mcp_tool("sanctions_lookup", &#123;"full_name": "Acme Holdi
       const items = grid.querySelectorAll<HTMLElement>('[data-feature]');
       const descs = grid.querySelectorAll<HTMLElement>('[data-feature-desc]');
       const imgs = grid.querySelectorAll<HTMLImageElement>('[data-frame-img]');
+      const order = ['pki', 'agents', 'audit'];
 
+      const activate = (key: string) => {
+        items.forEach((i) => i.classList.toggle('active', i.dataset.feature === key));
+        descs.forEach((d) => d.classList.toggle('active', d.dataset.featureDesc === key));
+        imgs.forEach((img) => img.classList.toggle('active', img.dataset.frameImg === key));
+      };
+
+      // Auto-rotate until the visitor clicks a tab, then stop so they can read.
+      let paused = false;
       items.forEach((item) => {
         item.addEventListener('click', () => {
-          const key = item.dataset.feature || '';
-          items.forEach((i) => i.classList.toggle('active', i === item));
-          descs.forEach((d) => d.classList.toggle('active', d.dataset.featureDesc === key));
-          imgs.forEach((img) => img.classList.toggle('active', img.dataset.frameImg === key));
+          paused = true;
+          activate(item.dataset.feature || '');
         });
       });
 
-      let auto = true;
-      grid.addEventListener('click', () => { auto = false; }, { once: true });
       let idx = 0;
-      const order = ['pki', 'agents', 'audit'];
       setInterval(() => {
-        if (!auto) return;
+        if (paused) return;
         idx = (idx + 1) % order.length;
-        const next = grid.querySelector<HTMLElement>(`[data-feature="${order[idx]}"]`);
-        if (next) (next as HTMLElement).click();
-        auto = true;
+        activate(order[idx]);
       }, 6000);
     }
   </script>
