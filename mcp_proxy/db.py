@@ -87,6 +87,24 @@ def _normalize_url(db_url: str) -> str:
     return f"sqlite+aiosqlite:///{db_url}"
 
 
+def _redact_db_url(url: str) -> str:
+    """Return ``url`` with any embedded password masked, for safe logging.
+
+    H9 (audit 2026-06-02): a Postgres prod URL carries the DB password
+    inline (``postgresql+asyncpg://user:PASSWORD@host/db``). Logging it
+    verbatim leaks the production credential to the whole log-read audience
+    (SRE, log pipeline, support bundles), violating "mai loggare segreti".
+    Mask via SQLAlchemy's URL renderer; on any parse failure fall back to
+    the host/db tail (which never contains the password, since userinfo
+    precedes the ``@``) so redaction can never itself break boot.
+    """
+    try:
+        from sqlalchemy.engine.url import make_url
+        return make_url(url).render_as_string(hide_password=True)
+    except Exception:  # noqa: BLE001 — redaction must never break boot
+        return url.split("@", 1)[-1] if "@" in url else url
+
+
 def _sqlite_path(db_url: str) -> str | None:
     """Extract the filesystem path from a sqlite URL, or None if not SQLite."""
     for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
@@ -352,7 +370,7 @@ async def init_db(db_url: str) -> None:
             if _engine.dialect.name == "sqlite":
                 await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.run_sync(metadata.create_all)
-        _log.info("Database initialized (no-migrations mode): %s", url)
+        _log.info("Database initialized (no-migrations mode): %s", _redact_db_url(url))
         return
 
     # M-db-2 audit fix — under N concurrent workers booting against
@@ -406,7 +424,7 @@ async def init_db(db_url: str) -> None:
         async with _engine.begin() as conn:
             await conn.execute(text("PRAGMA journal_mode=WAL"))
 
-    _log.info("Database initialized (alembic upgrade head): %s", url)
+    _log.info("Database initialized (alembic upgrade head): %s", _redact_db_url(url))
 
 
 async def dispose_db() -> None:
