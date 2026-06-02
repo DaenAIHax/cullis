@@ -648,29 +648,69 @@ def _canonical_for_row(entry: dict, previous_hash: str | None) -> str:
     return canonical_str
 
 
-@router.post("/audit/verify")
-async def verify_chain(request: Request) -> JSONResponse:
-    """Run the same chain check as ``cullis-audit-verify.py``, in-process.
+async def _verify_both_audit_chains() -> dict:
+    """Verify BOTH hash chains the Mastio maintains, return a verdict dict.
 
-    Returns 200 with a JSON verdict regardless of pass/fail — the
-    front-end inspects ``ok`` and renders a green or red banner. Real
-    failures use HTTP 200 + ``ok: false`` rather than HTTP 4xx/5xx so
-    the operator can read the failure detail without their browser
-    showing an error page.
+    Two independent append-only chains exist (different tables, different
+    canonical forms, independent ``chain_seq`` numbering):
+
+      * ``audit_log`` — the *admin* stream: ``auth.*``, ``enroll.*``,
+        ``agent.cert.rotate``, ``policy.*``. The highest-value security
+        events. Walked by :func:`mcp_proxy.db.verify_audit_chain`
+        (``action``/``row_hash``/``prev_hash`` schema, v1/v2 dispatch
+        binding ``dpop_jkt`` + ``on_behalf_of_user_id``).
+      * ``local_audit`` — the *traffic* stream: oneshot, MCP tool
+        execute, session send. Walked inline below, per org
+        (``event_type``/``entry_hash``/``previous_hash`` schema).
+
+    C1 (public security audit 2026-06-02): this surface only ever
+    walked ``local_audit``, so a tamper to an ``audit_log`` row — e.g.
+    flipping an ``enroll.deny`` to ``enroll.approve``, rewriting an
+    ``agent.cert.rotate``, or deleting the ``auth.login`` that preceded
+    an exfil — passed the operator's "Verify chain integrity" check
+    with a green verdict (false-green). ``ok`` is now the AND of both
+    chains, and the admin chain is checked first so an admin-stream
+    tamper surfaces even when the traffic stream is also broken.
+
+    Returns the raw verdict dict (the route wraps it in a 200 JSON
+    response regardless of pass/fail). Kept byte-compatible with the
+    front-end banner renderer in ``templates/audit.html``.
     """
     import hashlib
     from collections import defaultdict
 
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return JSONResponse({"ok": False, "error": "auth_required"}, status_code=401)
-    if not await verify_csrf(request, session):
-        return JSONResponse({"ok": False, "error": "csrf_invalid"}, status_code=403)
-
-    from mcp_proxy.db import get_db
     from sqlalchemy import text
 
+    from mcp_proxy.db import get_db, verify_audit_chain
+
+    # ── 1. Admin chain (audit_log). Authoritative walker lives in
+    #       mcp_proxy.db; reuse it rather than re-implement the v2
+    #       (dpop_jkt + on_behalf_of_user_id) hash dispatch here. ──────
+    admin_ok, admin_broken_seq, admin_reason = await verify_audit_chain()
+    if not admin_ok:
+        # ``verify_audit_chain`` returns only (ok, seq, reason); map the
+        # reason onto the same kind taxonomy the banner uses. A row_hash
+        # mismatch is content tamper; a gap / prev_hash break / non-
+        # genesis head is a linkage break.
+        kind = (
+            "mismatch"
+            if (admin_reason or "").startswith("row_hash mismatch")
+            else "break"
+        )
+        return {
+            "ok": False,
+            "failure": {
+                "kind": kind,
+                "scope": "audit_log",
+                "chain_seq": admin_broken_seq,
+                "reason": admin_reason,
+            },
+        }
+
     async with get_db() as db:
+        admin_chain_rows = (await db.execute(text(
+            "SELECT COUNT(*) FROM audit_log WHERE chain_seq IS NOT NULL"
+        ))).scalar() or 0
         result = await db.execute(text(
             "SELECT id, timestamp, agent_id, event_type, details, "
             "previous_hash, entry_hash, session_id, org_id, result, "
@@ -679,9 +719,9 @@ async def verify_chain(request: Request) -> JSONResponse:
         ))
         entries = [dict(r) for r in result.mappings().all()]
 
-    # Per-org chain check (mirrors verify_chains in the CLI). Legacy
-    # global-chain rows (chain_seq IS NULL) are still validated first
-    # so their tail becomes the seed for the per-org chain.
+    # ── 2. Traffic chain (local_audit), per org. Legacy global-chain
+    #       rows (chain_seq IS NULL) are validated first so their tail
+    #       becomes the seed for the per-org chain. ─────────────────────
     agents_seen: set[str] = set()
     orgs_seen: set[str] = set()
     for e in entries:
@@ -699,7 +739,7 @@ async def verify_chain(request: Request) -> JSONResponse:
         expected = _canonical_for_row(e, legacy_prev)
         computed = hashlib.sha256(expected.encode("utf-8")).hexdigest()
         if computed != e["entry_hash"]:
-            return JSONResponse({
+            return {
                 "ok": False,
                 "failure": {
                     "kind": "mismatch",
@@ -711,9 +751,9 @@ async def verify_chain(request: Request) -> JSONResponse:
                     "expected_hash": computed,
                     "observed_hash": e["entry_hash"],
                 },
-            })
+            }
         if e.get("previous_hash") != legacy_prev:
-            return JSONResponse({
+            return {
                 "ok": False,
                 "failure": {
                     "kind": "break",
@@ -723,7 +763,7 @@ async def verify_chain(request: Request) -> JSONResponse:
                     "declared_prev": e.get("previous_hash"),
                     "expected_prev": legacy_prev,
                 },
-            })
+            }
         legacy_prev = e["entry_hash"]
         legacy_n += 1
 
@@ -745,7 +785,7 @@ async def verify_chain(request: Request) -> JSONResponse:
             expected = _canonical_for_row(e, expected_prev)
             computed = hashlib.sha256(expected.encode("utf-8")).hexdigest()
             if computed != e["entry_hash"]:
-                return JSONResponse({
+                return {
                     "ok": False,
                     "failure": {
                         "kind": "mismatch",
@@ -759,9 +799,9 @@ async def verify_chain(request: Request) -> JSONResponse:
                         "expected_hash": computed,
                         "observed_hash": e["entry_hash"],
                     },
-                })
+                }
             if e.get("previous_hash") != expected_prev:
-                return JSONResponse({
+                return {
                     "ok": False,
                     "failure": {
                         "kind": "break",
@@ -773,15 +813,41 @@ async def verify_chain(request: Request) -> JSONResponse:
                         "declared_prev": e.get("previous_hash"),
                         "expected_prev": expected_prev,
                     },
-                })
+                }
             expected_prev = e["entry_hash"]
             per_org_n += 1
 
-    return JSONResponse({
+    return {
         "ok": True,
         "entries": len(entries),
         "agents": len(agents_seen),
         "orgs": len(orgs_seen),
+        "admin_chain_rows": admin_chain_rows,
         "legacy_chain_rows": legacy_n,
         "per_org_chain_rows": per_org_n,
-    })
+    }
+
+
+@router.post("/audit/verify")
+async def verify_chain(request: Request) -> JSONResponse:
+    """Verify both in-process hash chains and return a JSON verdict.
+
+    Covers the ``audit_log`` admin chain (auth / enrollment / cert
+    rotation / policy) AND the ``local_audit`` traffic chain — the
+    operator's "is my chain healthy today" story. The auditor's
+    "without trusting Cullis" story stays the offline
+    ``cullis-audit-verify.py`` over an NDJSON export.
+
+    Returns 200 with a JSON verdict regardless of pass/fail — the
+    front-end inspects ``ok`` and renders a green or red banner. Real
+    failures use HTTP 200 + ``ok: false`` rather than HTTP 4xx/5xx so
+    the operator can read the failure detail without their browser
+    showing an error page.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return JSONResponse({"ok": False, "error": "auth_required"}, status_code=401)
+    if not await verify_csrf(request, session):
+        return JSONResponse({"ok": False, "error": "csrf_invalid"}, status_code=403)
+
+    return JSONResponse(await _verify_both_audit_chains())

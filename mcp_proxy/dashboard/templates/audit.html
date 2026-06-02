@@ -468,28 +468,31 @@
                   '<div class="flex-1 min-w-0">' +
                     '<p class="text-sm font-semibold text-emerald-400 uppercase tracking-wider">Chain verified</p>' +
                     '<p class="text-[12px] text-gray-300 mt-1 font-mono" ' +
-                      'title="Hash-chained rows actually verified end-to-end. ' +
-                      'Smaller than the header Events counter because admin-only rows ' +
-                      'with no chain participation are excluded, and the badge in the ' +
-                      'sidebar is a rolling 1-hour count.">' +
-                      escapeHtml(data.entries) + ' chained entries verified · ' +
+                      'title="Hash-chained rows actually verified end-to-end across ' +
+                      'both the admin chain (audit_log: auth, enrollment, cert ' +
+                      'rotation, policy) and the traffic chain (local_audit). ' +
+                      'Smaller than the header Events counter because the badge in ' +
+                      'the sidebar is a rolling 1-hour count.">' +
+                      escapeHtml(data.admin_chain_rows) + ' admin · ' +
+                      escapeHtml(data.entries) + ' traffic entries · ' +
                       escapeHtml(data.agents) + ' agent' + (data.agents === 1 ? '' : 's') + ' · ' +
                       escapeHtml(data.orgs) + ' org' + (data.orgs === 1 ? '' : 's') + ' · ' +
                       escapeHtml(data.legacy_chain_rows) + ' legacy · ' +
                       escapeHtml(data.per_org_chain_rows) + ' per-org chain rows' +
                     '</p>' +
                     '<p class="text-[11px] text-gray-500 mt-1.5 leading-relaxed">' +
-                      'Every entry_hash matches the SHA-256 of its canonical row. No previous_hash → next entry_hash break detected. Bundle intact end-to-end.' +
+                      'Both chains verified: every row_hash / entry_hash matches the SHA-256 of its canonical row, and no prev_hash → row_hash break was detected. Admin and traffic streams intact end-to-end.' +
                     '</p>' +
                   '</div>' +
                 '</div>';
         } else if (data && data.failure) {
             var f = data.failure;
             var rows = [];
-            rows.push(['scope', f.scope]);
+            rows.push(['scope', f.scope === 'audit_log' ? 'audit_log (admin)' : f.scope]);
             if (f.org_id) rows.push(['org', f.org_id]);
             if (f.chain_seq != null) rows.push(['chain_seq', f.chain_seq]);
-            rows.push(['id', f.id]);
+            if (f.reason) rows.push(['reason', f.reason]);
+            if (f.id != null) rows.push(['id', f.id]);
             if (f.timestamp) rows.push(['timestamp', f.timestamp]);
             if (f.event_type) rows.push(['event_type', f.event_type]);
             if (f.agent_id) rows.push(['agent_id', f.agent_id]);
@@ -501,8 +504,8 @@
                 return '<div class="flex gap-3"><span class="text-[10px] text-gray-600 uppercase tracking-wider w-32 flex-shrink-0">' + escapeHtml(p[0]) + '</span><code class="text-[11px] text-red-300 break-all">' + escapeHtml(p[1]) + '</code></div>';
             }).join('');
             var kindLabel = f.kind === 'break'
-                ? "The row's previous_hash does not point at the prior row's entry_hash. A row was deleted, reordered, or the linkage was rewritten."
-                : "The row's content does not produce the entry_hash it carries. A field on this row was altered after the chain was written.";
+                ? "A row's prev-hash link does not point at the prior row's hash. A row was deleted, reordered, or the linkage was rewritten."
+                : "A row's content does not produce the hash it carries. A field on this row was altered after the chain was written.";
             verifyBanner.innerHTML =
                 '<div class="border border-red-500/40 bg-red-500/10 rounded-lg p-4 flex items-start gap-3">' +
                   '<svg class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>' +
