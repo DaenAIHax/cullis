@@ -174,6 +174,55 @@ async def test_admin_downloads_identity_bundle_zip_with_expected_files(
     assert meta["capabilities"] == ["chat"]
 
 
+@pytest.mark.asyncio
+async def test_bundle_meta_notes_are_honest_about_dpop(proxy_db):
+    """meta.json notes must NOT promise a DPoP auto-generation that
+    ``from_identity_dir`` never performs.
+
+    ``test_from_identity_dir_dpop_autodiscovery`` pins that a missing
+    ``dpop.jwk`` sibling leaves the runtime client DPoP-less: the SDK
+    loads a sibling if present but never generates one, and this
+    Mastio-minted bundle ships no ``dpop.jwk``. The notes must say so
+    and point at the SDK enroll flow for a DPoP-bound identity, rather
+    than claim an auto-gen that does not happen. Regression guard for
+    the misleading-notes finding (2026-06-02).
+    """
+    agent_id = "test-org::bob"
+    cert_pem = "-----BEGIN CERTIFICATE-----\nstub-cert\n-----END CERTIFICATE-----\n"
+    key_pem = "-----BEGIN PRIVATE KEY-----\nstub-key\n-----END PRIVATE KEY-----\n"
+
+    await db_create_agent(
+        agent_id=agent_id,
+        display_name="Bob",
+        capabilities=["chat"],
+        cert_pem=cert_pem,
+    )
+    await set_config(f"agent_key:{agent_id}", key_pem)
+    await set_config("org_id", "test-org")
+
+    app = _make_app()
+    async with _admin_client(app) as client:
+        resp = await client.get(f"/proxy/agents/{agent_id}/identity-bundle.zip")
+    assert resp.status_code == 200, resp.text
+
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    notes = json.loads(zf.read("meta.json"))["notes"].lower()
+
+    assert "auto-generate dpop" not in notes, (
+        "meta.json must not promise a DPoP auto-generation: "
+        "from_identity_dir loads a dpop.jwk sibling if present but never "
+        f"creates one. got notes: {notes!r}"
+    )
+    assert "enroll_via_dashboard_approval" in notes, (
+        "meta.json should point at the SDK enroll flow as the DPoP-bound "
+        f"path, got notes: {notes!r}"
+    )
+    assert ("mtls-only" in notes) or ("no dpop" in notes), (
+        "meta.json should flag the bundle as mTLS-only / carrying no DPoP "
+        f"key, got notes: {notes!r}"
+    )
+
+
 # ── Test 2: audit invariant ──────────────────────────────────────────
 
 

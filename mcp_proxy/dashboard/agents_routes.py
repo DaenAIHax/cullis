@@ -527,16 +527,26 @@ async def agent_identity_bundle_download(request: Request, agent_id: str):
         "capabilities": agent.get("capabilities") or [],
         "created_at": agent.get("created_at"),
         "spiffe_id": agent.get("spiffe_id"),
-        # Operator hint: the SDK will create the dpop.jwk sibling on
-        # first use. No need to ship a stub here — keeping the bundle
-        # silent on it is the honest representation of what the
-        # Mastio actually persists.
+        # This Mastio-minted bundle is mTLS-only: it ships no dpop.jwk,
+        # and from_identity_dir does not generate one (it adopts a
+        # dpop.jwk sibling if present, otherwise runs without DPoP, see
+        # test_from_identity_dir_dpop_autodiscovery). A DPoP-bound
+        # identity comes from the SDK enroll flow, not this download, so
+        # the notes below say that instead of promising an auto-gen that
+        # never happens.
         "notes": (
             "Drop this directory at the agent host's identity dir "
             "(e.g. /etc/cullis/agent/), then point the SDK at it via "
-            "CullisClient.from_identity_dir(path). The SDK will "
-            "auto-generate dpop.jwk on first use and register the "
-            "public key with the Mastio."
+            "CullisClient.from_identity_dir(path). This is an mTLS-only "
+            "bundle: it carries the agent certificate and key but no "
+            "DPoP key, and from_identity_dir does not create one, so an "
+            "agent loaded from it authenticates by client certificate "
+            "alone. It is rejected where the Mastio requires DPoP on "
+            "egress (egress_dpop_mode=required). For a DPoP-bound "
+            "identity, enroll with "
+            "CullisClient.enroll_via_dashboard_approval instead: that "
+            "flow generates the certificate and DPoP keys on the agent "
+            "host and registers the DPoP public key with the Mastio."
         ),
     }
 
