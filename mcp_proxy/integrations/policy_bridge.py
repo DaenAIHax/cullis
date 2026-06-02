@@ -65,19 +65,32 @@ _SIGNATURE_HEADER = "x-cullis-integration-signature"
 
 
 async def _verify_signature(request: Request, raw_body: bytes) -> None:
-    """Enforce the HMAC-SHA256 signature when the operator configured it.
+    """Enforce the HMAC-SHA256 signature on the integrations bridge.
 
-    Refuses with HTTP 401 (no body) when the secret is set but the
-    header is missing or mismatching. Accepts and logs at warning level
-    when the secret is empty — the same posture as the existing PDP
-    plane (mcp_proxy/main.py:1719) so the operator's mental model stays
-    consistent.
+    Refuses with HTTP 401 (no body) when the secret is set but the header
+    is missing or mismatching.
+
+    H10 (audit 2026-06-02): when no secret is configured the posture is
+    environment-dependent. The bridge router is mounted unconditionally,
+    so an unsigned request could inject rows into the append-only
+    ``audit_log`` (CloudEvents ingest) or probe the policy decision
+    surface. We therefore **fail closed in production** — unsigned
+    requests are rejected even without a secret — and accept unsigned only
+    outside production (sandbox / local dev ergonomics). This is a runtime
+    default-deny rather than a boot gate so it never breaks a prod deploy
+    that hasn't wired the (optional) integrations secret.
     """
-    secret = get_settings().integrations_hmac_secret
+    settings = get_settings()
+    secret = settings.integrations_hmac_secret
     if not secret:
-        # Operator chose not to enable signature verification. The
-        # warning at startup (logged once from main.py boot) suffices —
-        # avoid per-request log spam.
+        if settings.environment == "production":
+            _log.warning(
+                "policy_bridge: rejected unsigned request to %s — "
+                "integrations_hmac_secret is empty in production "
+                "(audit 2026-06-02 H10, fail-closed)",
+                request.url.path,
+            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         return
     provided = request.headers.get(_SIGNATURE_HEADER, "")
     expected = hmac.new(

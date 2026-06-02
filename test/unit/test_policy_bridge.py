@@ -62,6 +62,7 @@ def app_under_test(monkeypatch):
 
     class _FakeSettings:
         integrations_hmac_secret: str = ""
+        environment: str = "development"
 
     def _fake_get_settings():
         return _FakeSettings()
@@ -320,7 +321,8 @@ def test_cloudevents_missing_source_400(client):
 
 
 def test_hmac_unconfigured_accepts_unsigned(client):
-    """When integrations_hmac_secret is empty, signed/unsigned both accepted."""
+    """When integrations_hmac_secret is empty in NON-production, signed and
+    unsigned are both accepted (sandbox / dev ergonomics)."""
     resp = client.post(
         "/v1/data/cullis/policy/session",
         json={"input": {
@@ -330,6 +332,64 @@ def test_hmac_unconfigured_accepts_unsigned(client):
         }},
     )
     assert resp.status_code == 200
+
+
+def test_hmac_unconfigured_rejects_unsigned_in_production(
+    monkeypatch, app_under_test,
+):
+    """H10 (audit 2026-06-02) — with no secret the bridge fails CLOSED in
+    production: unsigned requests are rejected. The router is mounted
+    unconditionally, so an open bridge would let any reachable caller probe
+    the policy surface. Runtime default-deny (no boot gate), so a prod
+    deploy that didn't wire the optional secret still boots — just refuses
+    unsigned bridge traffic."""
+    class _Prod:
+        integrations_hmac_secret: str = ""
+        environment: str = "production"
+
+    monkeypatch.setattr(
+        "mcp_proxy.integrations.policy_bridge.get_settings", lambda: _Prod(),
+    )
+    app, _ = app_under_test
+    c = TestClient(app)
+    resp = c.post(
+        "/v1/data/cullis/policy/session",
+        json={"input": {
+            "initiator_agent_id": "a",
+            "target_agent_id": "b",
+            "session_context": "initiator",
+        }},
+    )
+    assert resp.status_code == 401
+
+
+def test_cloudevents_unsigned_rejected_in_production(monkeypatch, app_under_test):
+    """H10 — the CloudEvents ingest is the audit_log-injection vector; in
+    production without a secret it must reject and write no audit row."""
+    _, state = app_under_test
+
+    class _Prod:
+        integrations_hmac_secret: str = ""
+        environment: str = "production"
+
+    monkeypatch.setattr(
+        "mcp_proxy.integrations.policy_bridge.get_settings", lambda: _Prod(),
+    )
+    app, _ = app_under_test
+    c = TestClient(app)
+    resp = c.post(
+        "/v1/integrations/cloudevents",
+        headers={
+            "ce-id": "evt-attacker",
+            "ce-source": "gateway://attacker",
+            "ce-type": "io.gateway.tool.allowed",
+            "ce-specversion": "1.0",
+            "content-type": "application/json",
+        },
+        json={"agent_id": "victim::forged", "decision": "allow"},
+    )
+    assert resp.status_code == 401
+    assert state["audit_calls"] == []  # no row injected
 
 
 def test_hmac_configured_rejects_unsigned(monkeypatch, app_under_test):
