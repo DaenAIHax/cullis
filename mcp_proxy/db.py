@@ -141,34 +141,39 @@ def _detect_legacy_unstamped(sync_conn) -> bool:
     return bool(_LEGACY_TABLES & table_names)
 
 
-def _acquire_mastio_mint_lock(sqlite_path: str) -> int:
-    """Open + flock-exclusive a lockfile next to the SQLite DB.
+def _acquire_boot_flock(sqlite_path: str, lock_slug: str) -> int:
+    """Open + flock-exclusive a named lockfile next to the SQLite DB.
 
-    Serialises the leaf-mint critical section in
-    ``AgentManager._mint_mastio_leaf`` across the N uvicorn worker
-    processes that race at lifespan startup. Without this, every worker
-    enters the mint path with ``self._active_key is None`` (per-process
-    in-memory cache, never populated yet) and they all INSERT a fresh
-    active row. ``mastio_keys`` then carries N>1 rows where
-    ``activated_at IS NOT NULL AND deprecated_at IS NULL``, and the
-    first call to ``LocalKeyStore.current_signer()`` raises
-    ``RuntimeError("N active mastio keys — rotation invariant
-    violated")``. The caught exception leaves ``app.state.local_issuer``
-    as None and ``/v1/auth/token`` returns 503 "local issuer not
-    initialized" for the lifetime of the deploy. Issue cullis#997.
+    Generic multi-worker boot-serialisation primitive: fences any
+    lifespan critical section that the N uvicorn workers would otherwise
+    run concurrently against shared on-disk / DB state. Each ``lock_slug``
+    gets its own sibling-of-DB lockfile (``<db>.<slug>.lock``) so
+    unrelated critical sections never serialise against each other.
+
+    Callers today:
+
+    * ``mastio_mint`` — the cullis#997 leaf-mint section in
+      ``AgentManager._mint_mastio_leaf``. Without it every worker enters
+      the mint path with ``self._active_key is None`` and INSERTs a fresh
+      active row → ``mastio_keys`` carries N>1 active rows →
+      ``current_signer()`` raises → ``/v1/auth/token`` 503 for the
+      lifetime of the deploy.
+    * ``nginx_cert`` — the nginx server-cert provisioning in
+      ``AgentManager.ensure_nginx_server_cert``. Without it each worker
+      mints its OWN leaf keypair and the three output files
+      (``mastio-server.crt`` / ``.key`` / ``org-ca.crt``) interleave
+      across workers, leaving a torn cert/key pair (cert pubkey of Kᴮ
+      with private key Kᴬ) that breaks the nginx 9443 TLS handshake.
 
     Pattern mirrors :func:`_run_migrations_sync_under_flock`: blocking
-    ``fcntl.LOCK_EX`` on a sibling-of-DB lockfile that the kernel
-    auto-releases on worker exit. SQLite-only — Postgres deploys rely
-    on a different code path (today: still racy, fix follow-up; the
-    in-the-wild Postgres count is 0 so this is acceptable as a
-    same-day patch).
+    ``fcntl.LOCK_EX`` on a lockfile the kernel auto-releases on worker
+    exit.
     """
     import fcntl
     from pathlib import Path
 
     db_path = Path(sqlite_path)
-    lock_path = db_path.with_name(f"{db_path.name}.mastio_mint.lock")
+    lock_path = db_path.with_name(f"{db_path.name}.{lock_slug}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY, 0o644)
@@ -187,8 +192,8 @@ def _acquire_mastio_mint_lock(sqlite_path: str) -> int:
     return fd
 
 
-def _release_mastio_mint_lock(fd: int) -> None:
-    """Release the flock acquired by :func:`_acquire_mastio_mint_lock`."""
+def _release_boot_flock(fd: int) -> None:
+    """Release a flock acquired by :func:`_acquire_boot_flock`."""
     import fcntl
 
     try:
@@ -200,44 +205,61 @@ def _release_mastio_mint_lock(fd: int) -> None:
             pass
 
 
-async def _acquire_mastio_mint_lock_pg(url: str):
-    """Postgres analogue of :func:`_acquire_mastio_mint_lock`.
+async def _acquire_boot_advisory_lock_pg(url: str, lock_key: str):
+    """Postgres analogue of :func:`_acquire_boot_flock`.
 
-    The SQLite flock above only serialises the cullis#997 leaf-mint
-    critical section on SQLite; Postgres deploys previously took the
-    racy branch (every worker minting an active row → N>1 active →
-    ``current_signer()`` raises → ``/v1/auth/token`` 503). The pilot DB
-    is Postgres + multi-worker, so close it here with a session-level
-    advisory lock (mirrors the ``pg_advisory_xact_lock(hashtext(
-    'mastio-rotate'))`` used by :func:`activate_staged_and_deprecate_old`
-    and the Alembic migration lock). A dedicated engine/connection so the
-    lock auto-releases when the session is disposed even if the explicit
-    unlock is skipped. Returns ``(engine, conn)`` to release, or ``None``
-    for non-Postgres URLs (SQLite uses the flock; in-memory is
-    single-process).
+    Takes a session-level ``pg_advisory_lock(hashtext(<lock_key>))`` on a
+    dedicated engine/connection so the lock auto-releases when the
+    session is disposed even if the explicit unlock is skipped (mirrors
+    the ``pg_advisory_xact_lock(hashtext('mastio-rotate'))`` used by the
+    rotation path and the Alembic migration lock). Returns
+    ``(engine, conn, lock_key)`` to release, or ``None`` for non-Postgres
+    URLs (SQLite uses the flock; in-memory is single-process).
     """
     if not (url.startswith("postgresql") or "+asyncpg" in url):
         return None
     eng = create_async_engine(url, **_engine_kwargs(url))
     conn = await eng.connect()
-    await conn.execute(text("SELECT pg_advisory_lock(hashtext('mastio-mint'))"))
-    return (eng, conn)
+    await conn.execute(
+        text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": lock_key},
+    )
+    return (eng, conn, lock_key)
 
 
-async def _release_mastio_mint_lock_pg(handle) -> None:
+async def _release_boot_advisory_lock_pg(handle) -> None:
     """Release the advisory lock + dispose the dedicated session."""
     if handle is None:
         return
-    eng, conn = handle
+    eng, conn, lock_key = handle
     try:
         try:
             await conn.execute(
-                text("SELECT pg_advisory_unlock(hashtext('mastio-mint'))"),
+                text("SELECT pg_advisory_unlock(hashtext(:k))"),
+                {"k": lock_key},
             )
         finally:
             await conn.close()
     finally:
         await eng.dispose()
+
+
+# ── cullis#997 leaf-mint lock (thin wrappers over the generic boot
+# primitives above; kept as named helpers so the call-sites read as
+# intent and the issue reference stays attached). ───────────────────────
+def _acquire_mastio_mint_lock(sqlite_path: str) -> int:
+    return _acquire_boot_flock(sqlite_path, "mastio_mint")
+
+
+def _release_mastio_mint_lock(fd: int) -> None:
+    _release_boot_flock(fd)
+
+
+async def _acquire_mastio_mint_lock_pg(url: str):
+    return await _acquire_boot_advisory_lock_pg(url, "mastio-mint")
+
+
+async def _release_mastio_mint_lock_pg(handle) -> None:
+    await _release_boot_advisory_lock_pg(handle)
 
 
 def _run_migrations_sync_under_flock(url: str, sqlite_path: str) -> None:
