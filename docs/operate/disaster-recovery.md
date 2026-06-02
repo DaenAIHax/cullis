@@ -87,6 +87,38 @@ a refuse-to-boot. To deliberately re-key (all agents re-enroll), set
 production Org CA is also explicit: set `MCP_PROXY_ALLOW_CA_BOOTSTRAP=1`
 for that first boot only.
 
+## Upgrade and rollback
+
+**Upgrade.** `./deploy.sh --upgrade-bundle <version>` backs up `proxy.env`
++ `./data/` + `./nginx-certs/` to `./backups/pre-upgrade-<ts>/`, bumps the
+image, and restarts. Alembic migrations run at boot (`alembic upgrade
+head`) and are additive: they add columns / tables / triggers, they do
+not drop or rewrite existing data, so an upgrade preserves the audit
+chain and the enrolled agents.
+
+For the Postgres + Vault pilot shape the bundle's pre-upgrade backup does
+NOT cover Postgres or Vault. Run `scripts/pg-backup.sh` and
+`scripts/vault-ca-backup.sh` BEFORE the upgrade so you have a restore
+point for both.
+
+**Rollback.** The migrations are reversible on Postgres (drilled:
+`downgrade` then `upgrade head` round-trips cleanly, and `audit_log` is
+never dropped). But `downgrade` is NOT data-preserving: it drops what the
+migration added (e.g. agent `capabilities` from `0045`, the TSA / Merkle
+anchor tables from `0043`/`0044`). The anchors regenerate on their own;
+the capability assignments do not. There are two rollback paths, and only
+one is clean:
+
+- **Restore from backup (recommended).** Restore the Postgres dump and
+  the Vault CA material from the pre-upgrade backups (`pg-restore.sh`,
+  `vault-ca-restore.sh`), then deploy the old image. Data-preserving;
+  this is the supported rollback for the pilot.
+- **Deploy the old image without restoring (last resort).** mTLS and the
+  audit chain keep working (the schema stays ahead of the code, the
+  migrations are additive, and `audit_log` was never dropped), but do NOT
+  then run an explicit `alembic downgrade` expecting to keep data: it
+  drops the columns / tables the newer version added.
+
 ## Known limitations
 
 Stated plainly so they can go in the pilot's risk register:
