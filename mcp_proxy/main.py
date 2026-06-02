@@ -326,44 +326,85 @@ async def lifespan(app: FastAPI):
             "auto-renewal", exc,
         )
 
-    # #115 — standalone first-boot: generate a fresh self-signed Org CA when
-    # no CA has been attached (no attach-ca invite ever consumed) and no
-    # broker is configured. Gated on standalone=true so federation deploys
-    # keep the attach-ca flow unchanged.
-    #
-    # ADR-006 §2.2 — when the operator hasn't pinned an ``org_id`` via env
-    # or config, derive one deterministically from the CA public key. The
-    # admin then copies this value into the broker's attach-ca invite so
-    # future uplinks pin the same identity across proxy restarts.
-    if settings.standalone and not agent_mgr.ca_loaded:
-        # PKI bootstrap guard — refuse to mint a fresh Org Root when
-        # enrolled agents already exist (the signature of a partial
-        # disaster-restore / lost Vault). Minting a new root would orphan
-        # every agent leaf. A genuine first boot (no agents) proceeds.
-        # See ``AgentManager.ensure_ca_bootstrap_safe``.
-        await agent_mgr.ensure_ca_bootstrap_safe(
-            "the Org Root CA",
-            "restore the org-ca secret (e.g. Vault secret/cullis-mastio/org-ca)",
-        )
-        # Explicit-provisioning gate (DR-1 / F2) — in production the
-        # first-time generation of the org's crown-jewel Org CA must be an
-        # explicit operator action, never an unattended side effect of a
-        # restart that found no CA. Dev/test auto-bootstraps so zero-config
-        # standalone keeps working. See ``ProxySettings.ca_bootstrap_enabled``.
-        if not settings.ca_bootstrap_enabled():
-            _log.critical(
-                "No Org CA is loaded and CA bootstrap is disabled "
-                "(production default). First-time CA provisioning must be "
-                "explicit: set MCP_PROXY_ALLOW_CA_BOOTSTRAP=1 to mint a fresh "
-                "self-signed Org CA on this boot, or restore existing CA "
-                "material (org-ca + intermediate-ca in the KMS) and restart. "
-                "Refusing to boot."
+    # Boot-refusal guard region. A fail-closed guard here (PKI orphan /
+    # partial-restore, the explicit-provisioning gate) raises SystemExit.
+    # Under ``uvicorn --workers`` a SystemExit in the lifespan task does
+    # NOT cleanly stop the container — the supervisor leaves it
+    # ``Up (unhealthy)`` respawning, burying the cause in churn. Catch it
+    # and switch to DEGRADED not-ready mode: serve only the health
+    # endpoints (``/readyz`` + ``/health`` → 503 with the reason,
+    # ``/healthz`` stays 200 so the orchestrator marks the replica
+    # NotReady without a restart loop). The dangerous bootstrap below a
+    # raising guard never runs — the guard raised before reaching it — so
+    # fail-closed is preserved; readiness simply gates the data plane.
+    from mcp_proxy.boot_state import boot_refusal_reason, reset_boot_refusal
+    reset_boot_refusal()
+    try:
+        # #115 — standalone first-boot: generate a fresh self-signed Org CA
+        # when no CA has been attached (no attach-ca invite ever consumed)
+        # and no broker is configured. Gated on standalone=true so
+        # federation deploys keep the attach-ca flow unchanged.
+        #
+        # ADR-006 §2.2 — when the operator hasn't pinned an ``org_id`` via
+        # env or config, derive one deterministically from the CA public
+        # key. The admin then copies this value into the broker's attach-ca
+        # invite so future uplinks pin the same identity across restarts.
+        if settings.standalone and not agent_mgr.ca_loaded:
+            # PKI bootstrap guard — refuse to mint a fresh Org Root when
+            # enrolled agents already exist (the signature of a partial
+            # disaster-restore / lost Vault). Minting a new root would
+            # orphan every agent leaf. A genuine first boot (no agents)
+            # proceeds. See ``AgentManager.ensure_ca_bootstrap_safe``.
+            await agent_mgr.ensure_ca_bootstrap_safe(
+                "the Org Root CA",
+                "restore the org-ca secret (e.g. Vault secret/cullis-mastio/org-ca)",
             )
-            raise SystemExit(1)
-        derive = not org_id  # derive only when the operator didn't pick one
-        await agent_mgr.generate_org_ca(derive_org_id=derive)
-        if derive:
-            org_id = agent_mgr.org_id
+            # Explicit-provisioning gate (DR-1 / F2) — in production the
+            # first-time generation of the org's crown-jewel Org CA must be
+            # an explicit operator action, never an unattended side effect
+            # of a restart that found no CA. Dev/test auto-bootstraps so
+            # zero-config standalone keeps working. See
+            # ``ProxySettings.ca_bootstrap_enabled``.
+            if not settings.ca_bootstrap_enabled():
+                from mcp_proxy.boot_state import refuse_boot
+                refuse_boot(
+                    "ca_bootstrap_disabled: no Org CA loaded and CA bootstrap "
+                    "is disabled (production default). Set "
+                    "MCP_PROXY_ALLOW_CA_BOOTSTRAP=1 to mint, or restore "
+                    "org-ca + intermediate-ca in the KMS and redeploy.",
+                )
+                _log.critical(
+                    "No Org CA is loaded and CA bootstrap is disabled "
+                    "(production default). First-time CA provisioning must be "
+                    "explicit: set MCP_PROXY_ALLOW_CA_BOOTSTRAP=1 to mint a "
+                    "fresh self-signed Org CA on this boot, or restore "
+                    "existing CA material (org-ca + intermediate-ca in the "
+                    "KMS) and restart. Refusing to boot."
+                )
+                raise SystemExit(1)
+            derive = not org_id  # derive only when the operator didn't pick one
+            await agent_mgr.generate_org_ca(derive_org_id=derive)
+            if derive:
+                org_id = agent_mgr.org_id
+    except SystemExit as exc:
+        from mcp_proxy.boot_state import refuse_boot
+        if boot_refusal_reason() is None:
+            refuse_boot(f"boot refused (exit {getattr(exc, 'code', 1)})")
+        app.state.boot_refused = True
+        _log.critical(
+            "Boot refused — entering degraded not-ready mode (readiness "
+            "503, liveness 200) until the operator fixes the cause and "
+            "redeploys: %s", boot_refusal_reason(),
+        )
+        # Best-effort release of what startup opened before the guard so a
+        # degraded worker doesn't pin the DB pool for its (short) life.
+        try:
+            from mcp_proxy.db import dispose_db
+            await dispose_db()
+        except Exception:  # noqa: BLE001 best-effort
+            pass
+        yield
+        return
 
     # ``get_settings`` is lru_cached so mutating the shared instance
     # propagates the resolved id to every call-site (decide_route,
@@ -2562,7 +2603,15 @@ if _static_dir.is_dir():
 
 @app.get("/health", tags=["infra"])
 async def health(request: Request):
-    """Basic health check — always 200 if the process is running.
+    """Basic health check — 200 when the process booted cleanly.
+
+    Returns **503** when a fail-closed boot guard refused to bring this
+    worker up (degraded not-ready mode), so the Docker Compose
+    healthcheck and any ``/health``-based probe mark the container
+    unhealthy and ``deploy.sh ... up -d --wait`` fails loudly instead of
+    reporting a half-up Mastio that serves nothing real. Liveness
+    (``/healthz``) stays 200 so a deterministic refusal does not trigger
+    a restart loop.
 
     Surfaces operator-visible warnings in a ``warnings`` array when
     present (omitted entirely when clean so existing consumers that
@@ -2573,6 +2622,12 @@ async def health(request: Request):
         underneath. Stdlib-verifier cross-org federation silently
         401s; remediation is ``POST /pki/rotate-ca``.
     """
+    from mcp_proxy.boot_state import boot_refusal_reason
+    _refused = boot_refusal_reason()
+    if _refused is not None:
+        return JSONResponse(
+            {"status": "refused", "reason": _refused}, status_code=503,
+        )
     body: dict = {"status": "ok", "version": _mastio_version()}
     warnings: list[str] = []
     agent_mgr = getattr(request.app.state, "agent_manager", None)
@@ -2593,8 +2648,21 @@ async def healthz():
 
 @app.get("/readyz", tags=["infra"])
 async def readyz():
-    """Readiness probe — checks DB writable and JWKS cache age."""
+    """Readiness probe — checks boot refusal, DB writable and JWKS age."""
     checks: dict[str, str] = {}
+
+    # Boot-refusal gate (deterministic, won't self-heal on restart). A
+    # fail-closed guard refused this worker; report not-ready so the
+    # orchestrator keeps it out of rotation / marks the rollout NotReady
+    # while the operator fixes the cause. Checked first, before any DB
+    # work, since a refused worker may not have finished startup.
+    from mcp_proxy.boot_state import boot_refusal_reason
+    _refused = boot_refusal_reason()
+    if _refused is not None:
+        checks["boot"] = f"refused: {_refused}"
+        return JSONResponse(
+            {"status": "refused", "checks": checks}, status_code=503,
+        )
 
     # Audit F-A-404 — batched audit chain background flush exhaustion
     # sets a process-wide unhealthy flag. Fail readyz so the LB kicks

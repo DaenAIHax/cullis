@@ -31,6 +31,21 @@ import pytest
 os.environ.setdefault("MCP_PROXY_ADMIN_SECRET", "test-proxy-secret-not-default")
 
 
+@pytest.fixture(autouse=True)
+def _reset_boot_state():
+    """Keep the process-wide boot-refusal flag from leaking across tests.
+
+    Boot guards (``ensure_ca_bootstrap_safe``, the Vault token guard)
+    now call ``mcp_proxy.boot_state.refuse_boot`` before raising, so a
+    test that trips one would otherwise leave the flag set for the next
+    test and make ``/readyz`` / ``/health`` report 503 spuriously.
+    """
+    from mcp_proxy.boot_state import reset_boot_refusal
+    reset_boot_refusal()
+    yield
+    reset_boot_refusal()
+
+
 @pytest.fixture
 def audit_test_env(monkeypatch, tmp_path):
     """Initialise a fresh file-backed SQLite + audit chain for one test.
