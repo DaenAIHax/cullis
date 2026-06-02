@@ -97,6 +97,16 @@ def _build_assertion(
     )
 
 
+async def _register_agent(agent_id: str, cert_pem: str) -> None:
+    """Audit H1 (2026-06-02) — /v1/auth/token now pins the presented leaf
+    against the enrolled ``internal_agents.cert_pem`` (mirrors
+    challenge_response.py). A mint's realistic precondition is an enrolled
+    agent, so seed the row with the leaf the assertion carries."""
+    from mcp_proxy.db import create_agent
+    _, name = agent_id.split("::", 1)
+    await create_agent(agent_id, name, [], cert_pem=cert_pem)
+
+
 @pytest_asyncio.fixture
 async def flag_on_proxy(tmp_path, monkeypatch):
     """Proxy app booted with ``MCP_PROXY_LOCAL_AUTH_ENABLED=1``.
@@ -152,7 +162,8 @@ async def test_local_token_issued_from_valid_assertion(flag_on_proxy):
     """Happy path — valid x5c chains to Org CA, Mastio signs a Bearer."""
     ctx = flag_on_proxy
     client = ctx["client"]
-    leaf_key_pem, _, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    leaf_key_pem, leaf_cert_pem, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    await _register_agent("acme::alice", leaf_cert_pem)
     assertion = _build_assertion("acme::alice", leaf_key_pem, x5c)
 
     resp = await client.post("/v1/auth/token", json={"client_assertion": assertion})
@@ -241,7 +252,8 @@ async def test_local_token_never_hits_the_court(flag_on_proxy):
     200 here is itself proof that no forward to the Court happened.
     """
     ctx = flag_on_proxy
-    leaf_key_pem, _, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    leaf_key_pem, leaf_cert_pem, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    await _register_agent("acme::alice", leaf_cert_pem)
     assertion = _build_assertion("acme::alice", leaf_key_pem, x5c)
     resp = await ctx["client"].post("/v1/auth/token", json={"client_assertion": assertion})
     assert resp.status_code == 200

@@ -112,6 +112,17 @@ def _build_assertion(agent_id: str, leaf_key_pem: str, x5c: list[str]) -> str:
     )
 
 
+async def _register_agent(agent_id: str, cert_pem: str) -> None:
+    """Audit H1 (2026-06-02) — /v1/auth/token now pins the presented leaf
+    against the enrolled ``internal_agents.cert_pem``. Seed the agent row so
+    the mint reaches the DPoP-binding logic these tests exercise (instead of
+    being rejected at the pin). Typed-principal tests use ``::user::`` ids,
+    which skip the pin, so they need no seeding."""
+    from mcp_proxy.db import create_agent
+    _, name = agent_id.split("::", 1)
+    await create_agent(agent_id, name, [], cert_pem=cert_pem)
+
+
 def _make_dpop_keypair():
     """Generate an EC P-256 keypair + JWK suitable for DPoP proofs."""
     priv = ec.generate_private_key(ec.SECP256R1())
@@ -213,7 +224,8 @@ async def test_mint_with_dpop_header_stamps_cnf_jkt(proxy_app):
     """Happy path — SDK sends DPoP proof on /v1/auth/token, the issued
     LOCAL_TOKEN carries cnf.jkt = thumbprint of that DPoP key."""
     ctx = proxy_app
-    leaf_key_pem, _, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    leaf_key_pem, leaf_cert_pem, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    await _register_agent("acme::alice", leaf_cert_pem)
     assertion = _build_assertion("acme::alice", leaf_key_pem, x5c)
 
     priv, jwk = _make_dpop_keypair()
@@ -246,7 +258,8 @@ async def test_mint_without_dpop_header_falls_back_to_unbound(proxy_app):
     in flight), the mint succeeds but the token has no cnf.jkt and a
     WARN is logged. Caller behaviour preserved until the flag flips."""
     ctx = proxy_app
-    leaf_key_pem, _, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    leaf_key_pem, leaf_cert_pem, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    await _register_agent("acme::alice", leaf_cert_pem)
     assertion = _build_assertion("acme::alice", leaf_key_pem, x5c)
 
     resp = await ctx["client"].post(
@@ -275,7 +288,8 @@ async def test_mint_without_dpop_rejected_when_require_flag(proxy_app, monkeypat
     monkeypatch.setattr(
         get_settings(), "local_token_require_dpop", True,
     )
-    leaf_key_pem, _, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    leaf_key_pem, leaf_cert_pem, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    await _register_agent("acme::alice", leaf_cert_pem)
     assertion = _build_assertion("acme::alice", leaf_key_pem, x5c)
 
     resp = await ctx["client"].post(
@@ -291,7 +305,8 @@ async def test_mint_with_invalid_dpop_falls_back(proxy_app):
     (the caller may have opted out of DPoP). The require-flag closes
     this gap when needed."""
     ctx = proxy_app
-    leaf_key_pem, _, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    leaf_key_pem, leaf_cert_pem, x5c = _issue_leaf(ctx["ca_key"], ctx["ca_cert_pem"], "acme::alice")
+    await _register_agent("acme::alice", leaf_cert_pem)
     assertion = _build_assertion("acme::alice", leaf_key_pem, x5c)
 
     priv, jwk = _make_dpop_keypair()
