@@ -641,6 +641,7 @@ async def log_audit(
                 "request_id": request_id,
                 "duration_ms": duration_ms,
                 "dpop_jkt": dpop_jkt,
+                "on_behalf_of_user_id": on_behalf_of_user_id,
             })
             return
         except AuditChainExhausted as exc:

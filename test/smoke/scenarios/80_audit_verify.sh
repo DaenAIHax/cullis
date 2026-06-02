@@ -86,6 +86,7 @@ for row in rows:
         prev_hash=prev_hash,
         dpop_jkt=dpop_jkt,
         on_behalf_of_user_id=obo,
+        hash_format=hash_format,
     )
     if recomputed != stored_hash:
         print(f'VERIFY_FAIL seq={chain_seq} reason=row_hash mismatch (stored={stored_hash[:16]} recomputed={recomputed[:16]})')

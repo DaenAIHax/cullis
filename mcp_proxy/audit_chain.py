@@ -98,11 +98,13 @@ _AUDIT_INSERT_SQL = text(
     """INSERT INTO audit_log (
            timestamp, agent_id, action, tool_name,
            status, detail, request_id, duration_ms,
-           chain_seq, prev_hash, row_hash, dpop_jkt
+           chain_seq, prev_hash, row_hash, dpop_jkt,
+           on_behalf_of_user_id, hash_format
        ) VALUES (
            :timestamp, :agent_id, :action, :tool_name,
            :status, :detail, :request_id, :duration_ms,
-           :chain_seq, :prev_hash, :row_hash, :dpop_jkt
+           :chain_seq, :prev_hash, :row_hash, :dpop_jkt,
+           :on_behalf_of_user_id, :hash_format
        )"""
 )
 
@@ -165,8 +167,11 @@ class BatchedAuditChain:
         ``row`` carries the keys the legacy ``log_audit()`` persists:
         ``timestamp``, ``agent_id``, ``action``, ``tool_name``,
         ``status``, ``detail``, ``request_id``, ``duration_ms``,
-        ``dpop_jkt``. Required keys: ``timestamp``, ``agent_id``,
-        ``action``, ``status``. Optional keys default to ``None``.
+        ``dpop_jkt``, ``on_behalf_of_user_id``. Required keys:
+        ``timestamp``, ``agent_id``, ``action``, ``status``. Optional
+        keys default to ``None``. ``dpop_jkt`` and
+        ``on_behalf_of_user_id`` are bound under the v2 row hash at flush
+        time (F-A-403 parity with the legacy path).
 
         Synchronous flush failures bubble as ``AuditChainExhausted`` so
         a caller running under ``audit_fail_deny=True`` can surface a
@@ -223,6 +228,13 @@ class BatchedAuditChain:
                     running_prev = prev_hash
                     for i, row in enumerate(batch):
                         chain_seq = last_seq + i + 1
+                        # F-A-403 parity (audit 2026-06-02): the batched
+                        # flush must bind dpop_jkt + on_behalf_of_user_id
+                        # under the v2 canonical exactly like the legacy
+                        # per-row path (db.log_audit). Writing v1 here left
+                        # those fields unbound and the columns NULL on every
+                        # row produced under the default (batched) prod path,
+                        # silently reopening F-A-403.
                         row_hash = _db.compute_audit_row_hash(
                             chain_seq=chain_seq,
                             timestamp=row["timestamp"],
@@ -233,6 +245,9 @@ class BatchedAuditChain:
                             detail=row.get("detail"),
                             request_id=row.get("request_id"),
                             prev_hash=running_prev,
+                            dpop_jkt=row.get("dpop_jkt"),
+                            on_behalf_of_user_id=row.get("on_behalf_of_user_id"),
+                            hash_format="v2",
                         )
                         insert_params.append(
                             {
@@ -248,6 +263,8 @@ class BatchedAuditChain:
                                 "prev_hash": running_prev,
                                 "row_hash": row_hash,
                                 "dpop_jkt": row.get("dpop_jkt"),
+                                "on_behalf_of_user_id": row.get("on_behalf_of_user_id"),
+                                "hash_format": "v2",
                             }
                         )
                         running_prev = row_hash
