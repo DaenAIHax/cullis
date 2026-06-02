@@ -62,6 +62,41 @@ MASTIO_LEAF_VALIDITY_DAYS = 365  # 1 year (existing ADR-012 Phase 2.1 rotation c
 AGENT_CERT_VALIDITY_DAYS = 365  # 1 year (Wave 2 narrows further with grace-period support)
 NGINX_SERVER_CERT_VALIDITY_DAYS = 90  # 90 days (was 1y, audit 2026-05-18 short-lived TLS)
 
+# H4 (audit 2026-06-02) — key-strength floor for externally-submitted keys
+# the Mastio Intermediate CA signs. Mirrors the user-CSR path
+# (registry/principals_csr._validate_public_key, F-A-102).
+_ALLOWED_EC_CURVES = (ec.SECP256R1, ec.SECP384R1, ec.SECP521R1)
+_MIN_RSA_KEY_BITS = 2048
+
+
+def assert_strong_public_key(public_key) -> None:
+    """Refuse weak externally-submitted keys before the CA signs them.
+
+    H4 (audit 2026-06-02): the user-CSR path already enforces this floor
+    (F-A-102), but the Connector agent-enrollment path
+    (``sign_external_pubkey``) accepted any loadable key, so an RSA-512 or
+    non-NIST-curve key could obtain a legitimate Org-Intermediate-signed
+    mTLS leaf — a cert on a factorable key, invisible to the approving
+    admin (who only sees the fingerprint). Floor: RSA >= 2048, EC limited
+    to P-256/384/521. Raises ``ValueError`` on a weak / unsupported key.
+    """
+    if isinstance(public_key, rsa.RSAPublicKey):
+        if public_key.key_size < _MIN_RSA_KEY_BITS:
+            raise ValueError(
+                f"RSA key too small ({public_key.key_size} bits); "
+                f"minimum {_MIN_RSA_KEY_BITS}",
+            )
+    elif isinstance(public_key, ec.EllipticCurvePublicKey):
+        if not isinstance(public_key.curve, _ALLOWED_EC_CURVES):
+            raise ValueError(
+                f"EC curve {public_key.curve.name!r} not allowed; "
+                "use P-256, P-384 or P-521",
+            )
+    else:
+        raise ValueError(
+            f"Unsupported public key type: {type(public_key).__name__}",
+        )
+
 
 def _strict_pki_enabled() -> bool:
     """Issue #285 — ``MCP_PROXY_STRICT_PKI=1`` opts the proxy into
@@ -1089,6 +1124,11 @@ class AgentManager:
                 )
 
         public_key = serialization.load_pem_public_key(pubkey_pem.encode())
+        # H4 (audit 2026-06-02): refuse weak keys before signing, mirroring
+        # the user-CSR floor (F-A-102). Closes the gap where a factorable
+        # RSA-512 / non-NIST-curve key could get an Org-Intermediate-signed
+        # mTLS leaf via the Connector enrollment path.
+        assert_strong_public_key(public_key)
 
         agent_id = f"{self._org_id}::{agent_name}"
         spiffe_uri = f"spiffe://{self._trust_domain}/{self._org_id}/{agent_name}"
