@@ -41,7 +41,7 @@ import Layout from '../layouts/Layout.astro';
         <div class="screen-frame">
           <img src="/screenshots/mastio-overview.png" alt="Mastio overview dashboard, showing agent identity registry and live audit chain" loading="eager" />
         </div>
-        <div class="screen-caption">Mastio control plane · one container per organisation</div>
+        <div class="screen-caption">Mastio control plane · one self-hosted container</div>
         <p class="screen-disclaimer">Illustrative screenshots from the Cullis demo stack. Agent identities, tool calls, and audit events shown are reproducible from the public repo, not a customer deployment.</p>
       </div>
     </div>
@@ -95,7 +95,7 @@ import Layout from '../layouts/Layout.astro';
           For the agent, by the agent.
         </h2>
         <p class="showcase-lead reveal" data-delay="2">
-          One Docker container per organisation. Authority over agent identity,
+          One self-hosted Docker container. Authority over agent identity,
           policy enforced before the LLM call lands, an append-only audit
           chain externally verifiable by your auditor or regulator. Works
           underneath any agent stack — Claude Agent SDK, OpenAI Agents SDK,
@@ -325,7 +325,7 @@ import Layout from '../layouts/Layout.astro';
         <p class="topo-foot-label">Even behind a hardened enterprise gateway, three properties stay Cullis-only:</p>
         <ul class="topo-foot-list">
           <li><strong>Tamper-evident audit chain</strong><span>Hash-chained, externally verifiable end-to-end. Optional RFC 3161 TSA anchoring when a timestamp authority is configured.</span></li>
-          <li><strong>Cross-org A2A federation</strong><span>Bilateral signed envelope between Mastios in different organisations. Zero AI gateway covers this.</span></li>
+          <li><strong>Policy enforced before the call</strong><span>The PDP gates each request per-principal before the LLM or MCP tool runs. A gateway forwards; Mastio decides first.</span></li>
           <li><strong>Per-agent crypto identity</strong><span>x509 + SPIFFE + DPoP per agent. Gateways see the user; only Mastio attests the agent.</span></li>
         </ul>
       </div>
