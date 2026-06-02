@@ -17,7 +17,7 @@ responsibility of the deploying organization.
 | Framework | Article / clause | Cullis capability |
 |---|---|---|
 | **EU AI Act** | Art. 12 (logging), 13 (transparency), 14 (human oversight) | Tamper-evident audit chain, per-decision reasoning capture, ADR-020 4-quadrant identity |
-| **EU AI Act Annex III** | High-risk classification (credit, insurance pricing, recruitment) | Per-agent identity + per-decision audit + 4-eye approval capability |
+| **EU AI Act Annex III** | High-risk classification (credit, insurance pricing, recruitment) | Per-agent identity + per-decision audit + four-eyes approval (enterprise build) |
 | **DORA** | Art. 28 (third-party ICT) | mTLS + DPoP cryptographic identity per action, self-hosted deployer model |
 | **EIOPA** | Aug 2025 Opinion 8-axis governance | Mastio dashboard + audit export + policy decision logging across fairness, data, record, transparency, oversight, accuracy, robustness, cyber |
 | **IDD** | Art. 17 (fair treatment), Art. 20, 30 | Per-claim audit chain, exportable signed bundle for customer complaint reconstruction |
