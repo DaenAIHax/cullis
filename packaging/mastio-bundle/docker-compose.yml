@@ -110,6 +110,12 @@ services:
       # ``mcp_proxy/config.py``.
       MCP_PROXY_ADMIN_SECRET:      ${MCP_PROXY_ADMIN_SECRET:-}
       MCP_PROXY_DASHBOARD_SIGNING_KEY: ${MCP_PROXY_DASHBOARD_SIGNING_KEY:-}
+      # Shared HMAC secret for the RFC 9449 §8 DPoP nonce. MUST reach the
+      # container so all 4 workers derive the same nonce (the default
+      # ``certs/`` file path is not writable as proxyuser, so without this
+      # env each worker falls back to a per-process secret → cross-worker
+      # ``use_dpop_nonce`` 401 churn). ``generate-proxy-env.sh`` mints it.
+      MCP_PROXY_DPOP_NONCE_SECRET:  ${MCP_PROXY_DPOP_NONCE_SECRET:-}
       # First-boot scriptable admin password seed (PR #566). Empty
       # default preserves the historical /proxy/register browser
       # wizard. When generate-proxy-env.sh mints a value, the lifespan
