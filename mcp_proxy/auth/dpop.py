@@ -44,32 +44,123 @@ _log = logging.getLogger("mcp_proxy")
 # ─────────────────────────────────────────────────────────────────────────────
 
 _NONCE_ROTATION_INTERVAL = 300  # 5 minutes
-_current_nonce: str = ""
-_previous_nonce: str = ""
-_nonce_generated_at: float = 0
+
+# Multi-worker correctness (RFC 9449 §8): the nonce MUST be reproducible by
+# every uvicorn worker / replica, otherwise a nonce minted by worker A is
+# rejected by worker B and the client loops on ``use_dpop_nonce`` 401s. The
+# pre-fix implementation seeded ``os.urandom`` per process, so a 4-worker
+# bundle rejected ~40% of /v1/llm/chat proofs on the first hop (each worker
+# held an independent nonce). This is the same class as the dashboard signing
+# key (audit F-B-10) and the JTI store (U-DD-1): per-process state that has to
+# be shared. We derive the nonce as ``HMAC(secret, window)`` over a 5-minute
+# window, keyed with a secret shared across workers — stateless, no Redis hop,
+# and identical on every worker because the secret is identical. The nonce is
+# still global-per-window (not per-client), matching the prior semantics; the
+# per-client binding lives in the cert/jkt, not the nonce.
+
+_nonce_secret_cache: bytes = b""
+
+
+def _load_or_create_nonce_secret_file(path: str) -> str:
+    """Load a persisted nonce secret from ``path``, creating it (0600) if missing.
+
+    Mirrors ``dashboard.session._load_or_create_signing_key_file``: workers on
+    a shared filesystem converge on the same secret, and the tmp+rename keeps
+    two workers booting at once from racing on a half-written file.
+    """
+    import pathlib
+    p = pathlib.Path(path)
+    if p.exists():
+        return p.read_text().strip()
+    p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    secret = os.urandom(32).hex()
+    tmp = p.with_suffix(p.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(secret)
+    os.chmod(tmp, 0o600)
+    try:
+        os.rename(tmp, p)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        if p.exists():
+            return p.read_text().strip()
+        raise
+    return secret
+
+
+def _nonce_secret() -> bytes:
+    """Return the shared HMAC secret used to derive DPoP nonces.
+
+    Precedence:
+      1. ``MCP_PROXY_DPOP_NONCE_SECRET`` env → wins (prod / multi-replica Helm).
+      2. Persisted file at ``dpop_nonce_secret_path`` → shared across workers on
+         a common filesystem (single-container bundle, the default).
+      3. Per-process ``os.urandom`` — only when the file cannot be written
+         (read-only sandbox). Logs a warning; multi-worker will see 401 churn.
+    """
+    global _nonce_secret_cache
+    if _nonce_secret_cache:
+        return _nonce_secret_cache
+    settings = get_settings()
+    configured = getattr(settings, "dpop_nonce_secret", "")
+    if configured:
+        _nonce_secret_cache = configured.encode()
+        return _nonce_secret_cache
+    path = getattr(settings, "dpop_nonce_secret_path", "")
+    if path:
+        try:
+            secret = _load_or_create_nonce_secret_file(path)
+            if secret:
+                _nonce_secret_cache = secret.encode()
+                return _nonce_secret_cache
+        except OSError as exc:
+            _log.warning(
+                "Could not persist DPoP nonce secret to %s (%s) — falling back "
+                "to a per-process secret. Multi-worker deploys will churn "
+                "'use_dpop_nonce' 401s. Fix by setting MCP_PROXY_DPOP_NONCE_"
+                "SECRET or making the path writable.",
+                path, exc,
+            )
+    _nonce_secret_cache = os.urandom(32)
+    return _nonce_secret_cache
+
+
+def _nonce_for_window(window: int) -> str:
+    """Deterministic nonce for a rotation window — same on every worker."""
+    return _hmac.new(
+        _nonce_secret(), str(window).encode(), hashlib.sha256
+    ).hexdigest()[:32]
+
+
+def _current_window() -> int:
+    return int(time.time() // _NONCE_ROTATION_INTERVAL)
 
 
 def generate_dpop_nonce() -> str:
-    """Generate a fresh server nonce. Called at startup and periodically."""
-    global _current_nonce, _previous_nonce, _nonce_generated_at
-    _previous_nonce = _current_nonce
-    _current_nonce = os.urandom(16).hex()
-    _nonce_generated_at = time.time()
-    return _current_nonce
+    """Return the current server nonce.
+
+    Kept for call-site compatibility (a boot-time warm-up call in ``main``).
+    With the stateless HMAC scheme there is nothing to mutate, so this is an
+    alias of :func:`get_current_dpop_nonce`.
+    """
+    return get_current_dpop_nonce()
 
 
 def get_current_dpop_nonce() -> str:
-    """Return the current server nonce, rotating if expired."""
-    if _current_nonce and (time.time() - _nonce_generated_at) <= _NONCE_ROTATION_INTERVAL:
-        return _current_nonce
-    return generate_dpop_nonce()
+    """Return the current server nonce for the active rotation window."""
+    return _nonce_for_window(_current_window())
 
 
 def _is_valid_nonce(nonce: str) -> bool:
-    """Check if the nonce matches the current or previous nonce."""
+    """Accept the current or previous window's nonce (tolerates rotation)."""
+    if not nonce:
+        return False
+    window = _current_window()
     return (
-        _hmac.compare_digest(nonce, _current_nonce or "")
-        or _hmac.compare_digest(nonce, _previous_nonce or "")
+        _hmac.compare_digest(nonce, _nonce_for_window(window))
+        or _hmac.compare_digest(nonce, _nonce_for_window(window - 1))
     )
 
 

@@ -134,6 +134,15 @@ class ProxySettings(BaseSettings):
     # DPoP
     dpop_iat_window: int = 60
     dpop_clock_skew: int = 5
+    # Shared HMAC secret for the RFC 9449 §8 server nonce. The nonce is
+    # derived as ``HMAC(secret, time_window)`` so every uvicorn worker /
+    # replica produces the same value; a per-process secret makes worker B
+    # reject worker A's nonce and the client loops on ``use_dpop_nonce``
+    # 401s (the /v1/llm/chat path requires the nonce). Production / multi-
+    # replica Helm MUST set ``MCP_PROXY_DPOP_NONCE_SECRET``; the bundle's
+    # single container falls back to the persisted, worker-shared file.
+    dpop_nonce_secret: str = ""
+    dpop_nonce_secret_path: str = "certs/.mcp_proxy_dpop_nonce_secret"
 
     # Dashboard
     admin_secret: str = "change-me-in-production"

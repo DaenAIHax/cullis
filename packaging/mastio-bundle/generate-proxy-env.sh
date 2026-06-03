@@ -115,6 +115,7 @@ gen_secret() {
 
 ADMIN_SECRET="$(gen_secret)"
 SIGNING_KEY="$(gen_secret)"
+NONCE_SECRET="$(gen_secret)"
 # First-boot admin password.
 #
 # Default (AUTO_ADMIN_PWD=0): leave INITIAL_ADMIN_PASSWORD empty so
@@ -185,6 +186,7 @@ cp "$PROJECT_DIR/proxy.env.example" "$OUT"
 sed -i "s|^MCP_PROXY_ENVIRONMENT=.*|MCP_PROXY_ENVIRONMENT=${ENVIRONMENT}|"           "$OUT"
 sed -i "s|^MCP_PROXY_ADMIN_SECRET=.*|MCP_PROXY_ADMIN_SECRET=${ADMIN_SECRET}|"        "$OUT"
 sed -i "s|^MCP_PROXY_DASHBOARD_SIGNING_KEY=.*|MCP_PROXY_DASHBOARD_SIGNING_KEY=${SIGNING_KEY}|" "$OUT"
+sed -i "s|^MCP_PROXY_DPOP_NONCE_SECRET=.*|MCP_PROXY_DPOP_NONCE_SECRET=${NONCE_SECRET}|" "$OUT"
 sed -i "s|^MCP_PROXY_BROKER_URL=.*|MCP_PROXY_BROKER_URL=${BROKER}|"                  "$OUT"
 sed -i "s|^MCP_PROXY_BROKER_JWKS_URL=.*|MCP_PROXY_BROKER_JWKS_URL=${JWKS}|"          "$OUT"
 

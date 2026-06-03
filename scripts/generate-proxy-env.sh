@@ -66,8 +66,9 @@ gen_secret() { openssl rand -base64 32 | tr -d '/+=' | head -c 32; }
 
 ADMIN_SECRET="$(gen_secret)"
 SIGNING_KEY="$(gen_secret)"
+NONCE_SECRET="$(gen_secret)"
 
-ok "Generated random admin secret + signing key"
+ok "Generated random admin secret + signing key + DPoP nonce secret"
 
 case "$MODE" in
     prod)
@@ -103,6 +104,7 @@ cp "$PROJECT_DIR/deploy/proxy/proxy.env.example" "$OUT"
 sed -i "s|^MCP_PROXY_ENVIRONMENT=.*|MCP_PROXY_ENVIRONMENT=${ENVIRONMENT}|"           "$OUT"
 sed -i "s|^MCP_PROXY_ADMIN_SECRET=.*|MCP_PROXY_ADMIN_SECRET=${ADMIN_SECRET}|"        "$OUT"
 sed -i "s|^MCP_PROXY_DASHBOARD_SIGNING_KEY=.*|MCP_PROXY_DASHBOARD_SIGNING_KEY=${SIGNING_KEY}|" "$OUT"
+sed -i "s|^MCP_PROXY_DPOP_NONCE_SECRET=.*|MCP_PROXY_DPOP_NONCE_SECRET=${NONCE_SECRET}|" "$OUT"
 sed -i "s|^MCP_PROXY_BROKER_URL=.*|MCP_PROXY_BROKER_URL=${BROKER}|"                  "$OUT"
 sed -i "s|^MCP_PROXY_BROKER_JWKS_URL=.*|MCP_PROXY_BROKER_JWKS_URL=${JWKS}|"          "$OUT"
 sed -i "s|^MCP_PROXY_PROXY_PUBLIC_URL=.*|MCP_PROXY_PROXY_PUBLIC_URL=${PUBLIC}|"      "$OUT"
