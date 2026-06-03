@@ -82,12 +82,23 @@ async def login_submit(request: Request):
     if not await is_admin_password_set():
         return RedirectResponse(url="/proxy/register", status_code=303)
 
+    # Resolve the same template context the GET ``login_page`` computes
+    # (oidc/password toggles + display name). Every error re-render below
+    # MUST pass these, otherwise the Jinja variables are undefined →
+    # falsy → the ``{% if password_enabled %}`` form block (and the SSO
+    # button) silently disappear, leaving the user with an error and no
+    # way to retry except the browser back button.
+    from mcp_proxy.dashboard.oidc import is_oidc_configured
+    from mcp_proxy.dashboard.session import is_local_password_login_enabled
+    oidc_enabled = await is_oidc_configured()
+    password_enabled = await is_local_password_login_enabled()
+    display_name = await _load_display_name()
+
     # SSO-only hardening toggle: refuse before touching bcrypt so a
     # timing side-channel can't probe the stored secret. The env
     # break-glass (``MCP_PROXY_FORCE_LOCAL_PASSWORD=1``) is honoured
     # inside ``is_local_password_login_enabled`` itself.
-    from mcp_proxy.dashboard.session import is_local_password_login_enabled
-    if not await is_local_password_login_enabled():
+    if not password_enabled:
         from mcp_proxy.db import log_audit
         await log_audit(
             agent_id="admin",
@@ -98,7 +109,12 @@ async def login_submit(request: Request):
         return templates.TemplateResponse("login.html", {
             "request": request,
             "error": "Password sign-in is disabled. Use the SSO button instead.",
+            # Keep the password form hidden on purpose (it is disabled),
+            # but still surface the SSO button + display name so the user
+            # has a way forward.
+            "oidc_enabled": oidc_enabled,
             "password_enabled": False,
+            "display_name": display_name,
         }, status_code=403)
 
     # H9 audit fix — per-IP lockout + rate-limit before bcrypt.
@@ -126,6 +142,9 @@ async def login_submit(request: Request):
                 "Too many failed attempts from this address. Try again later "
                 "or reset the admin password from the local CLI."
             ),
+            "oidc_enabled": oidc_enabled,
+            "password_enabled": password_enabled,
+            "display_name": display_name,
         }, status_code=429)
 
     if not await get_agent_rate_limiter().check(
@@ -140,6 +159,9 @@ async def login_submit(request: Request):
         return templates.TemplateResponse("login.html", {
             "request": request,
             "error": "Too many login attempts. Slow down and try again in a minute.",
+            "oidc_enabled": oidc_enabled,
+            "password_enabled": password_enabled,
+            "display_name": display_name,
         }, status_code=429)
 
     form = await request.form()
@@ -149,6 +171,9 @@ async def login_submit(request: Request):
         return templates.TemplateResponse("login.html", {
             "request": request,
             "error": "Password is required.",
+            "oidc_enabled": oidc_enabled,
+            "password_enabled": password_enabled,
+            "display_name": display_name,
         }, status_code=400)
 
     if not await verify_admin_password(password):
@@ -167,6 +192,9 @@ async def login_submit(request: Request):
         return templates.TemplateResponse("login.html", {
             "request": request,
             "error": "Invalid password.",
+            "oidc_enabled": oidc_enabled,
+            "password_enabled": password_enabled,
+            "display_name": display_name,
         }, status_code=401)
 
     await lockout_store.record_success(client_ip)
@@ -288,5 +316,10 @@ async def register_submit(request: Request):
         },
     )
 
-    # Force a clean sign-in for the very first session.
-    return RedirectResponse(url="/proxy/login", status_code=303)
+    # Auto-authenticate the very first session: the operator just proved
+    # they know the password (typed twice) — forcing an immediate re-login
+    # is pure friction and yields the exact same session they'd get by
+    # signing in right after. Mirror the ``login_submit`` success path.
+    response = RedirectResponse(url=await _post_login_redirect(), status_code=303)
+    set_session(response, role="admin")
+    return response
