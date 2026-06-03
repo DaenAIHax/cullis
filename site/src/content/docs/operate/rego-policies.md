@@ -158,6 +158,10 @@ A few OPA built-ins do not work in the WASM target — primarily anything that r
 
 The compile step bounds Rego at **10 seconds**. Honest policies compile in well under a second; a 10-second compile usually means a runaway loop and the operator hears about it explicitly on Save.
 
+## Performance
+
+The OPA binary bundled in the image is **v1.16.2**, SHA-256-pinned at build time (`scripts/opa-sha256.txt`, verified with `sha256sum -c`). Policies compile to WebAssembly on Save (~25 ms) and evaluate in-process via `opa-wasmtime` — no sidecar, no network hop. After the first evaluate warms the instance cache, a representative 60-line policy runs at **p50 ~0.2 ms / ~4 600 evals/s** single-thread. The benchmark is reproducible: `python scripts/bench-rego-eval.py`.
+
 ## Fall-through to the legacy allowlist
 
 When the Rego layer is empty or its evaluation fails (compile-time issues never reach the runtime, but a runtime-only error like an undefined rule for a specific input still drops to legacy), Cullis falls through to the dashboard's allowlist fields (`blocked_agents`, `allowed_orgs`, `capabilities`, `tool_rules`). Operators can adopt Rego incrementally: keep the allowlist populated, author Rego incrementally, and remove the allowlist entries once the Rego rules cover the same surface.

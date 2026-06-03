@@ -62,6 +62,15 @@ Required variables in bold. Safe defaults mean "OK for sandbox / eval"; producti
 | `MCP_PROXY_PDP_URL` | *(none)* | Policy Decision Point webhook. Set to wire an external OPA / custom PDP. |
 | `CULLIS_MASTIO_ROTATION_MIN_INTERVAL_SECONDS` | `300` | Minimum seconds between consecutive signing-key rotations. Rate-limits accidental back-to-back rotates. |
 
+### AI gateway
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MCP_PROXY_AI_GATEWAY_BACKEND` | `cullis_native` | `cullis_native` uses Cullis-owned adapters — the official Anthropic and OpenAI SDKs, raw httpx against Ollama's `/api/chat` — with no third-party dispatch library in the critical path (ADR-039). `litellm_embedded` is the opt-in legacy path for providers without a native adapter yet (Gemini, Bedrock, Vertex). |
+| `MCP_PROXY_ANTHROPIC_API_KEY` | *(none)* | Upstream Anthropic key. Anthropic is wired out of the box; chat returns `503 provider_key_missing` until this is set. OpenAI and Ollama are configured from the dashboard. |
+
+Per-agent identity is propagated into every upstream call as part of the audit trail; the provider can be switched by changing the backend/model without touching agent code.
+
 ## SDK
 
 | Variable | Default | Purpose |
