@@ -428,49 +428,95 @@ async def audit_page(request: Request):
     # use the per-table equivalent when building WHERE clauses.
     local_audit_result_for = {"success": "ok", "ok": "ok", "error": "error", "denied": "denied"}
 
+    # Build each stream's WHERE once — reused by the paginated UNION and
+    # the COUNT. The same input filter maps to different columns per
+    # table (action↔event_type, status↔result), so the bind params have
+    # distinct names; ``agent_id`` is shared (same value either side).
+    a_conds: list[str] = []
+    t_conds: list[str] = []
+    params: dict[str, object] = {}
+    if agent_filter:
+        a_conds.append("agent_id = :agent_id")
+        t_conds.append("agent_id = :agent_id")
+        params["agent_id"] = agent_filter
+    if action_filter:
+        a_conds.append("action = :action_filter")
+        t_conds.append("event_type = :action_filter")
+        params["action_filter"] = action_filter
+    if status_filter:
+        a_conds.append("status = :status_filter")
+        t_conds.append("result = :result_filter")
+        params["status_filter"] = status_filter
+        params["result_filter"] = local_audit_result_for.get(status_filter, status_filter)
+    a_where = (" WHERE " + " AND ".join(a_conds)) if a_conds else ""
+    t_where = (" WHERE " + " AND ".join(t_conds)) if t_conds else ""
+
+    want_admin = source_filter in ("", "admin")
+    want_traffic = source_filter in ("", "traffic")
+
+    # Server-side pagination (was a fixed LIMIT 500 per table → only the
+    # newest ~1000 rows were ever reachable; the rest of the archive was
+    # invisible regardless of page/filter). Project both tables onto one
+    # positional column set (every column either normalizer reads; NULL
+    # where not native to a stream) so a single UNION ALL can be ordered
+    # by timestamp and sliced with LIMIT/OFFSET across the whole archive.
+    # The per-source loops below then run unchanged — each reads only its
+    # own keys. ``duration_ms`` is cast to TEXT so the column types line
+    # up across the UNION on Postgres as well as SQLite.
+    _ADMIN_SELECT = (
+        "SELECT id, timestamp, agent_id, chain_seq, 'admin' AS source, "
+        "detail, action, status, tool_name, CAST(duration_ms AS TEXT) AS duration_ms, "
+        "request_id, row_hash, "
+        "CAST(NULL AS TEXT) AS details, CAST(NULL AS TEXT) AS event_type, "
+        "CAST(NULL AS TEXT) AS result, CAST(NULL AS TEXT) AS session_id, "
+        "CAST(NULL AS TEXT) AS org_id, CAST(NULL AS TEXT) AS entry_hash, "
+        "CAST(NULL AS TEXT) AS peer_org_id "
+        f"FROM audit_log{a_where}"
+    )
+    _TRAFFIC_SELECT = (
+        "SELECT id, timestamp, agent_id, chain_seq, 'traffic' AS source, "
+        "CAST(NULL AS TEXT) AS detail, CAST(NULL AS TEXT) AS action, "
+        "CAST(NULL AS TEXT) AS status, CAST(NULL AS TEXT) AS tool_name, "
+        "CAST(NULL AS TEXT) AS duration_ms, CAST(NULL AS TEXT) AS request_id, "
+        "CAST(NULL AS TEXT) AS row_hash, "
+        "details, event_type, result, session_id, org_id, entry_hash, peer_org_id "
+        f"FROM local_audit{t_where}"
+    )
+
+    if page < 1:
+        page = 1
+    page_offset = (page - 1) * per_page
+
     async with get_db() as db:
-        admin_rows: list[dict] = []
-        traffic_rows: list[dict] = []
+        # Totals per stream over the whole archive (drive total_pages and
+        # the stream badges, which now match the sidebar count instead of
+        # the loaded window).
+        admin_total = 0
+        traffic_total = 0
+        if want_admin:
+            r = await db.execute(text(f"SELECT COUNT(*) FROM audit_log{a_where}"), params)
+            admin_total = int(r.scalar() or 0)
+        if want_traffic:
+            r = await db.execute(text(f"SELECT COUNT(*) FROM local_audit{t_where}"), params)
+            traffic_total = int(r.scalar() or 0)
 
-        # Admin stream - legacy ``audit_log`` (auth, enroll, agent CRUD, policy...)
-        if source_filter in ("", "admin"):
-            a_conds: list[str] = []
-            a_params: dict[str, object] = {}
-            if agent_filter:
-                a_conds.append("agent_id = :agent_id")
-                a_params["agent_id"] = agent_filter
-            if action_filter:
-                a_conds.append("action = :action")
-                a_params["action"] = action_filter
-            if status_filter:
-                a_conds.append("status = :status")
-                a_params["status"] = status_filter
-            a_where = (" WHERE " + " AND ".join(a_conds)) if a_conds else ""
-            result = await db.execute(
-                text(f"SELECT * FROM audit_log{a_where} ORDER BY timestamp DESC LIMIT 500"),
-                a_params,
-            )
-            admin_rows = [dict(r) for r in result.mappings().all()]
-
-        # Traffic stream - hash-chained ``local_audit`` (oneshot, mcp, sessions)
-        if source_filter in ("", "traffic"):
-            t_conds: list[str] = []
-            t_params: dict[str, object] = {}
-            if agent_filter:
-                t_conds.append("agent_id = :agent_id")
-                t_params["agent_id"] = agent_filter
-            if action_filter:
-                t_conds.append("event_type = :event_type")
-                t_params["event_type"] = action_filter
-            if status_filter:
-                t_conds.append("result = :result")
-                t_params["result"] = local_audit_result_for.get(status_filter, status_filter)
-            t_where = (" WHERE " + " AND ".join(t_conds)) if t_conds else ""
-            result = await db.execute(
-                text(f"SELECT * FROM local_audit{t_where} ORDER BY timestamp DESC LIMIT 500"),
-                t_params,
-            )
-            traffic_rows = [dict(r) for r in result.mappings().all()]
+        # Time-ordered, paginated merge of the in-scope streams.
+        if want_admin and want_traffic:
+            union_sql = f"{_ADMIN_SELECT} UNION ALL {_TRAFFIC_SELECT}"
+        elif want_admin:
+            union_sql = _ADMIN_SELECT
+        else:
+            union_sql = _TRAFFIC_SELECT
+        page_sql = (
+            f"SELECT * FROM ({union_sql}) AS merged "
+            "ORDER BY timestamp DESC LIMIT :_limit OFFSET :_offset"
+        )
+        result = await db.execute(
+            text(page_sql), dict(params, _limit=per_page, _offset=page_offset)
+        )
+        page_rows = [dict(r) for r in result.mappings().all()]
+        admin_rows = [r for r in page_rows if r["source"] == "admin"]
+        traffic_rows = [r for r in page_rows if r["source"] == "traffic"]
 
         # Distinct actions + event_types for the filter dropdown.
         r1 = await db.execute(text("SELECT DISTINCT action FROM audit_log WHERE action IS NOT NULL"))
@@ -547,25 +593,25 @@ async def audit_page(request: Request):
         })
 
     # ISO-8601 strings sort correctly as plain strings, no parsing needed.
+    # ``unified`` already holds exactly the current page (the DB applied
+    # LIMIT/OFFSET); the sort just re-interleaves admin+traffic within it.
     unified.sort(key=lambda x: x["timestamp"] or "", reverse=True)
 
-    admin_total = sum(1 for e in unified if e["source"] == "admin")
-    traffic_total = len(unified) - admin_total
+    # Totals span the whole archive (from COUNT), so total_pages walks the
+    # entire log, not just a loaded window.
+    total = admin_total + traffic_total
+    total_pages = max(1, (total + per_page - 1) // per_page)
 
-    # ``view=grouped`` (default) → CISO-mode card view, one card per
-    # tool call. ``view=raw`` → maintainer-mode flat row table.
+    # ``view=grouped`` (default) → CISO-mode card view, one card per tool
+    # call. ``view=raw`` → maintainer-mode flat row table. Grouping now
+    # runs on the current page's rows; a tool-call's 3-row fan-out that
+    # straddles a page boundary may render as two partial cards across two
+    # pages — cosmetic, no row is lost.
     if view_mode == "grouped":
-        cards = _group_audit_events(unified)
-        total = len(cards)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        offset = (page - 1) * per_page
-        page_cards = cards[offset:offset + per_page]
+        page_cards = _group_audit_events(unified)
         entries = []  # raw-view list stays empty in grouped mode
     else:
-        total = len(unified)
-        total_pages = max(1, (total + per_page - 1) // per_page)
-        offset = (page - 1) * per_page
-        entries = unified[offset:offset + per_page]
+        entries = unified
         page_cards = []
 
     agents = await list_agents()
