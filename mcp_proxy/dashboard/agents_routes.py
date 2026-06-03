@@ -104,11 +104,15 @@ async def agents_page(request: Request):
     org_status = await _refresh_org_status_from_broker()
     agents = await list_agents()
     has_ca = bool(await get_config("org_ca_cert"))
+    # Court / cross-org federation is uplink-gated: with no broker the proxy
+    # is standalone (open-core default) and the federation UI stays hidden.
+    federation_enabled = bool(await get_config("broker_url"))
 
     # Split by reach so the template can render two sections:
     # Federated (reach in {'cross','both'}) on top, Local (reach ==
     # 'intra') below. Peer-org agents live on /proxy/network now —
-    # this page is exclusively "my agents".
+    # this page is exclusively "my agents". In standalone mode the
+    # template ignores this split and lists ``agents`` in one table.
     federated_agents = [a for a in agents if a.get("reach", "both") != "intra"]
     local_agents = [a for a in agents if a.get("reach", "both") == "intra"]
 
@@ -118,6 +122,7 @@ async def agents_page(request: Request):
         agents=agents,
         federated_agents=federated_agents,
         local_agents=local_agents,
+        federation_enabled=federation_enabled,
         org_status=org_status,
         has_ca=has_ca,
         new_agent_id=None,
@@ -138,6 +143,10 @@ async def agents_create(request: Request):
     from mcp_proxy.egress.agent_manager import AgentManager
     from mcp_proxy.config import get_settings
 
+    # Court federation is uplink-gated; pass the flag through every render
+    # path so an error re-render keeps the same (standalone vs federated) UI.
+    federation_enabled = bool(await get_config("broker_url"))
+
     form = await request.form()
     agent_name = str(form.get("agent_name", "")).strip().lower().replace(" ", "_")
     display_name = str(form.get("display_name", "")).strip()
@@ -153,6 +162,7 @@ async def agents_create(request: Request):
             agents=agents,
             org_status=_org_status,
             has_ca=_has_ca,
+            federation_enabled=federation_enabled,
             error="Agent name and display name are required.",
             new_agent_id=None,
         ))
@@ -177,6 +187,7 @@ async def agents_create(request: Request):
                 agents=agents,
                 org_status=_org_status,
                 has_ca=False,
+                federation_enabled=federation_enabled,
                 error=(
                     "Org CA is not loaded — complete broker setup before "
                     "creating agents (the cert is the agent credential)."
@@ -201,6 +212,7 @@ async def agents_create(request: Request):
             agents=agents,
             org_status=_org_status,
             has_ca=_has_ca,
+            federation_enabled=federation_enabled,
             error=(
                 f"Agent name '{agent_name}' is already taken in this org. "
                 f"Pick a different name, or delete the existing agent first."
@@ -223,6 +235,7 @@ async def agents_create(request: Request):
             agents=agents,
             org_status=_org_status,
             has_ca=_has_ca,
+            federation_enabled=federation_enabled,
             error=(
                 "Failed to create the agent. Check the Mastio container "
                 "logs for the underlying cause."
@@ -252,6 +265,7 @@ async def agents_create(request: Request):
         request, session,
         active="agents",
         agents=agents,
+        federation_enabled=federation_enabled,
         org_status=org_status,
         has_ca=has_ca,
         new_agent_id=agent_id,

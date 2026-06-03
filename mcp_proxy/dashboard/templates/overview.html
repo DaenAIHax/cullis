@@ -105,7 +105,7 @@
         {% if org_id and standalone_mode %}
         <div class="mt-4 p-4 bg-surface-950/60 border border-gray-800/60 rounded">
             <div class="flex items-center justify-between gap-3 mb-2">
-                <p class="text-[10px] text-gray-500 uppercase tracking-[0.2em]">Org ID (share with Court admin)</p>
+                <p class="text-[10px] text-gray-500 uppercase tracking-[0.2em]">Org ID{% if federation_enabled %} (share with Court admin){% endif %}</p>
                 <button type="button"
                         data-copy="{{ org_id|e }}"
                         class="px-2 py-1 text-[10px] uppercase tracking-wider bg-accent-500/10 text-accent-400 border border-accent-400/30 rounded hover:bg-accent-500/20">
@@ -115,8 +115,11 @@
             <code class="block text-sm text-white break-all" style="font-family: 'JetBrains Mono', monospace;">{{ org_id }}</code>
             <p class="mt-2 text-xs text-gray-500">
                 Deterministic — derived from this Mastio's Org CA public key.
+                Stable across restarts (ADR-006 §2.2).
+                {%- if federation_enabled %}
                 The Court admin pastes this into an <code>attach-ca</code> invite so
-                the uplink pins your identity across restarts (ADR-006 §2.2).
+                the uplink pins your identity.
+                {%- endif %}
             </p>
         </div>
         {% endif %}
@@ -164,7 +167,7 @@
                 <a href="/proxy/agents" class="text-[10px] text-accent-400 hover:text-accent-300 uppercase tracking-wider">Manage &rarr;</a>
             </div>
 
-            <div class="grid grid-cols-3 gap-3 mb-5">
+            <div class="grid {% if federation_enabled %}grid-cols-3{% else %}grid-cols-2{% endif %} gap-3 mb-5">
                 <div class="p-3 bg-surface-950/60 border border-gray-800/40 rounded">
                     <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Active</p>
                     <span class="text-2xl font-bold text-white" style="font-family: 'JetBrains Mono', monospace;">{{ local_active_count }}</span>
@@ -173,11 +176,13 @@
                     <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Total</p>
                     <span class="text-2xl font-bold text-gray-300" style="font-family: 'JetBrains Mono', monospace;">{{ local_count }}</span>
                 </div>
+                {% if federation_enabled %}
                 <div class="p-3 bg-surface-950/60 border border-gray-800/40 rounded">
                     <p class="text-[10px] text-gray-600 uppercase tracking-wider mb-1">Federated</p>
                     <span class="text-2xl font-bold text-gray-300" style="font-family: 'JetBrains Mono', monospace;">{{ federated_count }}</span>
                     <span class="text-[10px] text-gray-600 ml-1">/ {{ federated_orgs }} org{% if federated_orgs != 1 %}s{% endif %}</span>
                 </div>
+                {% endif %}
             </div>
 
             {% if recent_agents %}
@@ -252,20 +257,18 @@
 
     </div>
 
-    <!-- Broker uplink card -->
+    <!-- Broker uplink card — only when a broker uplink is configured -->
+    {% if federation_enabled %}
     <div class="p-6 bg-surface-900/60 border border-gray-800/60 rounded-lg">
         <p class="text-[10px] text-gray-600 uppercase tracking-[0.2em] mb-3">Court Uplink</p>
-        {% if broker_url %}
         <code class="text-sm text-accent-400 break-all" style="font-family: 'JetBrains Mono', monospace;">{{ broker_url }}</code>
         {% if fed_running %}
         <p class="mt-2 text-[11px] text-emerald-400">
             ● Federation sync running{% if fed_stats %} · seq {{ fed_stats.last_applied_seq }}{% endif %}
         </p>
         {% endif %}
-        {% else %}
-        <p class="text-sm text-gray-500">Standalone mode — no cross-org federation.</p>
-        {% endif %}
     </div>
+    {% endif %}
 
 </div>
 {% endblock %}

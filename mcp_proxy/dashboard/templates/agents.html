@@ -39,7 +39,8 @@
     <div class="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">{{ error }}</div>
     {% endif %}
 
-    <!-- Section tabs (in-page anchors) -->
+    {% if federation_enabled %}
+    <!-- Section tabs (in-page anchors) — federation mode only -->
     <div class="flex items-center justify-between gap-1 mb-6 border-b border-gray-800/60">
         <div class="flex items-center gap-1">
             <a href="#federated"
@@ -62,15 +63,24 @@
             Peer agents → Network
         </a>
     </div>
+    {% endif %}
 
     <!-- Header -->
     <div id="federated" class="flex items-center justify-between mb-6">
         <div>
+            {% if federation_enabled %}
             <h2 class="text-lg font-semibold text-white uppercase tracking-wider">Federated Agents</h2>
             <p class="text-xs text-gray-600 mt-0.5">
                 {{ federated_agents | default([]) | length }} agent{% if (federated_agents | default([]) | length) != 1 %}s{% endif %}
                 exposed to other orgs via the Court registry
             </p>
+            {% else %}
+            <h2 class="text-lg font-semibold text-white uppercase tracking-wider">Agents</h2>
+            <p class="text-xs text-gray-600 mt-0.5">
+                {{ agents | default([]) | length }} agent{% if (agents | default([]) | length) != 1 %}s{% endif %}
+                enrolled in this org
+            </p>
+            {% endif %}
         </div>
         <button onclick="document.getElementById('create-panel').classList.toggle('hidden')"
                 class="px-4 py-2 text-xs font-semibold rounded transition-all"
@@ -136,12 +146,12 @@
     </div>
 
     {#
-      Single row macro — used by both the Federated and Local tables.
-      ``reach`` controls the dropdown; we render it as a styled <select>
-      so it stays compact (one cell) while exposing the 3 states. The
-      form auto-submits on change — no separate save button needed.
+      Single row macro — used by the Federated, Local and (standalone)
+      Agents tables. ``show_reach`` adds the cross-org Reach selector;
+      it is suppressed in standalone mode where there is no Court to
+      publish to. ``cols`` keeps empty-state colspans in sync.
     #}
-    {% macro agent_row(agent, csrf_token) %}
+    {% macro agent_row(agent, csrf_token, show_reach=True) %}
     <tr class="table-row-hover transition-colors cursor-pointer"
         tabindex="0"
         onclick="window.location='/proxy/agents/{{ agent.agent_id }}'"
@@ -200,6 +210,7 @@
             </span>
             {% endif %}
         </td>
+        {% if show_reach %}
         <td class="px-5 py-4" onclick="event.stopPropagation()">
             {% set _reach = agent.reach | default('both') %}
             <form method="post" action="/proxy/agents/{{ agent.agent_id }}/reach" class="inline">
@@ -213,11 +224,12 @@
                 </select>
             </form>
         </td>
+        {% endif %}
         <td class="px-5 py-4 text-xs text-gray-500 font-mono whitespace-nowrap">{{ agent.created_at[:19] }}</td>
     </tr>
     {% endmacro %}
 
-    {% macro agents_thead() %}
+    {% macro agents_thead(show_reach=True) %}
     <thead>
         <tr class="border-b border-gray-800/60">
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Agent ID</th>
@@ -226,23 +238,27 @@
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Capabilities</th>
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Status</th>
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Certificate</th>
+            {% if show_reach %}
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider" title="Who this agent can talk to: Local (same-org only), Federated (other orgs only), Both. Changes publish/unpublish on the Court.">Reach</th>
+            {% endif %}
             <th class="px-5 py-3 text-left text-[10px] font-medium text-gray-600 uppercase tracking-wider">Created</th>
         </tr>
     </thead>
     {% endmacro %}
 
+    {% if federation_enabled %}
+    {% set _cols = 8 %}
     <!-- Federated agents table (reach in {cross, both}) -->
     <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-x-auto backdrop-blur-sm mb-10">
         <table class="w-full">
-            {{ agents_thead() }}
+            {{ agents_thead(show_reach=True) }}
             <tbody class="divide-y divide-gray-800/40">
                 {% for a in federated_agents %}
-                    {{ agent_row(a, csrf_token) }}
+                    {{ agent_row(a, csrf_token, show_reach=True) }}
                 {% endfor %}
                 {% if not federated_agents %}
                 <tr>
-                    <td colspan="8" class="px-5 py-10 text-center">
+                    <td colspan="{{ _cols }}" class="px-5 py-10 text-center">
                         <p class="text-sm text-gray-600">No federated agents on this proxy yet</p>
                         <p class="text-xs text-gray-700 mt-1">
                             Flip a local agent's <span class="text-gray-500">Reach</span> to
@@ -269,14 +285,14 @@
 
     <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-x-auto backdrop-blur-sm">
         <table class="w-full">
-            {{ agents_thead() }}
+            {{ agents_thead(show_reach=True) }}
             <tbody class="divide-y divide-gray-800/40">
                 {% for a in local_agents %}
-                    {{ agent_row(a, csrf_token) }}
+                    {{ agent_row(a, csrf_token, show_reach=True) }}
                 {% endfor %}
                 {% if not local_agents and not federated_agents %}
                 <tr>
-                    <td colspan="8" class="px-5 py-16 text-center">
+                    <td colspan="{{ _cols }}" class="px-5 py-16 text-center">
                         <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                         <p class="text-sm text-gray-600">No agents registered</p>
                         <p class="text-xs text-gray-700 mt-1">Create an agent to get started with the Mastio.</p>
@@ -284,7 +300,7 @@
                 </tr>
                 {% elif not local_agents %}
                 <tr>
-                    <td colspan="8" class="px-5 py-10 text-center">
+                    <td colspan="{{ _cols }}" class="px-5 py-10 text-center">
                         <p class="text-sm text-gray-600">No local-only agents</p>
                         <p class="text-xs text-gray-700 mt-1">
                             All of your agents are exposed cross-org. Flip an agent's Reach
@@ -296,6 +312,30 @@
             </tbody>
         </table>
     </div>
+
+    {% else %}
+    {% set _cols = 7 %}
+    <!-- Standalone mode: one table, all enrolled agents, no cross-org Reach -->
+    <div class="bg-surface-900/80 border border-gray-800/50 rounded-lg overflow-x-auto backdrop-blur-sm">
+        <table class="w-full">
+            {{ agents_thead(show_reach=False) }}
+            <tbody class="divide-y divide-gray-800/40">
+                {% for a in agents %}
+                    {{ agent_row(a, csrf_token, show_reach=False) }}
+                {% endfor %}
+                {% if not agents %}
+                <tr>
+                    <td colspan="{{ _cols }}" class="px-5 py-16 text-center">
+                        <svg class="w-10 h-10 mx-auto text-gray-800 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                        <p class="text-sm text-gray-600">No agents registered</p>
+                        <p class="text-xs text-gray-700 mt-1">Create an agent to get started with the Mastio.</p>
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
 
 </div>
 

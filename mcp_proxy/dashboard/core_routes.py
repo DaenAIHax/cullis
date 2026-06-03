@@ -385,6 +385,11 @@ async def overview_page(request: Request):
         org_id=org_id,
         display_name=display_name,
         broker_url=broker_url,
+        # Court / cross-org federation is an uplink-gated feature. With no
+        # broker uplink the proxy is standalone (open-core default), so every
+        # Court-facing element in the UI is hidden behind this flag. Flipping
+        # on a broker uplink brings the federation UI back automatically.
+        federation_enabled=bool(broker_url),
         org_status=org_status,
         local_count=local_count,
         local_active_count=local_active_count,
