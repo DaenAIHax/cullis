@@ -398,8 +398,11 @@ async def lifespan(app: FastAPI):
         )
         # Best-effort release of what startup opened before the guard so a
         # degraded worker doesn't pin the DB pool for its (short) life.
+        # ``dispose_db`` is the module-level import (top of file); a local
+        # ``from ... import`` here would shadow it into a function-local and
+        # break the happy-path shutdown ``await dispose_db()`` below with an
+        # UnboundLocalError.
         try:
-            from mcp_proxy.db import dispose_db
             await dispose_db()
         except Exception:  # noqa: BLE001 best-effort
             pass
