@@ -400,6 +400,23 @@ def _group_audit_events(entries: list[dict]) -> list[dict]:
     return cards
 
 
+def _coerce_ms(value: Any) -> float | None:
+    """Coerce a ``duration_ms`` cell back to float (or None).
+
+    The paginated audit UNION casts ``duration_ms`` to TEXT so the admin
+    and traffic SELECTs line up column-type-wise on Postgres. The audit
+    template renders it with ``'%.1f' | format(...)``, which raises
+    ``TypeError: must be real number, not str`` on a TEXT value — so this
+    converts back, tolerating None / empty / non-numeric.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("/audit", response_class=HTMLResponse)
 async def audit_page(request: Request):
     session = require_login(request)
@@ -539,7 +556,11 @@ async def audit_page(request: Request):
             "status": r.get("status"),
             "target": r.get("tool_name"),
             "tool_name": r.get("tool_name"),
-            "duration_ms": r.get("duration_ms"),
+            # ``duration_ms`` returns as TEXT from the paginated UNION (the
+            # CAST aligns admin/traffic column types for Postgres). The
+            # template formats it with ``'%.1f'``, which needs a real
+            # number, so coerce back to float here (None if absent/unparseable).
+            "duration_ms": _coerce_ms(r.get("duration_ms")),
             "request_id": r.get("request_id"),
             "endpoint_url": None,
             "session_id": None,

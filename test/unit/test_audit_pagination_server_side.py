@@ -51,14 +51,17 @@ async def seeded_audit_db(monkeypatch, tmp_path):
     for k in range(TOTAL):
         ts = f"2026-06-03T00:00:00.{k:06d}+00:00"
         if k % 2 == 0:
-            admin_rows.append({"ts": ts, "aid": f"acme::a{k}", "act": "auth.login", "st": "success"})
+            # ``dur`` populated so the paginated UNION's CAST(duration_ms AS
+            # TEXT) is exercised end-to-end (regression for the template's
+            # ``'%.1f'`` filter, which needs a real number not a TEXT cell).
+            admin_rows.append({"ts": ts, "aid": f"acme::a{k}", "act": "auth.login", "st": "success", "dur": 12.5})
         else:
             traffic_rows.append({"ts": ts, "aid": f"acme::t{k}", "evt": "tool_execute"})
 
     async with get_db() as db:
         await db.execute(
-            text("INSERT INTO audit_log (timestamp, agent_id, action, status) "
-                 "VALUES (:ts, :aid, :act, :st)"),
+            text("INSERT INTO audit_log (timestamp, agent_id, action, status, duration_ms) "
+                 "VALUES (:ts, :aid, :act, :st, :dur)"),
             admin_rows,
         )
         await db.execute(
@@ -135,6 +138,38 @@ async def test_page_one_interleaves_both_streams(seeded_audit_db):
     p1 = await _render("view=raw&page=1")
     sources = {e["source"] for e in p1["entries"]}
     assert sources == {"admin", "traffic"}, "merge must interleave both streams"
+
+
+def test_audit_route_maps_to_audit_page():
+    """The @router.get('/audit') decorator must decorate audit_page, not
+    a helper defined nearby — a misplaced decorator turned GET /audit into
+    a 422 ('value' field required, the _coerce_ms helper's param leaking
+    as a required query param). Direct-call tests can't catch this; assert
+    the route wiring."""
+    import mcp_proxy.dashboard.audit_routes as ar
+    routes = [r for r in ar.router.routes
+              if getattr(r, "path", None) == "/audit"
+              and "GET" in getattr(r, "methods", set())]
+    assert routes, "GET /audit route not registered"
+    assert routes[0].endpoint is ar.audit_page, \
+        "GET /audit must map to audit_page, not a helper"
+
+
+@pytest.mark.asyncio
+async def test_duration_ms_is_float_for_template(seeded_audit_db):
+    """The UNION casts duration_ms to TEXT (Postgres type-alignment); the
+    audit template renders it with ``'%.1f' | format(...)`` which raises
+    TypeError on a str. Regression for the live 500 — duration_ms must
+    reach the context as float (or None), never str."""
+    ctx = await _render("view=raw&page=1")
+    admin = [e for e in ctx["entries"] if e["source"] == "admin"]
+    assert admin, "expected admin rows on page 1"
+    for e in admin:
+        assert e["duration_ms"] is None or isinstance(e["duration_ms"], float), (
+            f"duration_ms must be float for the '%.1f' template filter, "
+            f"got {type(e['duration_ms']).__name__}={e['duration_ms']!r}"
+        )
+    assert any(e["duration_ms"] == 12.5 for e in admin), "seeded duration_ms not coerced"
 
 
 @pytest.mark.asyncio
