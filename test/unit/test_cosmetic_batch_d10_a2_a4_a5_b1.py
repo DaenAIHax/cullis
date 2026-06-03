@@ -163,11 +163,14 @@ def test_a2_audit_template_verify_banner_clarifies_entries() -> None:
     ambiguously — operators read it as the lifetime row count of
     ``audit_log`` and were confused when it differed from the header
     Events counter (filter-scoped) and the sidebar badge (1-hour
-    rolling). The clarified copy + tooltip explains why these three
-    numbers are different.
+    rolling). C1 then split the count into the admin chain
+    (``audit_log``) and the traffic chain (``local_audit``) so both
+    streams are shown as separately verified. The tooltip still explains
+    why these numbers differ from the header / sidebar counters.
     """
     body = _AUDIT_TEMPLATE.read_text()
-    assert "chained entries verified" in body
+    assert "' admin · '" in body
+    assert "' traffic entries · '" in body
     assert "Hash-chained rows actually verified end-to-end" in body
     assert "rolling 1-hour count" in body
 
