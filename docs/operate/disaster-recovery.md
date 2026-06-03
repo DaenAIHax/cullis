@@ -119,6 +119,40 @@ one is clean:
   then run an explicit `alembic downgrade` expecting to keep data: it
   drops the columns / tables the newer version added.
 
+## Vault token lifecycle
+
+The Mastio authenticates to Vault with a single static token
+(`MCP_PROXY_VAULT_TOKEN`). A non-root token has a finite TTL: once it
+lapses, every CA load/store returns HTTP 403, so cert rotation **and any
+restart** start failing. To make this safe:
+
+- **Issue a periodic (or renewable) token.** A periodic token never hits
+  a max-TTL and is the recommended shape:
+
+  ```bash
+  vault token create -policy=cullis-mastio -period=24h
+  ```
+
+- **The Mastio renews it for you.** When `kms_backend=vault` and the
+  token is renewable/periodic, a leader-elected watcher calls
+  `auth/token/renew-self` at roughly half the lease, so the token never
+  lapses while the Mastio runs. No operator cron is needed. Disable with
+  `MCP_PROXY_VAULT_TOKEN_RENEWAL_ENABLED=false`.
+
+- **Boot refuses a doomed token.** In production, if you supply a
+  **non-renewable** token with a finite TTL (which Mastio cannot keep
+  alive), boot is refused with a clear log line rather than starting a
+  Mastio that will silently break at the first rotation/restart after
+  expiry. Override only if you accept manual token rotation:
+  `MCP_PROXY_VAULT_TOKEN_ALLOW_NONRENEWABLE=true`.
+
+- **Renewal has a ceiling.** A renewable non-periodic token can only be
+  renewed up to its `explicit_max_ttl`; prefer `-period` for an
+  always-on Mastio. If a renew ever fails (Vault sealed, network), the
+  watcher logs and retries on a 30 s floor and emits a
+  `kms.vault_token_renewed` audit row (`status=error`) so the failure is
+  visible before the token actually expires.
+
 ## Known limitations
 
 Stated plainly so they can go in the pilot's risk register:

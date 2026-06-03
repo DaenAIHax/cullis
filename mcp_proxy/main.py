@@ -304,6 +304,28 @@ async def lifespan(app: FastAPI):
 
     await agent_mgr.load_org_ca_from_config()
 
+    # Vault KMS token lifecycle — introspect the static token once at
+    # boot. In production a non-renewable finite token refuses boot (it
+    # would expire and break cert rotation/restart with a Vault 403);
+    # a renewable/periodic token is handed to the renewal watcher below.
+    # SystemExit (BaseException) is intentional: it bubbles past the
+    # ``except Exception`` boot guards so the refuse is a hard stop.
+    app.state._vault_token_classified = None
+    try:
+        from mcp_proxy.lifespan.vault_token_renewal_watcher import (
+            evaluate_vault_token_at_boot,
+        )
+        app.state._vault_token_classified = await evaluate_vault_token_at_boot(
+            settings,
+        )
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never block boot on introspection
+        _log.warning(
+            "Vault token boot evaluation raised %s — continuing without "
+            "auto-renewal", exc,
+        )
+
     # #115 — standalone first-boot: generate a fresh self-signed Org CA when
     # no CA has been attached (no attach-ca invite ever consumed) and no
     # broker is configured. Gated on standalone=true so federation deploys
@@ -401,6 +423,52 @@ async def lifespan(app: FastAPI):
     app.state.agent_manager = agent_mgr
     app.state.org_id = org_id
     _log.info("Lifespan: agent_manager + org_id wired (org_id=%s)", org_id)
+
+    # Vault KMS token renewal — when the boot guard classified a
+    # renewable/periodic token, spawn the leader-elected loop that
+    # renews it at ~half its lease so it never lapses under a
+    # long-running Mastio.
+    _vault_classified = getattr(app.state, "_vault_token_classified", None)
+    if _vault_classified and getattr(
+        settings, "vault_token_renewal_enabled", True,
+    ):
+        try:
+            from mcp_proxy.kms import get_kms_provider
+            from mcp_proxy.lifespan import get_leader as _vault_get_leader
+            from mcp_proxy.lifespan.vault_token_renewal_watcher import (
+                vault_token_renewal_watcher_loop,
+            )
+            vault_renew_leader = _vault_get_leader("vault_token_renewal_watcher")
+            if await vault_renew_leader.acquire():
+                vault_renew_stop = asyncio.Event()
+                vault_renew_task = asyncio.create_task(
+                    vault_token_renewal_watcher_loop(
+                        get_kms_provider(),
+                        initial_ttl=_vault_classified["ttl"],
+                        period=_vault_classified["period"],
+                        min_interval_seconds=(
+                            settings.vault_token_renewal_min_interval_seconds
+                        ),
+                        stop_event=vault_renew_stop,
+                    ),
+                    name="vault_token_renewal_watcher",
+                )
+                app.state.vault_token_renewal_watcher_task = vault_renew_task
+                app.state.vault_token_renewal_watcher_stop = vault_renew_stop
+                app.state.vault_token_renewal_watcher_leader = vault_renew_leader
+                _log.info(
+                    "vault_token_renewal_watcher: leader acquired, loop spawned",
+                )
+            else:
+                _log.info(
+                    "vault_token_renewal_watcher: another worker holds the "
+                    "leader lock — skipping",
+                )
+        except Exception as exc:  # noqa: BLE001 best-effort
+            _log.warning(
+                "vault_token_renewal_watcher startup failed: %s — the Vault "
+                "token will not be auto-renewed this boot", exc,
+            )
 
     # Three-tier PKI hardening (audit 2026-05-18), Phase 4 — weekly-ish
     # background watcher for the Mastio Intermediate CA expiry. Leader-
@@ -1357,6 +1425,40 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # noqa: BLE001 best-effort
             _log.debug(
                 "cert_expiry_watcher leader release failed: %s", exc,
+            )
+
+    # Stop the Vault KMS token renewal watcher.
+    vault_renew_stop = getattr(
+        app.state, "vault_token_renewal_watcher_stop", None,
+    )
+    vault_renew_task = getattr(
+        app.state, "vault_token_renewal_watcher_task", None,
+    )
+    if vault_renew_stop is not None:
+        vault_renew_stop.set()
+    if vault_renew_task is not None:
+        try:
+            await asyncio.wait_for(vault_renew_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            vault_renew_task.cancel()
+            try:
+                await vault_renew_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        except ValueError as exc:
+            _log.debug(
+                "vault_token_renewal_watcher teardown loop mismatch "
+                "(xdist): %s", exc,
+            )
+    vault_renew_leader = getattr(
+        app.state, "vault_token_renewal_watcher_leader", None,
+    )
+    if vault_renew_leader is not None:
+        try:
+            await vault_renew_leader.release()
+        except Exception as exc:  # noqa: BLE001 best-effort
+            _log.debug(
+                "vault_token_renewal_watcher leader release failed: %s", exc,
             )
 
     # Wave 2 fix 7+8. Stop the agent cert grace cleanup sweep.

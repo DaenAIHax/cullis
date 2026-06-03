@@ -307,3 +307,75 @@ class VaultKMSProvider:
             f"Vault returned HTTP {resp.status_code} on create-only "
             f"{path} ({label}): {resp.text[:200]}",
         )
+
+    # ── Token lifecycle (renewal) ───────────────────────────────────────
+    # The Mastio authenticates to Vault with a single static token
+    # (``X-Vault-Token``). A non-root token has a finite TTL, and unless
+    # it is renewed it lapses — after which every load/store above starts
+    # returning HTTP 403, breaking cert rotation and any restart. These
+    # two helpers let the boot guard introspect the token and the
+    # renewal watcher keep a renewable/periodic token alive.
+
+    async def lookup_token(self) -> dict:
+        """Introspect the current token via ``auth/token/lookup-self``.
+
+        Returns the Vault ``data`` block, notably ``ttl`` (seconds of
+        life remaining), ``renewable`` (bool), ``period`` (seconds, 0
+        when not periodic) and ``expire_time`` (RFC 3339, or ``None`` for
+        a non-expiring root/unlimited token). Raises ``RuntimeError`` on
+        a transport error or any non-200 so the boot guard can decide.
+        """
+        url = "/v1/auth/token/lookup-self"
+        async with self._client() as client:
+            try:
+                resp = await client.get(url)
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Vault token lookup-self unreachable at "
+                    f"{self._vault_addr}{url}: {exc}",
+                ) from exc
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Vault token lookup-self returned HTTP {resp.status_code}: "
+                f"{resp.text[:200]}",
+            )
+        try:
+            return resp.json()["data"]
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError(
+                f"Vault token lookup-self returned malformed response: {exc}",
+            ) from exc
+
+    async def renew_token(self, increment_seconds: int | None = None) -> dict:
+        """Renew the current token via ``auth/token/renew-self``.
+
+        For a periodic token Vault resets the TTL to the token's period;
+        for a renewable non-periodic token it extends up to the token's
+        max TTL. ``increment_seconds`` is a hint Vault may clamp. Returns
+        the Vault ``auth`` block (``lease_duration`` = new TTL seconds,
+        ``renewable``). Raises ``RuntimeError`` on a transport error or a
+        non-2xx (e.g. 403 once the token is no longer renewable).
+        """
+        url = "/v1/auth/token/renew-self"
+        body: dict = {}
+        if increment_seconds is not None:
+            body["increment"] = f"{increment_seconds}s"
+        async with self._client() as client:
+            try:
+                resp = await client.post(url, json=body)
+            except httpx.HTTPError as exc:
+                raise RuntimeError(
+                    f"Vault token renew-self unreachable at "
+                    f"{self._vault_addr}{url}: {exc}",
+                ) from exc
+        if resp.status_code not in (200, 204):
+            raise RuntimeError(
+                f"Vault token renew-self returned HTTP {resp.status_code}: "
+                f"{resp.text[:200]}",
+            )
+        try:
+            return resp.json().get("auth") or {}
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Vault token renew-self returned malformed response: {exc}",
+            ) from exc

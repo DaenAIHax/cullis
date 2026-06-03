@@ -79,6 +79,17 @@ class ProxySettings(BaseSettings):
     # broker-side pattern in ``app/kms/vault.py``.
     vault_verify_tls: bool = True
     vault_ca_cert_path: str = ""
+    # Vault KMS token lifecycle (kms_backend=vault). The provider auths
+    # with a single static token; a finite-TTL token lapses without
+    # renewal and then every CA load/store 403s. The renewal watcher
+    # keeps a renewable/periodic token alive at ~half its lease.
+    vault_token_renewal_enabled: bool = True
+    # Floor between renews so a tiny TTL can't hammer Vault.
+    vault_token_renewal_min_interval_seconds: int = 60
+    # Override the production boot refusal for a non-renewable finite
+    # token (it WILL expire and break rotation/restart — opt in only if
+    # you accept manual token rotation).
+    vault_token_allow_nonrenewable: bool = False
 
     # Tools
     tools_config_path: str = "tools.yaml"
