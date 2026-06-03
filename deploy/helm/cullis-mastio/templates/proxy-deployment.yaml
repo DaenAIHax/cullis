@@ -172,7 +172,12 @@ spec:
               command:
                 - sh
                 - -c
-                - wget -q --no-check-certificate -O /dev/null https://127.0.0.1:9443/health
+                # Liveness hits /healthz (shallow) not /health: /health
+                # returns 503 in degraded boot-refusal mode, and a
+                # liveness failure there would restart-loop the sidecar
+                # for a deterministic config error. Readiness above keeps
+                # /health so the pod still goes NotReady.
+                - wget -q --no-check-certificate -O /dev/null https://127.0.0.1:9443/healthz
             initialDelaySeconds: 30
             periodSeconds: 30
           {{- with .Values.nginx.resources }}

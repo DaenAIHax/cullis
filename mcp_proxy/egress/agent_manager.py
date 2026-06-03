@@ -2025,6 +2025,12 @@ class AgentManager:
                 "MCP_PROXY_ALLOW_PKI_REKEY=1.",
                 missing_label, enrolled, restore_hint,
             )
+            from mcp_proxy.boot_state import refuse_boot
+            refuse_boot(
+                f"pki_incoherence: {missing_label} absent but {enrolled} "
+                "enrolled agent(s) exist (partial disaster-restore). "
+                f"{restore_hint}, or MCP_PROXY_ALLOW_PKI_REKEY=1 to re-key.",
+            )
             raise SystemExit(1)
         logger.warning(
             "PKI INCOHERENCE (non-production): %s is absent but %d enrolled "

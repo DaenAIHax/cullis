@@ -251,8 +251,11 @@ proxy:
     timeoutSeconds: 3
     failureThreshold: 3
 
-  # -- Readiness probe configuration. Hits /readyz — returns 503 when the
-  # DB is unwritable or the JWKS cache is stale beyond 2x refresh.
+  # -- Readiness probe configuration. Hits /readyz — returns 503 when a
+  # fail-closed boot guard refused (degraded mode), the DB is unwritable,
+  # or the JWKS cache is stale beyond 2x refresh. Liveness stays on
+  # /healthz so a deterministic boot refusal marks the pod NotReady
+  # without a restart loop.
   readinessProbe:
     httpGet:
       path: /readyz
