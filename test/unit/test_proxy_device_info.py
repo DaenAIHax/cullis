@@ -215,3 +215,61 @@ async def test_approve_without_device_info_yields_null(_proxy_db):
     row = await get_agent("testorg::bob")
     assert row is not None
     assert row["device_info"] is None
+
+
+@pytest.mark.asyncio
+async def test_approve_emits_agent_create_into_hash_chain(_proxy_db):
+    """S-6 — agent.create must land in the tamper-evident hash chain.
+
+    approve() used to write agent.create with a raw INSERT inside the
+    transaction, which left chain_seq NULL (orphaned from the chain). It
+    now returns the event in ``record['audit_events']`` and the caller
+    emits it post-commit via ``emit_audit_events`` -> hash-chained
+    log_audit. Assert the row carries a chain_seq.
+    """
+    from mcp_proxy.db import get_db
+    from mcp_proxy.enrollment.service import (
+        start_enrollment, approve, emit_audit_events,
+    )
+    from sqlalchemy import text
+
+    async with get_db() as conn:
+        started = await start_enrollment(
+            conn,
+            **_fresh_pop_kwargs(),
+            requester_name="carol",
+            requester_email="carol@example.com",
+            reason=None,
+            device_info=None,
+        )
+
+    async with get_db() as conn:
+        record = await approve(
+            conn,
+            session_id=started.session_id,
+            agent_id="testorg::carol",
+            capabilities=["llm.chat"],
+            groups=[],
+            admin_name="admin",
+            agent_manager=_FakeAgentManager(),
+        )
+
+    # approve hands the event back rather than writing it inline.
+    assert [e["action"] for e in record["audit_events"]] == ["agent.create"]
+
+    # The router emits post-commit; do the same here.
+    await emit_audit_events(record["audit_events"])
+
+    async with get_db() as conn:
+        rows = (await conn.execute(
+            text(
+                "SELECT chain_seq FROM audit_log WHERE action = 'agent.create' "
+                "AND agent_id = :aid"
+            ),
+            {"aid": "testorg::carol"},
+        )).all()
+    assert len(rows) == 1, "exactly one agent.create row expected"
+    assert rows[0][0] is not None, (
+        "agent.create must be hash-chained (chain_seq populated), not an "
+        "orphan with chain_seq NULL"
+    )

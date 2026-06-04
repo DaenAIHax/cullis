@@ -209,6 +209,10 @@ async def enrollments_approve(request: Request, session_id: str):
             status_code=500,
         )
 
+    # S-6 — emit agent.create / agent.cert_rotated through the
+    # hash-chained log_audit after the approval transaction committed.
+    await _enrollment_service.emit_audit_events(record.get("audit_events", []))
+
     _log.info(
         "enrollment_approved via dashboard: session=%s agent=%s admin=%s",
         session_id, record.get("agent_id_assigned"), session.role,
