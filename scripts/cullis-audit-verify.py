@@ -63,6 +63,11 @@ Exit codes:
        path does not reconstruct the anchored root, bundle row_hash
        disagrees with proof leaf_hash, or --archive-manifest-pubkey
        missing when archive flags are set)
+  8  — --require-anchors set but the bundle carries zero verified TSA
+       anchors. The SHA-256 chain is internally consistent yet bound to
+       no external timestamp, so it is tamper-evident against the agent
+       but not against an operator who can rewrite the store. Dispute-
+       grade verification demands at least one anchor.
 """
 from __future__ import annotations
 
@@ -1528,6 +1533,43 @@ def _load_json_file(path: str, label: str) -> dict:
     return obj
 
 
+def enforce_anchor_floor(require_anchors: bool, total_anchors: int) -> None:
+    """Reject a bundle with zero verified TSA anchors when the caller
+    passed ``--require-anchors`` (exit 8).
+
+    ``verify_chains`` proves the SHA-256 hash chain is internally
+    consistent, but the chain is *self-asserted*: an operator with write
+    access to the audit store can recompute every ``row_hash`` and
+    produce a chain that ``verify_chains`` accepts. The RFC 3161 TSA
+    anchors are the only provenance that binds the chain to an external,
+    independently-trusted timestamp. A dispute-grade verification — the
+    regulator, an auditor who does not trust the operator — therefore
+    requires at least one verified anchor, and the default permissive
+    behaviour (chain-only, exit 0) is unsafe for that audience.
+
+    NOTE: a satisfied floor proves the chain is bound to >=1 external
+    timestamp; it does NOT prove the *head* row is anchored. Periodic
+    anchoring leaves a trailing window of rows written since the last
+    anchor. Use ``--merkle-proof`` / archive proofs for per-row coverage.
+    """
+    if not require_anchors or total_anchors > 0:
+        return
+    print("")
+    print("✗ ANCHOR REQUIREMENT NOT MET")
+    print("")
+    print("  --require-anchors was set, but the bundle carries zero verified")
+    print("  RFC 3161 TSA anchors. The hash chain is internally consistent,")
+    print("  but a self-asserted SHA-256 chain with no external timestamp can")
+    print("  be recomputed wholesale by anyone with write access to the audit")
+    print("  store. Without an anchor the bundle is tamper-evident against the")
+    print("  agent, not against the operator who holds the database.")
+    print("")
+    print("  Re-export with TSA anchoring enabled, or drop --require-anchors")
+    print("  to accept chain-only (non-dispute-grade) verification.")
+    print("")
+    sys.exit(8)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
@@ -1650,6 +1692,23 @@ def main() -> int:
             "on the kid metadata inside the JSONs."
         ),
     )
+    ap.add_argument(
+        "--require-anchors",
+        action="store_true",
+        help=(
+            "Dispute-grade mode: fail (exit 8) unless the bundle carries "
+            "at least one verified RFC 3161 TSA anchor. Without this flag "
+            "a chain with zero anchors still verifies (exit 0) — useful "
+            "for dev/integrity-only checks, but a self-asserted SHA-256 "
+            "chain with no external timestamp is tamper-evident against "
+            "the agent, not against an operator who can rewrite the store. "
+            "An auditor who does not trust the operator should always set "
+            "this. NOTE: it guarantees the chain is bound to >=1 external "
+            "timestamp, not that the head row is anchored — periodic "
+            "anchoring leaves a trailing unanchored window; use "
+            "--merkle-proof for per-row coverage."
+        ),
+    )
     args = ap.parse_args()
 
     bundles: list[tuple[str, list[dict]]] = []
@@ -1688,6 +1747,13 @@ def main() -> int:
         args.archive_manifest_pubkey,
         bundles,
     )
+
+    # Dispute-grade floor: a clean chain with zero external TSA anchors
+    # is tamper-evident against the agent but not against an operator who
+    # can rewrite the store and recompute every row_hash. Exits 8 under
+    # --require-anchors; a no-op otherwise (chain-only verification stays
+    # exit 0 for dev / integrity-only callers).
+    enforce_anchor_floor(args.require_anchors, total_anchors)
 
     # CISO-readable PASS summary. The line breaks below are deliberate
     # so the auditor's terminal output reads like a verdict, not a CSV.
