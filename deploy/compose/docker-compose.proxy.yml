@@ -40,6 +40,15 @@ services:
       # Persistent signing key — without this, admin sessions are invalid
       # after every proxy restart (per-process random fallback).
       MCP_PROXY_DASHBOARD_SIGNING_KEY: ${MCP_PROXY_DASHBOARD_SIGNING_KEY:-}
+      # S-7 (prod-shape stress test 2026-06-04) — shared HMAC secret for the
+      # RFC 9449 §8 DPoP server nonce. generate-proxy-env.sh mints this into
+      # proxy.env, but docker compose does not inject env-file values into
+      # the container unless they are mapped here too. Without the mapping
+      # each of the 4 workers falls back to a per-process secret, so a nonce
+      # minted by worker A is rejected by worker B and /v1/llm/chat churns
+      # 'use_dpop_nonce' 401s under concurrency. Empty default falls back to
+      # the worker-shared persisted file for single-container dev.
+      MCP_PROXY_DPOP_NONCE_SECRET: ${MCP_PROXY_DPOP_NONCE_SECRET:-}
       # Defaults to file-backed SQLite on the mcp_proxy_data volume; the
       # docker-compose.proxy.postgres.yml override flips this to an
       # asyncpg URL pointing at the bundled Postgres 16 service. Both
