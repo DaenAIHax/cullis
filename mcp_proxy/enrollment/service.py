@@ -544,7 +544,7 @@ async def approve(
                    VALUES (:aid, :dn, :caps, :cert, :created, 1,
                            :device, :dpop_jkt, 'connector', :created,
                            :spiffe_id,
-                           1, :created, 'both', 1, :ptype)"""
+                           false, NULL, 'both', 1, :ptype)"""
             ),
             {
                 "aid": canonical_id,
