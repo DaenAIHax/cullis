@@ -18,7 +18,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from redis.exceptions import RedisError as _RedisError
 from sqlalchemy import text
+from sqlalchemy.exc import (
+    InterfaceError as _SAInterfaceError,
+    OperationalError as _SAOperationalError,
+    TimeoutError as _SATimeoutError,
+)
 
 from mcp_proxy.config import get_settings, validate_config
 from mcp_proxy.db import dispose_db, get_db, init_db
@@ -1751,6 +1757,46 @@ app = FastAPI(
 # ─────────────────────────────────────────────────────────────────────────────
 # Exception handler
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Issue #1054 — when a hard backing dependency drops at *runtime* the request
+# path fails closed (correct), but a bare 500 (Redis) or a hung worker
+# (Postgres) is not graceful. Reshape these into a fast 503 + Retry-After so an
+# SDK / agent loop backs off cleanly and an LB can retry, while fail-closed
+# stays fail-closed — the action is never granted, only the response *shape*
+# changes. We log the exception *class* (never str(exc), which could carry a
+# connection string) and return a generic body (no leak, H-IO-2).
+_DEPENDENCY_RETRY_AFTER_S = 5
+
+
+def _dependency_unavailable(request: Request, exc: Exception, dependency: str) -> JSONResponse:
+    _log.warning(
+        "%s unavailable on %s %s (%s) — returning 503 Service Unavailable",
+        dependency, request.method, request.url.path, exc.__class__.__name__,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": f"{dependency} temporarily unavailable — retry shortly"},
+        headers={"Retry-After": str(_DEPENDENCY_RETRY_AFTER_S)},
+    )
+
+
+@app.exception_handler(_RedisError)
+async def redis_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    # DPoP JTI store / login-challenge store / rate limiter backing. A
+    # ConnectionError here means Redis dropped after a clean boot.
+    return _dependency_unavailable(request, exc, "Security store")
+
+
+@app.exception_handler(_SAOperationalError)
+@app.exception_handler(_SAInterfaceError)
+@app.exception_handler(_SATimeoutError)
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    # OperationalError / InterfaceError: DB unreachable or connection lost.
+    # sqlalchemy TimeoutError: pool exhausted (every connection blocked on a
+    # query against a stalled DB). asyncpg command_timeout surfaces as
+    # OperationalError, so a hung query is bounded and lands here too.
+    return _dependency_unavailable(request, exc, "Database")
+
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
