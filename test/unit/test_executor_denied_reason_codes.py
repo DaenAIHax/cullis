@@ -30,6 +30,7 @@ from mcp_proxy.policy.denied_reason_codes import (
     INSUFFICIENT_TIER,
     INTERNAL_ERROR,
     MISSING_BINDING,
+    POLICY_DENIED,
     TOOL_NOT_FOUND,
 )
 from mcp_proxy.policy.tier_matrix import TierMatrix
@@ -321,5 +322,6 @@ def test_all_codes_unique():
         CAPABILITY_DENIED,
         INSUFFICIENT_TIER,
         MISSING_BINDING,
+        POLICY_DENIED,
         INTERNAL_ERROR,
     })

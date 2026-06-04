@@ -12,13 +12,14 @@ from typing import Any
 
 import httpx
 
-from mcp_proxy.db import log_audit
+from mcp_proxy.db import get_config, log_audit
 from mcp_proxy.models import TokenPayload, ToolExecuteRequest, ToolExecuteResponse
 from mcp_proxy.policy.denied_reason_codes import (
     CAPABILITY_DENIED,
     INSUFFICIENT_TIER,
     INTERNAL_ERROR,
     MISSING_BINDING,
+    POLICY_DENIED,
     TOOL_NOT_FOUND,
 )
 from mcp_proxy.policy.tier_eval import resolve_effective_tier
@@ -327,6 +328,94 @@ async def run(
                 execution_time_ms=duration_ms,
                 denied_reason_code=CAPABILITY_DENIED,
             )
+
+    # 2-rego. Operator Rego policy gate (tool_call surface).
+    #
+    # The capability gate above answers "may this principal call this
+    # CLASS of tool?". This gate lets the operator layer a content-aware
+    # ABAC rule on top — e.g. deny a specific ``customer_id`` / ``name``
+    # — through a Rego policy loaded from the dashboard. It evaluates the
+    # SAME ``cullis/policy/tool_call`` Rego (WASM) layer that the
+    # ``/v1/data/cullis/policy/tool_call`` bridge evaluates, now consulted
+    # INLINE on the agent's own tool-call path (the bridge is the external
+    # PDP-as-a-service surface; this is the internal enforcement point).
+    #
+    # PARITY CAVEAT: the bridge ALSO has a legacy ``tool_rules`` allowlist /
+    # blocklist (``blocked_tools`` / ``allowed_tools``, ADR-029) that runs
+    # as a fall-through when the Rego layer abstains. This gate consults
+    # ONLY the Rego WASM layer — it does NOT replicate that ``tool_rules``
+    # fall-through, which predates this gate (the executor never read
+    # ``tool_rules``). So a ``blocked_tools`` entry configured WITHOUT a
+    # compiled Rego is enforced on the bridge but NOT on the agent path.
+    # Follow-up: extend this gate to apply the ``tool_rules`` allowlist
+    # after a Rego ``None``, sharing the bridge's logic.
+    #
+    # Runs unconditionally (builtins + MCP resources), after the
+    # capability gate, so a principal lacking the capability still gets
+    # the more specific ``capability_denied`` first.
+    #
+    # Posture — backward compatible: ``try_rego_decision`` returns ``None``
+    # when no operator Rego is loaded, so deployments without a policy
+    # behave EXACTLY as before; only an explicit ``decision == "deny"``
+    # blocks. It also returns ``None`` on a Rego runtime error (soft
+    # fall-through, matching the session surface + the bridge), so a
+    # broken operator Rego cannot brick every previously-allowed call.
+    # Strict fail-closed on Rego eval errors is deliberate future work
+    # (see ``try_rego_decision`` docstring) and is called out for review.
+    from mcp_proxy.policy import try_rego_decision
+
+    rego_input = {
+        "agent_id": agent.agent_id,
+        "principal_type": principal_type,
+        "tool_name": tool_name,
+        "arguments": request.parameters,
+    }
+    try:
+        _rules_raw = await get_config("policy_rules")
+        _rego_rules = _json.loads(_rules_raw) if _rules_raw else {}
+        if not isinstance(_rego_rules, dict):
+            _rego_rules = {}
+    except Exception as _cfg_exc:  # noqa: BLE001
+        # Config read or JSON parse failed. Fall through to "no operator
+        # Rego" instead of breaking the call. The Rego layer is ADDITIVE
+        # over capability + binding (both still enforced below), so on a
+        # config-read error we degrade to the pre-feature posture — never
+        # to "no authorization". Catching broadly is deliberate: a narrow
+        # except would let a transient policy_rules read failure turn
+        # every tool call into an unhandled 500 (self-inflicted DoS).
+        _log.warning(
+            "policy_rules read failed (%s) — skipping Rego tool_call gate "
+            "for this call (capability + binding still enforced)",
+            type(_cfg_exc).__name__,
+        )
+        _rego_rules = {}
+    rego_decision = try_rego_decision(
+        _rego_rules, rego_input, surface="tool_call",
+    )
+    if rego_decision is not None and rego_decision.get("decision") == "deny":
+        duration_ms = _elapsed_ms(t0)
+        reason = rego_decision.get("reason") or "operator policy denied this tool call"
+        _log.warning(
+            "Rego policy denied tool '%s' for principal '%s': %s",
+            tool_name, agent.agent_id, reason,
+        )
+        await log_audit(
+            agent_id=agent.agent_id,
+            action="tool_execute",
+            tool_name=tool_name,
+            status="denied",
+            detail=f"Rego policy deny: {reason}",
+            request_id=request_id,
+            duration_ms=duration_ms,
+        )
+        return ToolExecuteResponse(
+            request_id=request_id,
+            tool=tool_name,
+            status="error",
+            error=f"Forbidden by operator policy: {reason}",
+            execution_time_ms=duration_ms,
+            denied_reason_code=POLICY_DENIED,
+        )
 
     # 2a. Tier gate (ADR-032 Decision E / F5).
     #

@@ -26,6 +26,11 @@ INSUFFICIENT_TIER = "insufficient_tier"
 # principal — covers REST + JSON-RPC ingress symmetrically (CRIT-2 fix).
 MISSING_BINDING = "missing_binding"
 
+# Operator's Rego policy returned decision=="deny" for this tool call.
+# Content-aware ABAC layered on top of the static capability+binding
+# gates — e.g. a rule on input.arguments (a specific customer_id/name).
+POLICY_DENIED = "policy_denied"
+
 # Catch-all for handler-side failures: timeouts, ToolExecutionError,
 # unexpected exceptions. Operator-facing detail lives in audit + logs.
 INTERNAL_ERROR = "internal_error"
@@ -35,5 +40,6 @@ ALL_CODES: frozenset[str] = frozenset({
     CAPABILITY_DENIED,
     INSUFFICIENT_TIER,
     MISSING_BINDING,
+    POLICY_DENIED,
     INTERNAL_ERROR,
 })
