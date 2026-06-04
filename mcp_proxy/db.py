@@ -68,6 +68,15 @@ def _engine_kwargs(url: str) -> dict:
             pool_size=20,
             max_overflow=10,
             pool_timeout=5.0,
+            # Issue #1054 — bound each statement so a stalled Postgres (paused,
+            # network-partitioned, failing over) fails the query in bounded
+            # time instead of hanging the worker until the client read-timeout.
+            # asyncpg raises on command_timeout; SQLAlchemy wraps it as
+            # OperationalError, which the app maps to 503 + Retry-After. 15s is
+            # generous enough not to clip legitimate runtime queries (audit
+            # writes/lookups are sub-second); alembic runs on a separate sync
+            # engine and is unaffected.
+            connect_args={"command_timeout": 15},
         )
     return kwargs
 
@@ -441,7 +450,12 @@ async def init_db(db_url: str) -> None:
         # In-memory SQLite (tests). Single-process by definition.
         await asyncio.to_thread(_run_migrations_sync, url)
 
-    _engine = create_async_engine(url, echo=False, future=True)
+    # Issue #1054 — the runtime engine MUST carry the pool + statement-timeout
+    # bounds from ``_engine_kwargs`` (this post-migration assignment previously
+    # dropped them, so a stalled Postgres hung the worker unbounded). alembic
+    # already ran above on its own sync engine, so applying the bounds here is
+    # safe for migrations.
+    _engine = create_async_engine(url, **_engine_kwargs(url))
     if _engine.dialect.name == "sqlite":
         async with _engine.begin() as conn:
             await conn.execute(text("PRAGMA journal_mode=WAL"))
