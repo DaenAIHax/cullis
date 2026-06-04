@@ -109,6 +109,31 @@ sed -i "s|^MCP_PROXY_BROKER_URL=.*|MCP_PROXY_BROKER_URL=${BROKER}|"             
 sed -i "s|^MCP_PROXY_BROKER_JWKS_URL=.*|MCP_PROXY_BROKER_JWKS_URL=${JWKS}|"          "$OUT"
 sed -i "s|^MCP_PROXY_PROXY_PUBLIC_URL=.*|MCP_PROXY_PROXY_PUBLIC_URL=${PUBLIC}|"      "$OUT"
 
+# S-1 (prod-shape stress test 2026-06-04) — production hardening secrets.
+# validate_config(production) refuses to boot unless secret/KMS backend is
+# vault and DB_ENCRYPTION_KEY + PDP_WEBHOOK_HMAC_SECRET + a WebAuthn posture
+# are set. This script previously minted only admin/signing/nonce, so
+# ``--prod`` set environment=production and then SystemExit'd on the first
+# gate — production was unreachable without hand-editing proxy.env. Mint the
+# rest (mirrors packaging/mastio-bundle/generate-proxy-env.sh). Vault addr +
+# token still come from the operator (KMS custodies the Org CA private key).
+if [[ "$MODE" == "prod" ]]; then
+    _prod_set() {  # strip any existing line (commented or not), append uncommented
+        sed -i.bak "/^#*[[:space:]]*${1%%=*}=/d" "$OUT"; rm -f "${OUT}.bak"
+        echo "$1" >> "$OUT"
+    }
+    _prod_set "MCP_PROXY_SECRET_BACKEND=vault"
+    _prod_set "MCP_PROXY_KMS_BACKEND=vault"
+    _prod_set "MCP_PROXY_DB_ENCRYPTION_KEY=$(gen_secret)$(gen_secret)"   # 64 chars, over the >=32 floor
+    _prod_set "MCP_PROXY_PDP_WEBHOOK_HMAC_SECRET=$(gen_secret)$(gen_secret)"
+    _prod_set "MCP_PROXY_EGRESS_DPOP_MODE=required"
+    # Single-Mastio pilot WebAuthn posture: explicit opt-in to the warn
+    # default (no IdP-backed user registration yet). Track a sunset date.
+    _prod_set "MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK=true"
+    ok "Production: minted DB_ENCRYPTION_KEY + PDP HMAC, secret/KMS backend=vault, DPoP=required, webauthn opt-in"
+    warn "Production needs a Vault: set MCP_PROXY_VAULT_ADDR + MCP_PROXY_VAULT_TOKEN in ${OUT} before deploy (KMS custodies the Org CA key)."
+fi
+
 ok "Wrote ${OUT}"
 echo ""
 echo -e "  ${BOLD}MCP_PROXY_ADMIN_SECRET${RESET}      ${GRAY}${ADMIN_SECRET:0:8}...${RESET}"

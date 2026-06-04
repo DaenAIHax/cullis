@@ -95,10 +95,25 @@ services:
       # SSL_CERT_FILE is honored by stdlib ssl + httpx/certifi.
       SSL_CERT_FILE:               ${MCP_PROXY_BROKER_CA_BUNDLE:-}
       REQUESTS_CA_BUNDLE:          ${MCP_PROXY_BROKER_CA_BUNDLE:-}
-      # Vault (optional)
+      # Vault (optional in dev; required in production for secret + KMS)
       MCP_PROXY_SECRET_BACKEND:    ${MCP_PROXY_SECRET_BACKEND:-env}
+      MCP_PROXY_KMS_BACKEND:       ${MCP_PROXY_KMS_BACKEND:-}
       MCP_PROXY_VAULT_ADDR:        ${MCP_PROXY_VAULT_ADDR:-}
       MCP_PROXY_VAULT_TOKEN:       ${MCP_PROXY_VAULT_TOKEN:-}
+      # S-1 (prod-shape stress test 2026-06-04) — production secrets the
+      # validate_config gates require. generate-proxy-env.sh --prod mints
+      # these into proxy.env, but docker compose only delivers env-file
+      # values that are mapped here. Without the mapping the proxy boots
+      # in production and SystemExits on the first gate (DB encryption key,
+      # PDP webhook HMAC, WebAuthn posture). The mastio-bundle compose
+      # already forwarded them; this closes the deploy/compose parity gap.
+      # Empty / warn defaults keep dev untouched.
+      MCP_PROXY_DB_ENCRYPTION_KEY:         ${MCP_PROXY_DB_ENCRYPTION_KEY:-}
+      MCP_PROXY_PDP_WEBHOOK_HMAC_SECRET:   ${MCP_PROXY_PDP_WEBHOOK_HMAC_SECRET:-}
+      MCP_PROXY_WEBAUTHN_ENFORCEMENT:      ${MCP_PROXY_WEBAUTHN_ENFORCEMENT:-warn}
+      MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK: ${MCP_PROXY_WEBAUTHN_WARN_INSECURE_OK:-}
+      MCP_PROXY_WEBAUTHN_RP_ID:            ${MCP_PROXY_WEBAUTHN_RP_ID:-}
+      MCP_PROXY_WEBAUTHN_EXPECTED_ORIGIN:  ${MCP_PROXY_WEBAUTHN_EXPECTED_ORIGIN:-}
       # ADR-001 §10 — intra-org routing + transport. All read by
       # ``_apply_routing_overrides`` in mcp_proxy/config.py. Exposing
       # them here lets operators flip behaviour through proxy.env
