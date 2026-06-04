@@ -2735,6 +2735,29 @@ async def readyz():
             {"status": "not_ready", "checks": checks}, status_code=503,
         )
 
+    # Redis backing store (issue #1055). The DPoP JTI replay cache and the
+    # login-challenge store live in Redis; when it is the configured backing
+    # (production, multi-worker) a Redis outage makes the auth path fail
+    # closed (issue #1054) while the process stays live — so readyz must
+    # report not-ready and let the LB drain this worker, then re-admit it
+    # automatically when Redis recovers. Skip when Redis isn't configured
+    # (dev, or the single-worker in-memory opt-in): there is nothing to
+    # drain to. Bounded ping so a stalled Redis doesn't hang the probe;
+    # log the exception class only (no connection-string leak).
+    from mcp_proxy.redis.pool import get_redis
+    _redis = get_redis()
+    if _redis is not None:
+        try:
+            await asyncio.wait_for(_redis.ping(), timeout=2.0)
+            checks["redis"] = "ok"
+        except Exception as exc:
+            checks["redis"] = f"error: {type(exc).__name__}"
+            return JSONResponse(
+                {"status": "not_ready", "checks": checks}, status_code=503,
+            )
+    else:
+        checks["redis"] = "not_configured"
+
     # Standalone deploys have no broker, so no JWKS to check — skip.
     if get_settings().standalone:
         checks["jwks_cache"] = "standalone"
