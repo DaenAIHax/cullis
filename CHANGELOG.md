@@ -14,6 +14,33 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+## [v0.6.6] — Security super-audit + production-shape resilience hardening — 2026-06-05
+
+Two waves of adversarial work on top of v0.6.5. First, an 11-agent red-team super-audit with adversarial verification closed a batch of trust-boundary bugs (SSRF connect-pin gaps, an unauthenticated bridge path, a weak-key signing floor, a multi-worker PKI race, and audit-chain binding gaps). Second, a destructive prod-shape stress test (Postgres + Vault + `environment=production` + 4 workers, validated live end-to-end and under chaos/fault injection) found and fixed the failures that only surface under a real multi-agent production load: a Postgres-only enrollment crash, a runtime that booted green then 500'd on the first login without Redis, identity-creation events that fell outside the tamper-evident hash chain, and `/v1/llm/chat` 401-churn under worker concurrency. Plus the carry-over fixes from the 48h soak.
+
+### Security
+
+- **DPoP server nonce is worker-shared** (#1050). The RFC 9449 §8 nonce was per-process `os.urandom`, so under 4 uvicorn workers a nonce minted by one worker was rejected by another and `/v1/llm/chat` churned `use_dpop_nonce` 401s under concurrency (0/40 chats succeeded in the stress test). The nonce is now derived as `HMAC(secret, time_window)` from a worker-shared secret — stateless, reproducible on every worker — and the secret is wired through `deploy/compose` + the bundle so it is delivered out-of-the-box.
+- **Identity audit events join the hash chain** (#1049). `agent.create` / `agent.cert_rotated` / `device_attestation.verified` were written with a raw `INSERT` inside the enrollment transaction, landing with `chain_seq` NULL — outside the tamper-evident chain. They now route through the hash-chained `log_audit` (create-then-audit, post-commit), so identity creation is tamper-evident.
+- **Outbound SSRF connect-pin extended to the remaining callers** (#1038, #1039, #1033). The LLM adapter, MCP forwarder, and the last outbound callers now connect to the pre-validated IP, closing DNS-rebinding gaps (M7/M8).
+- **`/v1/auth/token` pins the leaf cert and enforces CA constraints** (#1032); **the integrations bridge fails closed on unsigned requests in production** (#1035); **agent cert signing enforces a key-strength floor** (#1036).
+- **Multi-worker PKI provisioning serialised** (#1037) — nginx server-cert + legacy migration no longer race across workers. **`dpop_jkt` + on-behalf-of are bound under the v2 audit hash on the batched flush path** (#1031). **The DB password is redacted from the `init_db` boot log** (#1034).
+- **`agent.create` is Postgres-safe** (#1047). The dashboard-approval enroll path wrote `federated` as an integer on a BOOLEAN column and reused a text bind on a `timestamptz`, so the first agent approval crashed with HTTP 500 on Postgres (masked by type-permissive SQLite). Now boolean-correct, with a Postgres-backed regression test.
+- **Operator Rego policy enforced on the executor tool_call path** (#1059). The executor gated only on capability + binding + tier; it now consults the operator Rego policy with the call arguments, so a data-aware deny (e.g. by `customer_id`) is enforced and audited.
+
+### Reliability
+
+- **Production refuses to boot without a shared security store** (#1048). The DPoP JTI and login-challenge stores require Redis in production; the proxy used to boot green and then 500 on the first agent login. It now fails closed at boot (Redis required, or an explicit single-worker in-memory opt-in), and `deploy/compose` ships Redis so the gate is satisfiable out-of-the-box.
+- **Graceful degradation on runtime dependency loss** (#1056, #1052, #1053). A runtime Redis/Postgres outage now returns `503 + Retry-After` instead of a bare 500 or an unbounded worker hang (statement timeout + dependency-aware exception handlers; fail-closed stays fail-closed, only the response shape changes). Enrollment rate-limit 429s carry `Retry-After`, and nginx reshapes upstream-saturation 502/504 into a graceful 503.
+- **`/readyz` reflects the Redis backing store** (#1057). Readiness now drains a worker when Redis is down and re-admits it on recovery; `/health` (liveness) is unchanged so a transient blip does not restart-loop the pod.
+- **`deploy/compose --prod` is self-sufficient on production secrets** (#1051). `generate-proxy-env.sh --prod` now mints `DB_ENCRYPTION_KEY`, the PDP webhook HMAC, vault secret/KMS backend, and the WebAuthn posture, and the compose maps them — so `deploy --prod` boots without hand-editing `proxy.env`.
+
+### Operations
+
+- **Vault KMS token renewal** (#1041) so the token never lapses under a long-running Mastio. **Refuse-to-boot via a readiness gate** (#1042) instead of a SystemExit respawn loop. **nginx reload-watcher restored** (#1043) so cert rotation / org-change hot reload works. **Audit-log admin chain verified in the dashboard integrity check** (#1040).
+- **Server-side pagination for the audit log view** (#1058) — every row is reachable on a large chain and the count is accurate, replacing the in-memory ~1000-row cap.
+- **Court/federation UI hidden in standalone mode** (#1060) — a standalone Mastio no longer renders Court references it has no use for.
+
 ## [v0.6.5] — Production-shape hardening: DPoP-strict default, multi-worker Vault CA fix, DR guards — 2026-06-02
 
 The output of taking the Postgres + HashiCorp Vault production shape through a faithful end-to-end dogfood and disaster-recovery drills. It closes the bugs that only surface under `kms_backend=vault` + multiple workers + `environment=production` — the exact combination dev and smoke (local KMS, single worker) never exercised: a multi-worker Intermediate CA race that broke agent mTLS, a bundle that could not boot in production, and DPoP-strict egress that was wired to the wrong env var and so never engaged.
