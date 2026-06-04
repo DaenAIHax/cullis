@@ -147,7 +147,7 @@ async def test_start_enrollment_audit_row_written_on_verified_quote(db_engine):
     quote_b64 = _build_quote_b64(issued.nonce_bytes, key)
 
     async with get_db() as conn:
-        await service.start_enrollment(
+        started = await service.start_enrollment(
             conn,
             pubkey_pem=pem,
             pop_signature=_sign_pop(key, pem),
@@ -161,15 +161,28 @@ async def test_start_enrollment_audit_row_written_on_verified_quote(db_engine):
             tpm_ek_cert_present=True,
         )
 
+    # S-6 — start_enrollment no longer writes the audit row inline (that
+    # INSERT landed with chain_seq NULL, outside the tamper-evident
+    # chain). It hands the event back; the router emits it post-commit
+    # through the hash-chained log_audit.
+    assert [e["action"] for e in started.audit_events] == [
+        "device_attestation.verified"
+    ]
+
+    await service.emit_audit_events(started.audit_events)
+
     async with get_db() as conn:
         result = await conn.execute(
             text(
-                "SELECT action FROM audit_log WHERE action = "
+                "SELECT action, chain_seq FROM audit_log WHERE action = "
                 "'device_attestation.verified'"
             )
         )
-        actions = [r[0] for r in result.all()]
-    assert actions == ["device_attestation.verified"]
+        rows = result.all()
+    assert [r[0] for r in rows] == ["device_attestation.verified"]
+    # The fix: the row is now part of the hash chain (chain_seq populated),
+    # not an orphan with chain_seq NULL.
+    assert rows[0][1] is not None, "audit row must carry a chain_seq"
 
 
 @pytest.mark.asyncio

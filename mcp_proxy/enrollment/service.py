@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import json
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +40,13 @@ class EnrollmentError(Exception):
 class StartedEnrollment:
     session_id: str
     expires_at: datetime
+    # S-6 — audit events the caller must emit *after* the enrollment
+    # transaction commits, via :func:`emit_audit_events`. Kept out of the
+    # DB write path so they route through the hash-chained ``log_audit``
+    # (ADR-033 batched chain) instead of the raw INSERT they used to use,
+    # which landed rows with ``chain_seq`` NULL — invisible to the
+    # tamper-evident chain and absent from ``local_audit``.
+    audit_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _now() -> datetime:
@@ -48,6 +55,37 @@ def _now() -> datetime:
 
 def _iso(ts: datetime) -> str:
     return ts.isoformat(timespec="seconds")
+
+
+async def emit_audit_events(events: list[dict[str, Any]]) -> None:
+    """Emit accumulated enrollment audit events through the hash-chained
+    ``log_audit`` surface, AFTER the enrollment DB transaction has committed.
+
+    S-6 (prod-shape stress test 2026-06-04) — ``start_enrollment`` and
+    ``approve`` used to write their audit rows with a raw ``INSERT INTO
+    audit_log`` inside the same ``conn`` transaction. Those rows landed
+    with ``chain_seq`` / ``prev_hash`` / ``row_hash`` NULL, so the events
+    that record identity creation (``agent.create``), key rotation
+    (``agent.cert_rotated``) and hardware attestation
+    (``device_attestation.verified``) bypassed the tamper-evident chain
+    entirely. Routing them through ``log_audit`` feeds the ADR-033 batched
+    chain and makes them first-class, hash-linked entries.
+
+    Must be called *after* the enrollment transaction commits: ``log_audit``
+    opens its own connection on the legacy per-row path, and doing that
+    while the enrollment ``conn`` still holds an open write transaction
+    would deadlock SQLite. Mirrors the create-then-audit pattern already
+    used by ``admin/agents.py`` and ``dashboard/agents_routes.py``.
+    """
+    from mcp_proxy.db import log_audit
+    for ev in events:
+        await log_audit(
+            agent_id=ev["agent_id"],
+            action=ev["action"],
+            status=ev.get("status", "success"),
+            detail=ev.get("detail"),
+            details=ev.get("details"),
+        )
 
 
 def _pubkey_fingerprint(pubkey_pem: str) -> str:
@@ -333,24 +371,23 @@ async def start_enrollment(
         },
     )
 
+    audit_events: list[dict[str, Any]] = []
     if attestation_json:
-        # Audit the verified hardware claim at enrollment time; the F6
-        # audit migration will extend ``audit_log`` with first-class
-        # columns; until then the JSON detail captures the same payload.
-        await conn.execute(
-            text(
-                """INSERT INTO audit_log
-                   (timestamp, agent_id, action, status, detail)
-                   VALUES (:ts, :aid, 'device_attestation.verified', 'success', :detail)"""
-            ),
-            {
-                "ts": _iso(now),
-                "aid": f"pending::{session_id}",
-                "detail": attestation_json,
-            },
-        )
+        # S-6 — audit the verified hardware claim through the hash-chained
+        # log_audit after the transaction commits, not via a raw INSERT
+        # here (which landed the row with chain_seq NULL). The caller
+        # emits this via emit_audit_events once get_db() has committed.
+        audit_events.append({
+            "agent_id": f"pending::{session_id}",
+            "action": "device_attestation.verified",
+            "detail": attestation_json,
+        })
 
-    return StartedEnrollment(session_id=session_id, expires_at=expires_at)
+    return StartedEnrollment(
+        session_id=session_id,
+        expires_at=expires_at,
+        audit_events=audit_events,
+    )
 
 
 async def _verify_tpm_attestation(
@@ -522,6 +559,12 @@ async def approve(
     # ``internal_agents.last_attestation`` and will pick up the hardware
     # half once F5 merges the two halves. Keeping the claim only on the
     # pending row for the F3 spike avoids fighting F2 over the agent row.
+    #
+    # S-6 — identity audit events are collected here and emitted *after*
+    # the caller commits this transaction (see emit_audit_events). The
+    # raw INSERT INTO audit_log they replace landed rows with chain_seq
+    # NULL, outside the tamper-evident hash chain.
+    audit_events: list[dict[str, Any]] = []
     if existing.first() is None:
         # ADR-010 D1 left ``federated`` opt-in (admin flips manually) so
         # an org could onboard local-only agents without leaking them
@@ -568,23 +611,16 @@ async def approve(
                 "ptype": record.get("principal_type") or "agent",
             },
         )
-        await conn.execute(
-            text(
-                """INSERT INTO audit_log
-                   (timestamp, agent_id, action, status, detail)
-                   VALUES (:ts, :aid, 'agent.create', 'success', :detail)"""
-            ),
-            {
-                "ts": now,
-                "aid": canonical_id,
-                "detail": json.dumps({
-                    "source": "device_code_enrollment",
-                    "session_id": session_id,
-                    "admin": admin_name,
-                    "capabilities": capabilities,
-                }),
+        audit_events.append({
+            "agent_id": canonical_id,
+            "action": "agent.create",
+            "details": {
+                "source": "device_code_enrollment",
+                "session_id": session_id,
+                "admin": admin_name,
+                "capabilities": capabilities,
             },
-        )
+        })
     else:
         # Row already exists — this is a re-enrollment of the same
         # ``agent_id`` (recovery scenario: operator wiped
@@ -663,29 +699,22 @@ async def approve(
                 "ptype": record.get("principal_type") or "agent",
             },
         )
-        await conn.execute(
-            text(
-                """INSERT INTO audit_log
-                   (timestamp, agent_id, action, status, detail)
-                   VALUES (:ts, :aid, 'agent.cert_rotated', 'success', :detail)"""
-            ),
-            {
-                "ts": now,
-                "aid": canonical_id,
-                "detail": json.dumps({
-                    "source": "device_code_enrollment",
-                    "session_id": session_id,
-                    "admin": admin_name,
-                    "reason": "re-enrollment of existing agent_id",
-                    "previous_cert_thumbprint": cert_thumbprint_hex(old_cert_pem),
-                    "new_cert_thumbprint": cert_thumbprint_hex(cert_pem),
-                    "previous_dpop_jkt": old_dpop_jkt,
-                    "new_dpop_jkt": record.get("dpop_jkt"),
-                    "grace_period_expires_at": grace_expiry,
-                    "grace_period_hours": grace_hours,
-                }),
+        audit_events.append({
+            "agent_id": canonical_id,
+            "action": "agent.cert_rotated",
+            "details": {
+                "source": "device_code_enrollment",
+                "session_id": session_id,
+                "admin": admin_name,
+                "reason": "re-enrollment of existing agent_id",
+                "previous_cert_thumbprint": cert_thumbprint_hex(old_cert_pem),
+                "new_cert_thumbprint": cert_thumbprint_hex(cert_pem),
+                "previous_dpop_jkt": old_dpop_jkt,
+                "new_dpop_jkt": record.get("dpop_jkt"),
+                "grace_period_expires_at": grace_expiry,
+                "grace_period_hours": grace_hours,
             },
-        )
+        })
 
     # ADR-021 PR4d follow-up: schedule a baseline binding on the Court so
     # the freshly enrolled agent can pass ``login_via_proxy_with_local_key``
@@ -764,7 +793,12 @@ async def approve(
             canonical_id, exc,
         )
 
-    return await get_record(conn, session_id)
+    # S-6 — hand the identity audit events back to the caller so it can
+    # emit them through the hash-chained log_audit *after* this
+    # transaction commits (see emit_audit_events).
+    result = await get_record(conn, session_id)
+    result["audit_events"] = audit_events
+    return result
 
 
 def _ambassador_mode_from_device_info(device_info: str | None) -> str | None:

@@ -138,6 +138,12 @@ async def start_enrollment(
     except service.EnrollmentError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
 
+    # S-6 — emit the hardware-attestation audit event through the
+    # hash-chained log_audit now that the enrollment transaction has
+    # committed (a raw INSERT inside the transaction landed it with
+    # chain_seq NULL, outside the tamper-evident chain).
+    await service.emit_audit_events(started.audit_events)
+
     # B-1 dogfood fix: prefer ``settings.proxy_public_url`` (which
     # carries the operator-visible ``:9443`` of the nginx sidecar) over
     # ``request.base_url`` (which, inside the uvicorn container behind
@@ -382,6 +388,10 @@ async def admin_approve(
             )
     except service.EnrollmentError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
+
+    # S-6 — emit agent.create / agent.cert_rotated through the
+    # hash-chained log_audit after the approval transaction committed.
+    await service.emit_audit_events(record.get("audit_events", []))
 
     logger.info(
         "enrollment_approved",
