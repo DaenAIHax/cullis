@@ -53,6 +53,13 @@ router = APIRouter(tags=["enrollment"])
 _ENROLLMENT_START_PER_MINUTE = 5
 _ENROLLMENT_STATUS_PER_MINUTE = 60
 
+# S-3 — when the per-IP limiter trips, hand the caller a Retry-After so a
+# fleet enroll backs off instead of hammering (and so the SDK / curl loop
+# can honour it). Sized to the limiter window: ~one slot frees per
+# 60/limit seconds, rounded up to a calm retry cadence.
+_ENROLLMENT_START_RETRY_AFTER_S = 60
+_ENROLLMENT_STATUS_RETRY_AFTER_S = 10
+
 
 def _client_ip(request: Request) -> str:
     client = request.client
@@ -113,6 +120,7 @@ async def start_enrollment(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="enrollment rate limit exceeded",
+            headers={"Retry-After": str(_ENROLLMENT_START_RETRY_AFTER_S)},
         )
 
     try:
@@ -250,6 +258,7 @@ async def attestation_nonce(request: Request) -> dict[str, object]:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="attestation nonce rate limit exceeded",
+            headers={"Retry-After": str(_ENROLLMENT_STATUS_RETRY_AFTER_S)},
         )
     issued = await issue_nonce()
     return {
@@ -274,6 +283,7 @@ async def enrollment_status(
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="enrollment status rate limit exceeded",
+            headers={"Retry-After": str(_ENROLLMENT_STATUS_RETRY_AFTER_S)},
         )
 
     try:
