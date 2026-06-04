@@ -55,6 +55,11 @@ def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MCP_PROXY_AUDIT_FAIL_DENY", "true")
     monkeypatch.setenv("MCP_PROXY_AUDIT_CHAIN_DISABLED", "true")
     monkeypatch.setenv("MCP_PROXY_ALLOW_INMEMORY_SECURITY_STORES", "false")
+    # S-4 (prod-shape stress test 2026-06-04) — prod refuses to boot
+    # without a shared security store (Redis) or the in-memory opt-in, so
+    # the F-A-406 gate under test is reachable. Provide Redis so the only
+    # SystemExit comes from the audit-anchor URL gate.
+    monkeypatch.setenv("MCP_PROXY_REDIS_URL", "redis://localhost:6379/0")
 
 
 def _fresh_settings():

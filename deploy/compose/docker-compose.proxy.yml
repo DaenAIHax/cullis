@@ -102,6 +102,13 @@ services:
       # F-B-11 Phase 5 — DPoP enforcement mode for /v1/egress/*
       # (off | optional | required). optional is the current default.
       MCP_PROXY_EGRESS_DPOP_MODE:     ${MCP_PROXY_EGRESS_DPOP_MODE:-}
+      # S-4 (prod-shape stress test 2026-06-04) — the DPoP JTI + login
+      # challenge stores require Redis in production (U-DD-1 / F-B-12);
+      # without it the proxy boots but the first agent login crashes 500.
+      # The redis service below is the default target; production refuses
+      # to boot if this is empty (validate_config S-4 gate). Single-worker
+      # deploys can opt out via MCP_PROXY_ALLOW_INMEMORY_SECURITY_STORES.
+      MCP_PROXY_REDIS_URL:            ${MCP_PROXY_REDIS_URL:-redis://redis:6379/0}
     volumes:
       - mcp_proxy_data:/data
       # Optional corporate CA mount. The env above points at a file under /certs
@@ -111,6 +118,11 @@ services:
       # ADR-014 — shared volume for nginx sidecar TLS material.
       # Mastio (this service) writes; mastio-nginx mounts ro.
       - mastio_nginx_certs:/var/lib/mastio/nginx-certs:rw
+    # S-4 — wait for Redis so the DPoP JTI / login-challenge stores have
+    # their backing store before the first authenticated request lands.
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - proxy_net
     restart: unless-stopped
@@ -120,6 +132,24 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # S-4 (prod-shape stress test 2026-06-04) — shared DPoP JTI replay cache
+  # + per-agent rate-limit budget. Required in production (the proxy
+  # refuses to boot without it unless the in-memory single-worker opt-in
+  # is set); the bundle under packaging/mastio-bundle/ ships the same
+  # service. No persistence — the JTI window is short-lived and the rate
+  # budget is best-effort, so an empty dataset on restart is correct.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - proxy_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   # ADR-014 — TLS terminator + mTLS gate for Connector → Mastio.
   mastio-nginx:

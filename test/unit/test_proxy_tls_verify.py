@@ -58,6 +58,12 @@ def _prod_settings(**overrides) -> ProxySettings:
         webauthn_enforcement="required",  # F-A-205
         webauthn_rp_id="mastio.example.com",
         egress_dpop_mode="required",  # F-B-11
+        # S-4 (prod-shape stress test 2026-06-04) — prod now refuses to
+        # boot without a shared security store (Redis) or the explicit
+        # in-memory opt-in, because the DPoP JTI / login-challenge stores
+        # require Redis at first use. Pin a Redis URL so the SystemExit in
+        # these TLS-focused tests isolates the knob under test.
+        redis_url="redis://localhost:6379/0",
     )
     base.update(overrides)
     return ProxySettings(**base)

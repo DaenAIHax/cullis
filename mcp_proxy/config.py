@@ -1316,6 +1316,31 @@ def validate_config(settings: ProxySettings) -> None:
                 )
                 raise SystemExit(1)
 
+        # S-4 (prod-shape stress test 2026-06-04) — the DPoP JTI store and
+        # the login challenge store raise at *first use* in production when
+        # Redis is absent and in-memory stores aren't explicitly allowed
+        # (dpop_jti_store.py / challenge_store.py: "requires Redis ... unless
+        # ALLOW_INMEMORY_SECURITY_STORES=true"). The F-A-502 block above only
+        # guards the allow_inmemory=true branch; the *default* (no Redis, no
+        # opt-in) booted green and crashed the first agent login with HTTP
+        # 500. Fail closed at boot instead: production needs either a shared
+        # Redis (the default, multi-worker safe) or the explicit in-memory
+        # opt-in (validated as single-worker just above).
+        if not settings.redis_url and not settings.allow_inmemory_security_stores:
+            _log.critical(
+                "MCP_PROXY_REDIS_URL is empty in production and "
+                "MCP_PROXY_ALLOW_INMEMORY_SECURITY_STORES is not set. The "
+                "DPoP JTI and login-challenge stores require Redis in "
+                "production, so the proxy would boot but the first agent "
+                "login would crash with HTTP 500. Set MCP_PROXY_REDIS_URL "
+                "(recommended, and required for multi-worker), or opt into "
+                "per-process in-memory stores with "
+                "MCP_PROXY_ALLOW_INMEMORY_SECURITY_STORES=true plus "
+                "MCP_PROXY_DEPLOYMENT_TOPOLOGY=single-worker-vertical "
+                "(U-DD-1 / F-B-12)."
+            )
+            raise SystemExit(1)
+
         # F-A-406 (audit 2026-05-20) — refuse mock-equivalent TSA anchor
         # configuration in production. The legacy ``app/`` codebase shipped
         # ``audit_tsa_backend="mock"`` whose ``MockTsaClient`` returned an
@@ -1450,15 +1475,18 @@ def validate_config(settings: ProxySettings) -> None:
 
     # Audit F-B-12 — Mastio keeps a DPoP JTI cache and per-agent rate
     # limiter in process memory by default. Single-instance deployments
-    # (the current Mastio mainstream) work fine without Redis. Operators
-    # running Mastio multi-worker or multi-replica (HA) MUST set
-    # MCP_PROXY_REDIS_URL so the JTI store is shared — otherwise a
-    # captured DPoP proof can be replayed once per worker within the iat
-    # window, and the advertised per-agent rate budget multiplies by N.
+    # (the current Mastio mainstream) only run Redis-free when they have
+    # explicitly opted into per-process in-memory security stores
+    # (allow_inmemory_security_stores=true, validated as single-worker by
+    # the F-A-502 gate above; without that opt-in the S-4 gate already
+    # refused to boot). Surface the residual replay caveat so the operator
+    # knows to add MCP_PROXY_REDIS_URL before scaling out.
     if is_production and not settings.redis_url:
         _log.warning(
-            "MCP_PROXY_REDIS_URL is empty in production. Safe for "
-            "single-instance Mastio; set MCP_PROXY_REDIS_URL before "
+            "MCP_PROXY_REDIS_URL is empty in production — running on "
+            "per-process in-memory DPoP JTI + rate-limit stores "
+            "(MCP_PROXY_ALLOW_INMEMORY_SECURITY_STORES opt-in). Safe only "
+            "for single-worker Mastio; set MCP_PROXY_REDIS_URL before "
             "scaling to multiple workers or replicas (audit F-B-12: "
             "cross-worker DPoP replay + rate-limit budget multiplies)."
         )
