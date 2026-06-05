@@ -180,6 +180,67 @@ def decrypt_pki_payload(envelope: str) -> tuple[str, str]:
         ) from exc
 
 
+_SECRET_ENVELOPE_PREFIX = "enc:sec:v1:"
+
+
+def is_secret_envelope(value: str) -> bool:
+    """True when ``value`` is an :func:`encrypt_secret` envelope.
+
+    Used by callers that overload an existing plaintext column (e.g.
+    ``mastio_keys.privkey_pem``) to tell a wrapped value from a legacy
+    plaintext PEM on read. A PEM begins with ``-----BEGIN``; the
+    envelope begins with the distinct ``enc:sec:v1:`` prefix, so the
+    two are unambiguous.
+    """
+    return value.startswith(_SECRET_ENVELOPE_PREFIX)
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """Wrap a single secret string in the ``enc:sec:v1:`` envelope.
+
+    The general-purpose, single-value companion to
+    :func:`encrypt_pki_payload` (which is shaped for the CA's
+    ``key_pem``+``cert_pem`` pair). Same Fernet master derived from
+    ``MCP_PROXY_DB_ENCRYPTION_KEY``; a separate prefix keeps the two
+    formats from being decoded by the wrong reader. Used for the Mastio
+    signing key (``mastio_keys.privkey_pem``) and is the seed of the
+    forthcoming general named-secret keystore.
+
+    Raises :class:`PKIKeyMissingError` when the master key is missing.
+    """
+    if not plaintext:
+        raise ValueError("encrypt_secret: plaintext must be non-empty")
+    master = derive_master_key()
+    token = Fernet(master).encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    return _SECRET_ENVELOPE_PREFIX + token
+
+
+def decrypt_secret(envelope: str) -> str:
+    """Reverse of :func:`encrypt_secret`. Returns the plaintext string.
+
+    Refuses to interpret a non-envelope as plaintext (so a caller never
+    silently trusts an unwrapped value). Raises ``RuntimeError`` when
+    the envelope was minted under a different master key — failing loud
+    beats returning a wrong key.
+    """
+    if not envelope.startswith(_SECRET_ENVELOPE_PREFIX):
+        raise ValueError(
+            f"decrypt_secret: envelope does not start with "
+            f"{_SECRET_ENVELOPE_PREFIX!r}; refusing to interpret as plaintext."
+        )
+    master = derive_master_key()
+    token = envelope[len(_SECRET_ENVELOPE_PREFIX):]
+    try:
+        return Fernet(master).decrypt(token.encode("utf-8")).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError(
+            "secret envelope cannot be decrypted with the current "
+            f"{_ENV_VAR}. Either the env var was rotated without "
+            "re-encrypting, or the DB came from a different deploy. "
+            "Restore the original passphrase.",
+        ) from exc
+
+
 def _reset_cache_for_tests() -> None:
     """Test hook: drop the PBKDF2 cache so monkeypatched env vars apply."""
     _derive_cached.cache_clear()
@@ -188,7 +249,10 @@ def _reset_cache_for_tests() -> None:
 __all__ = [
     "PKIKeyMissingError",
     "decrypt_pki_payload",
+    "decrypt_secret",
     "derive_master_key",
     "encrypt_pki_payload",
+    "encrypt_secret",
+    "is_secret_envelope",
     "pki_master_key_configured",
 ]

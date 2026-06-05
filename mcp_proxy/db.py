@@ -1314,6 +1314,50 @@ async def deprecate_mastio_keys_by_kids(
     return updated
 
 
+def _wrap_mastio_privkey(privkey_pem: str) -> str:
+    """Encrypt the Mastio signing key for at-rest storage (F4).
+
+    ``mastio_keys.privkey_pem`` historically stored a plaintext PEM, so a
+    DB read (backup, replica, dump) yielded the LocalIssuer signing key and
+    let anyone forge LOCAL_TOKEN/JWT for any agent. Wrap it in the
+    ``enc:sec:v1:`` envelope when the at-rest master is configured. When it
+    is not (dev/sandbox), fall back to plaintext — mirroring the CA path in
+    ``mcp_proxy.kms.local`` exactly. Production requires the master, so the
+    fallback is a dev-only path.
+    """
+    from mcp_proxy.kms.pki_at_rest import encrypt_secret, pki_master_key_configured
+
+    if not pki_master_key_configured():
+        return privkey_pem
+    return encrypt_secret(privkey_pem)
+
+
+def _unwrap_mastio_privkey(value: str | None) -> str | None:
+    """Decrypt a stored ``mastio_keys.privkey_pem`` for use by callers.
+
+    Transparently returns plaintext to every reader so ``LocalKeyRecord``
+    and ``LocalIssuer`` stay unchanged. Enveloped values are decrypted;
+    legacy plaintext PEMs (pre-F4, or dev rows written without a master)
+    pass through untouched. The two are unambiguous: a PEM begins with
+    ``-----BEGIN``, the envelope with ``enc:sec:v1:``.
+    """
+    if not value:
+        return value
+    from mcp_proxy.kms.pki_at_rest import decrypt_secret, is_secret_envelope
+
+    if is_secret_envelope(value):
+        return decrypt_secret(value)
+    return value
+
+
+def _unwrap_mastio_row(row: dict) -> dict:
+    """Return a copy of a ``mastio_keys`` row with ``privkey_pem`` decrypted."""
+    if row.get("privkey_pem"):
+        row = dict(row)
+        row["privkey_pem"] = _unwrap_mastio_privkey(row["privkey_pem"])
+    return row
+
+
 async def insert_mastio_key(
     *,
     kid: str,
@@ -1346,7 +1390,7 @@ async def insert_mastio_key(
             {
                 "kid": kid,
                 "pub": pubkey_pem,
-                "priv": privkey_pem,
+                "priv": _wrap_mastio_privkey(privkey_pem),
                 "cert": cert_pem,
                 "created": created_at,
                 "activated": activated_at,
@@ -1364,7 +1408,7 @@ async def get_mastio_key_by_kid(kid: str) -> dict | None:
             {"kid": kid},
         )
         row = result.mappings().first()
-        return dict(row) if row else None
+        return _unwrap_mastio_row(dict(row)) if row else None
 
 
 async def get_mastio_keys_active() -> list[dict]:
@@ -1391,7 +1435,7 @@ async def get_mastio_keys_active() -> list[dict]:
                 """
             )
         )
-        return [dict(row) for row in result.mappings().all()]
+        return [_unwrap_mastio_row(dict(row)) for row in result.mappings().all()]
 
 
 async def swap_active_mastio_key(
@@ -1436,7 +1480,7 @@ async def swap_active_mastio_key(
             {
                 "kid": new_kid,
                 "pub": new_pubkey_pem,
-                "priv": new_privkey_pem,
+                "priv": _wrap_mastio_privkey(new_privkey_pem),
                 "cert": new_cert_pem,
                 "created": new_created_at,
                 "activated": new_activated_at,
@@ -1493,7 +1537,7 @@ async def get_mastio_keys_valid() -> list[dict]:
             ),
             {"now": datetime.now(timezone.utc).isoformat()},
         )
-        return [dict(row) for row in result.mappings().all()]
+        return [_unwrap_mastio_row(dict(row)) for row in result.mappings().all()]
 
 
 async def get_mastio_keys_staged() -> list[dict]:
@@ -1514,7 +1558,58 @@ async def get_mastio_keys_staged() -> list[dict]:
                 """
             )
         )
-        return [dict(row) for row in result.mappings().all()]
+        return [_unwrap_mastio_row(dict(row)) for row in result.mappings().all()]
+
+
+async def reencrypt_plaintext_mastio_keys() -> int:
+    """One-time at-rest backfill for F4: wrap any legacy plaintext
+    ``mastio_keys.privkey_pem`` rows in the ``enc:sec:v1:`` envelope.
+
+    A no-op when the at-rest master is not configured (dev/sandbox keeps
+    plaintext, mirroring the CA path). Idempotent: it only touches rows
+    whose ``privkey_pem`` is not already an envelope, and the UPDATE is
+    guarded by a compare-and-set on the old plaintext value so two
+    workers racing at boot cannot clobber each other (the loser's UPDATE
+    matches zero rows and is skipped). Returns the number of rows
+    re-encrypted. Call once at boot, after the keystore is reachable.
+    """
+    from mcp_proxy.kms.pki_at_rest import (
+        encrypt_secret,
+        is_secret_envelope,
+        pki_master_key_configured,
+    )
+
+    if not pki_master_key_configured():
+        return 0
+
+    rewrapped = 0
+    async with get_db() as conn:
+        result = await conn.execute(
+            text("SELECT kid, privkey_pem FROM mastio_keys")
+        )
+        rows = [dict(r) for r in result.mappings().all()]
+        for row in rows:
+            pem = row.get("privkey_pem")
+            if not pem or is_secret_envelope(pem):
+                continue
+            upd = await conn.execute(
+                text(
+                    """
+                    UPDATE mastio_keys
+                       SET privkey_pem = :enc
+                     WHERE kid = :kid
+                       AND privkey_pem = :old
+                    """
+                ),
+                {"enc": encrypt_secret(pem), "kid": row["kid"], "old": pem},
+            )
+            rewrapped += getattr(upd, "rowcount", 0) or 0
+    if rewrapped:
+        _log.info(
+            "F4 at-rest backfill: re-encrypted %d plaintext mastio_keys "
+            "signing-key row(s) into the enc:sec:v1 envelope.", rewrapped,
+        )
+    return rewrapped
 
 
 async def delete_staged_mastio_key(kid: str) -> int:
