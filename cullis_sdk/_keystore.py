@@ -178,6 +178,90 @@ def unwrap_identity_secret(value: str) -> str:
     return decrypt_secret(value, passphrase)
 
 
+# ── key.pem (mTLS) at rest — native encrypted-PEM, not the Fernet envelope ──
+#
+# key.pem is consumed by ``ssl.SSLContext.load_cert_chain`` which loads the
+# key from a FILE PATH (stdlib ssl cannot load a key from memory). So instead
+# of the enc:sec:v1 Fernet envelope used for the in-memory DPoP key, key.pem
+# is wrapped in the STANDARD PKCS#8 encrypted-PEM format
+# (``-----BEGIN ENCRYPTED PRIVATE KEY-----``), which ssl decrypts natively
+# via the ``password=`` argument — no tempfile, no memfd. Same root-of-trust
+# ladder; the passphrase is the wrapping key.
+
+_ENCRYPTED_PEM_MARKER = "ENCRYPTED PRIVATE KEY"
+
+
+def is_encrypted_pem(pem: str) -> bool:
+    """True when ``pem`` is a PKCS#8 encrypted private key."""
+    return _ENCRYPTED_PEM_MARKER in pem
+
+
+def wrap_key_pem(plaintext_pem: str) -> str:
+    """Re-serialise an unencrypted private-key PEM as PKCS#8 encrypted-PEM
+    under the ladder passphrase. Returns the plaintext unchanged when no
+    root is configured (dev fallback) or when it is already encrypted."""
+    if is_encrypted_pem(plaintext_pem):
+        return plaintext_pem
+    passphrase = resolve_root_passphrase()
+    if not passphrase:
+        _log.warning(
+            "agent key.pem written UNENCRYPTED at rest: no root-of-trust "
+            "configured (set %s to enable PKCS#8 encrypted-PEM).", _ENV_VAR,
+        )
+        return plaintext_pem
+    from cryptography.hazmat.primitives import serialization
+
+    key = serialization.load_pem_private_key(
+        plaintext_pem.encode("utf-8"), password=None,
+    )
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.BestAvailableEncryption(passphrase.encode("utf-8")),
+    ).decode("utf-8")
+
+
+def unwrap_key_pem(pem: str) -> str:
+    """Return a plaintext private-key PEM, decrypting an encrypted-PEM with
+    the ladder passphrase. Plaintext passes through. Raises
+    :class:`IdentityKeyLockedError` when the key is encrypted but no root
+    is available."""
+    if not is_encrypted_pem(pem):
+        return pem
+    passphrase = resolve_root_passphrase()
+    if not passphrase:
+        raise IdentityKeyLockedError(
+            f"agent key.pem is encrypted at rest but {_ENV_VAR} is not set "
+            "(and no keychain/age provider yielded a passphrase)."
+        )
+    from cryptography.hazmat.primitives import serialization
+
+    try:
+        key = serialization.load_pem_private_key(
+            pem.encode("utf-8"), password=passphrase.encode("utf-8"),
+        )
+    except (ValueError, TypeError) as exc:
+        raise IdentityKeyLockedError(
+            f"agent key.pem cannot be decrypted with the current {_ENV_VAR}."
+        ) from exc
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("utf-8")
+
+
+def key_pem_load_password() -> "bytes | None":
+    """Password bytes for ``ssl.SSLContext.load_cert_chain(..., password=)``.
+
+    Returns the ladder passphrase encoded, or ``None`` when no root is
+    configured. ssl ignores the password for an unencrypted key, so this is
+    always safe to pass; an encrypted key with no root surfaces as an ssl
+    error at load time (fail-closed)."""
+    passphrase = resolve_root_passphrase()
+    return passphrase.encode("utf-8") if passphrase else None
+
+
 def _reset_cache_for_tests() -> None:
     """Test/rotation hook: drop derived Fernet masters from the LRU.
 
@@ -192,8 +276,12 @@ __all__ = [
     "IdentityKeyLockedError",
     "decrypt_secret",
     "encrypt_secret",
+    "is_encrypted_pem",
     "is_secret_envelope",
+    "key_pem_load_password",
     "resolve_root_passphrase",
     "unwrap_identity_secret",
+    "unwrap_key_pem",
     "wrap_identity_secret",
+    "wrap_key_pem",
 ]

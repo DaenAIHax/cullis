@@ -257,7 +257,14 @@ def cullis_httpx_client(
         ssl_ctx = ssl.create_default_context(cafile=str(ca))
     else:
         ssl_ctx = ssl.create_default_context()
-    ssl_ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+    from cullis_sdk._keystore import key_pem_load_password
+
+    # F5: pass the ladder passphrase so an at-rest encrypted-PEM key.pem
+    # loads; None for a plaintext key, which ssl accepts unchanged.
+    ssl_ctx.load_cert_chain(
+        certfile=str(cert), keyfile=str(key),
+        password=key_pem_load_password(),
+    )
 
     inner = httpx.HTTPTransport(verify=ssl_ctx)
     transport = _DpopTransport(inner, dpop_key)

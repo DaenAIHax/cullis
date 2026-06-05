@@ -361,7 +361,13 @@ class _EnrollmentMixin:
         # (correct for local-key-holders) instead of ``login_via_proxy``
         # (which 404s at Mastio because Mastio doesn't hold this key).
         try:
-            instance._signing_key_pem = Path(key_path).read_text()
+            from cullis_sdk._keystore import unwrap_key_pem
+
+            # F5: decrypt an at-rest encrypted-PEM key.pem for in-process
+            # signing; plaintext passes through untouched.
+            instance._signing_key_pem = unwrap_key_pem(
+                Path(key_path).read_text()
+            )
         except OSError as exc:
             raise RuntimeError(
                 f"from_identity_dir: cannot read key_path={key_path!r} "
@@ -981,8 +987,12 @@ class _EnrollmentMixin:
         if cert_pem:
             (persist_to / "cert.pem").write_text(cert_pem)
         if private_key_pem:
+            from cullis_sdk._keystore import wrap_key_pem
+
             key_file = persist_to / "key.pem"
-            key_file.write_text(private_key_pem)
+            # F5: encrypt at rest (PKCS#8 encrypted-PEM) when a root is
+            # configured; plaintext + 0600 otherwise (dev fallback).
+            key_file.write_text(wrap_key_pem(private_key_pem))
             _os.chmod(key_file, 0o600)
 
     @classmethod
@@ -1061,9 +1071,14 @@ class _EnrollmentMixin:
         # Absent key/cert (legacy layout or a Connector that never
         # completed enrollment) is not fatal — tools that need them
         # surface a clear error at call time.
+        from cullis_sdk._keystore import unwrap_key_pem
+
         key_path = identity_dir / "agent.key"
         cert_path = identity_dir / "agent.crt"
-        instance._signing_key_pem = key_path.read_text() if key_path.exists() else None
+        # F5: decrypt an at-rest encrypted-PEM agent key for in-process signing.
+        instance._signing_key_pem = (
+            unwrap_key_pem(key_path.read_text()) if key_path.exists() else None
+        )
         instance._cert_pem = cert_path.read_text() if cert_path.exists() else None
         # ADR-014: present the agent cert at the TLS handshake when both
         # files exist on disk. nginx in front of the Mastio verifies the
@@ -1448,7 +1463,13 @@ class _EnrollmentMixin:
             encryption_algorithm=_ser.NoEncryption(),
         ).decode("ascii")
 
-        _atomic_write(agent_key_path, enroll_key_pem, mode=0o600)
+        from cullis_sdk._keystore import wrap_key_pem
+
+        # F5: encrypt the agent key at rest (PKCS#8 encrypted-PEM) when a
+        # root is configured. ``from_identity_dir`` (the step-10 hand-off
+        # below) and the mTLS ``load_cert_chain`` both decrypt it; plaintext
+        # is kept when no root is set (dev fallback).
+        _atomic_write(agent_key_path, wrap_key_pem(enroll_key_pem), mode=0o600)
         _atomic_write(agent_crt_path, cert_pem, mode=0o644)
         # B-7 follow-up (2026-05-25): persist DPoP material as the JSON
         # JWK shape the rest of the SDK consumes (``DpopKey.load`` calls
