@@ -7,6 +7,39 @@ host bind dirs (`./data`, `./nginx-certs`) are the whole state and a
 filesystem copy is enough; this page is about the Postgres + Vault
 shape, where state is split across two systems.
 
+## Prerequisite: the production Vault must be persistent
+
+Everything below assumes the Vault custodying the CA survives a restart.
+**It only does so if Vault runs with persistent storage.** A Vault
+started in dev mode (`vault server -dev` / `-dev-tls`) keeps its entire
+KV store **in memory**: on the first container restart, upgrade, or host
+reboot, the Org CA and the Mastio Intermediate CA are gone. The Mastio
+then refuses to boot (orphan guard, DR-1) or, if CA bootstrap is left
+enabled, mints a **fresh** Intermediate that orphans every enrolled
+agent's mTLS cert. No backup script can recover from this, because there
+was never anything on disk to back up.
+
+A production Vault must therefore run with:
+
+- **Persistent storage** (`raft` integrated storage, or a `file` /
+  managed backend), never the in-memory dev backend.
+- **Auto-unseal** (a cloud KMS, an HSM, or Transit), so an unattended
+  restart does not leave Vault sealed and the Mastio unable to read the
+  CA. Manual unseal is acceptable only if an operator is always on hand
+  for every restart.
+- Its own backup of the whole store (`vault operator raft snapshot` or
+  the managed-Vault equivalent), in addition to the Mastio-scoped CA
+  export below.
+
+The `-dev-tls` overlay used in the local dogfood stack is **dev-only**
+for exactly this reason: it is convenient for a throwaway demo, but it
+loses the CA on restart and must never back a real org. The CA and the
+`DB_ENCRYPTION_KEY` are persistent for the life of the org and are never
+regenerated; a version upgrade swaps only the image and bundle files,
+never the Vault state or the CA. The Mastio integrates an
+operator-owned Vault rather than shipping its own, so this persistence
+contract is the operator's to satisfy.
+
 ## What a full backup must capture
 
 A production Mastio's state lives in **two** places, and a backup of
