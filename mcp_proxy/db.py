@@ -1612,6 +1612,95 @@ async def reencrypt_plaintext_mastio_keys() -> int:
     return rewrapped
 
 
+async def rewrap_at_rest_master_key(
+    old_passphrase: str, new_passphrase: str,
+) -> dict[str, int]:
+    """Re-encrypt every ``MCP_PROXY_DB_ENCRYPTION_KEY``-derived at-rest store
+    from ``old_passphrase`` to ``new_passphrase`` (master-key rotation).
+
+    Covers the two stores that share the PKI master: ``mastio_keys``
+    (signing key, ``enc:sec:v1``) and ``pki_key_store`` (Org + Intermediate
+    CA, ``enc:pki:v1``). ``ai_provider_credentials`` uses a SEPARATE key
+    (``secret_encryption_key_b64``) and is out of scope here.
+
+    Two-phase in a single transaction so it is all-or-nothing: every row is
+    decrypted under the OLD passphrase first (a wrong OLD aborts before any
+    write), then re-encrypted under the NEW passphrase and written. Plaintext
+    ``mastio_keys`` rows (dev, no master) are skipped. Returns per-store
+    counts. Run offline / in a maintenance window with the Mastio stopped.
+    """
+    from mcp_proxy.kms.pki_at_rest import (
+        decrypt_pki_payload_with,
+        decrypt_secret_with,
+        encrypt_pki_payload_with,
+        encrypt_secret_with,
+        is_secret_envelope,
+    )
+
+    counts = {"mastio_keys": 0, "pki_key_store": 0}
+    async with get_db() as conn:
+        # The decrypt-all-then-encrypt-all phase split is load-bearing: the
+        # PBKDF2 derivation behind these helpers is an lru_cache(maxsize=1),
+        # so all OLD decrypts must finish before the first NEW encrypt. Do
+        # NOT fold these into a single per-row loop — it would thrash the
+        # cache (re-deriving PBKDF2-600k on every row) and interleave the
+        # OLD/NEW masters. ``get_db()`` wraps this whole block in one
+        # transaction, so any raise (e.g. a wrong OLD in phase 1) rolls back
+        # with no partial write.
+        #
+        # ── Phase 1: decrypt everything under the OLD passphrase ──
+        mk_rows = [
+            dict(r) for r in (
+                await conn.execute(text("SELECT kid, privkey_pem FROM mastio_keys"))
+            ).mappings().all()
+        ]
+        mk_plain: list[tuple[str, str]] = []  # (kid, plaintext_privkey)
+        for row in mk_rows:
+            pem = row.get("privkey_pem")
+            if pem and is_secret_envelope(pem):
+                mk_plain.append((row["kid"], decrypt_secret_with(pem, old_passphrase)))
+
+        ca_rows = [
+            dict(r) for r in (
+                await conn.execute(
+                    text("SELECT key_id, ciphertext FROM pki_key_store")
+                )
+            ).mappings().all()
+        ]
+        ca_plain: list[tuple[str, str, str]] = []  # (key_id, key_pem, cert_pem)
+        for row in ca_rows:
+            key_pem, cert_pem = decrypt_pki_payload_with(
+                row["ciphertext"], old_passphrase,
+            )
+            ca_plain.append((row["key_id"], key_pem, cert_pem))
+
+        # ── Phase 2: re-encrypt under the NEW passphrase and write ──
+        for kid, plain in mk_plain:
+            await conn.execute(
+                text("UPDATE mastio_keys SET privkey_pem = :e WHERE kid = :kid"),
+                {"e": encrypt_secret_with(plain, new_passphrase), "kid": kid},
+            )
+            counts["mastio_keys"] += 1
+        for key_id, key_pem, cert_pem in ca_plain:
+            await conn.execute(
+                text("UPDATE pki_key_store SET ciphertext = :e WHERE key_id = :id"),
+                {
+                    "e": encrypt_pki_payload_with(
+                        key_pem=key_pem, cert_pem=cert_pem,
+                        passphrase=new_passphrase,
+                    ),
+                    "id": key_id,
+                },
+            )
+            counts["pki_key_store"] += 1
+    _log.info(
+        "master-key rewrap complete: %d mastio_keys + %d pki_key_store rows "
+        "re-encrypted under the new MCP_PROXY_DB_ENCRYPTION_KEY.",
+        counts["mastio_keys"], counts["pki_key_store"],
+    )
+    return counts
+
+
 async def delete_staged_mastio_key(kid: str) -> int:
     """Delete a staged row (``activated_at IS NULL``) by kid.
 
