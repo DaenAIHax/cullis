@@ -1026,6 +1026,23 @@ class ProxySettings(BaseSettings):
             and _env("PROXY_LOCAL_AUTH") is None
         ):
             self.local_auth_enabled = True
+        # F-B-14 (panel 2026-06-05) — secure-by-default companion to the
+        # local_auth auto-flip above. In a standalone *production* deploy
+        # local_auth is on by default, and with ``local_token_require_dpop``
+        # false a LOCAL_TOKEN minted without a DPoP proof is accepted as a
+        # plain Bearer (the "never plain Bearer" invariant). The SDK always
+        # sends a DPoP proof at mint, so default the binding on whenever the
+        # operator hasn't explicitly chosen a posture. An explicit
+        # ``MCP_PROXY_LOCAL_TOKEN_REQUIRE_DPOP=false`` is left untouched and
+        # caught by the validate_config F-B-14 gate (refuse-boot unless the
+        # migration-window override is set). Dev standalone is left on the
+        # permissive default for local-iteration convenience.
+        if (
+            self.standalone
+            and self.environment == "production"
+            and _env("MCP_PROXY_LOCAL_TOKEN_REQUIRE_DPOP") is None
+        ):
+            self.local_token_require_dpop = True
         return self
 
 
@@ -1260,6 +1277,44 @@ def validate_config(settings: ProxySettings) -> None:
                     "MCP_PROXY_EGRESS_DPOP_INSECURE_OK=true and track a "
                     "sunset date (F-B-11).",
                     egress_mode,
+                )
+                raise SystemExit(1)
+
+        # F-B-14 (panel 2026-06-05). Ingress LOCAL_TOKEN DPoP binding.
+        # When ``local_auth_enabled`` is on, the Mastio mints in-process
+        # LOCAL_TOKENs for intra-org calls. With ``local_token_require_dpop``
+        # false (the default) a token minted without a DPoP proof carries no
+        # ``cnf.jkt`` and is accepted as a *plain Bearer* on every subsequent
+        # request (local_agent_dep.py: WARN + accept). That is the exact
+        # "never accept plain Bearer" invariant the zero-trust posture
+        # forbids: an exfiltrated LOCAL_TOKEN replays with no RFC 9449
+        # key-possession proof. The SDK already sends a DPoP proof on
+        # ``POST /v1/auth/token``, so ``required`` is satisfiable out of the
+        # box; the only legitimate weaker posture is the SDK-rollout window
+        # for in-flight legacy tokens within their TTL. Mirror the egress
+        # F-B-11 gate: refuse to boot unless the operator declares the
+        # migration window explicitly and tracks a sunset date. This gate is
+        # a no-op for the default deploy (local_auth_enabled defaults off and
+        # the local-token router is never mounted).
+        if settings.local_auth_enabled and not settings.local_token_require_dpop:
+            insecure_ok = (
+                os.environ.get("MCP_PROXY_LOCAL_TOKEN_DPOP_INSECURE_OK", "")
+                .strip()
+                .lower()
+            ) in {"1", "true", "yes"}
+            if not insecure_ok:
+                _log.critical(
+                    "MCP_PROXY_LOCAL_AUTH_ENABLED=true with "
+                    "MCP_PROXY_LOCAL_TOKEN_REQUIRE_DPOP=false is not "
+                    "permitted in production: a LOCAL_TOKEN minted without a "
+                    "DPoP proof carries no cnf.jkt and is accepted as a plain "
+                    "Bearer, so an exfiltrated token replays with no RFC 9449 "
+                    "key-possession proof. Set "
+                    "MCP_PROXY_LOCAL_TOKEN_REQUIRE_DPOP=true (the SDK already "
+                    "sends a DPoP proof at mint), or for the SDK-rollout "
+                    "migration window explicitly opt in via "
+                    "MCP_PROXY_LOCAL_TOKEN_DPOP_INSECURE_OK=true and track a "
+                    "sunset date (F-B-14)."
                 )
                 raise SystemExit(1)
 
