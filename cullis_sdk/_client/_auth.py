@@ -210,8 +210,11 @@ class _AuthMixin:
             DeprecationWarning,
             stacklevel=2,
         )
+        from cullis_sdk._keystore import unwrap_key_pem
+
         cert_pem = Path(cert_path).read_text()
-        key_pem = Path(key_path).read_text()
+        # F5: decrypt an at-rest encrypted-PEM key for the legacy login path.
+        key_pem = unwrap_key_pem(Path(key_path).read_text())
         # ``login_from_pem`` itself emits a DeprecationWarning; ``login``
         # callers will see both this and the inner one. They point at
         # complementary stack frames (user → login, login → login_from_pem)

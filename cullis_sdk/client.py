@@ -82,11 +82,15 @@ def _cert_key_pair_matches(
     try:
         from cryptography import x509
         from cryptography.hazmat.primitives import serialization
+        from cullis_sdk._keystore import unwrap_key_pem
+
         cert_obj = x509.load_pem_x509_certificate(
             Path(cert_path).read_bytes(),
         )
+        # F5: tolerate an at-rest encrypted-PEM key.pem; plaintext passes through.
         key_obj = serialization.load_pem_private_key(
-            Path(key_path).read_bytes(), password=None,
+            unwrap_key_pem(Path(key_path).read_text()).encode("utf-8"),
+            password=None,
         )
     except (FileNotFoundError, ValueError, OSError) as exc:
         return False, f"could not load cert+key for pre-flight: {exc}"
@@ -194,8 +198,11 @@ def _build_proxy_http_client(
         insecure_ctx.check_hostname = False
         insecure_ctx.verify_mode = ssl.CERT_NONE
         if mtls_ok:
+            from cullis_sdk._keystore import key_pem_load_password
+
             insecure_ctx.load_cert_chain(
                 certfile=str(cert_path), keyfile=str(key_path),
+                password=key_pem_load_password(),
             )
         return httpx.Client(timeout=timeout, verify=insecure_ctx)
 
@@ -208,8 +215,11 @@ def _build_proxy_http_client(
         # Missing pinned file (pre-TOFU first contact) → fall through
         # to the system CA store the default context already loaded.
     if mtls_ok:
+        from cullis_sdk._keystore import key_pem_load_password
+
         ssl_context.load_cert_chain(
             certfile=str(cert_path), keyfile=str(key_path),
+            password=key_pem_load_password(),
         )
     return httpx.Client(timeout=timeout, verify=ssl_context)
 

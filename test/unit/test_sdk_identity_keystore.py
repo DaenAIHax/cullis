@@ -137,3 +137,132 @@ def test_dpop_key_legacy_plaintext_loads_with_root_set(tmp_path, monkeypatch):
     # Now a root is configured; the legacy plaintext file still loads.
     _set_pass(monkeypatch)
     assert DpopKey.load(path).private_jwk()["d"] == key.private_jwk()["d"]
+
+
+# ── key.pem (mTLS) at rest — PKCS#8 encrypted-PEM ───────────────────
+
+
+def _fresh_key_pem() -> str:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+
+
+def test_wrap_key_pem_produces_encrypted_pem(monkeypatch):
+    _set_pass(monkeypatch)
+    enc = ks.wrap_key_pem(_fresh_key_pem())
+    assert enc.startswith("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+    assert ks.is_encrypted_pem(enc)
+
+
+def test_wrap_key_pem_plaintext_without_root(monkeypatch):
+    _unset_pass(monkeypatch)
+    pem = _fresh_key_pem()
+    assert ks.wrap_key_pem(pem) == pem  # dev fallback, unchanged
+
+
+def test_unwrap_key_pem_roundtrip(monkeypatch):
+    _set_pass(monkeypatch)
+    pem = _fresh_key_pem()
+    enc = ks.wrap_key_pem(pem)
+    out = ks.unwrap_key_pem(enc)
+    assert not ks.is_encrypted_pem(out)
+    assert "BEGIN PRIVATE KEY" in out
+
+
+def test_unwrap_key_pem_encrypted_without_root_raises(monkeypatch):
+    _set_pass(monkeypatch)
+    enc = ks.wrap_key_pem(_fresh_key_pem())
+    _unset_pass(monkeypatch)
+    with pytest.raises(ks.IdentityKeyLockedError):
+        ks.unwrap_key_pem(enc)
+
+
+def test_ssl_load_cert_chain_accepts_encrypted_key(tmp_path, monkeypatch):
+    """THE CORE mTLS DE-RISK: ssl must natively load our encrypted-PEM
+    key.pem via the password argument. If this breaks, agent mTLS breaks."""
+    import datetime
+    import ssl
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    _set_pass(monkeypatch)
+    key = ec.generate_private_key(ec.SECP256R1())
+    plain_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    subj = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "agent")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subj).issuer_name(subj)
+        .public_key(key.public_key()).serial_number(1)
+        .not_valid_before(datetime.datetime(2026, 1, 1))
+        .not_valid_after(datetime.datetime(2027, 1, 1))
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
+
+    cp = tmp_path / "cert.pem"
+    kp = tmp_path / "key.pem"
+    cp.write_text(cert_pem)
+    kp.write_text(ks.wrap_key_pem(plain_pem))  # encrypted-PEM on disk
+    assert ks.is_encrypted_pem(kp.read_text())
+
+    ctx = ssl.create_default_context()
+    # Must not raise: ssl decrypts the key with the ladder passphrase.
+    ctx.load_cert_chain(
+        certfile=str(cp), keyfile=str(kp),
+        password=ks.key_pem_load_password(),
+    )
+
+
+def test_load_cert_chain_plaintext_key_with_root_set(tmp_path, monkeypatch):
+    """Back-compat lock: a root is configured but the on-disk key.pem is a
+    legacy PLAINTEXT PEM. ssl must still load it — the password is passed
+    (non-None) but ignored for an unencrypted key. Mirrors a deploy that
+    turned on a passphrase before re-writing existing identities."""
+    import datetime
+    import ssl
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    _set_pass(monkeypatch)  # root IS set
+    key = ec.generate_private_key(ec.SECP256R1())
+    plain_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    subj = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "agent")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subj).issuer_name(subj)
+        .public_key(key.public_key()).serial_number(1)
+        .not_valid_before(datetime.datetime(2026, 1, 1))
+        .not_valid_after(datetime.datetime(2027, 1, 1))
+        .sign(key, hashes.SHA256())
+    )
+    cp = tmp_path / "cert.pem"
+    kp = tmp_path / "key.pem"
+    cp.write_text(cert.public_bytes(serialization.Encoding.PEM).decode())
+    kp.write_text(plain_pem)  # PLAINTEXT key on disk
+    assert not ks.is_encrypted_pem(kp.read_text())
+
+    ssl.create_default_context().load_cert_chain(
+        certfile=str(cp), keyfile=str(kp),
+        password=ks.key_pem_load_password(),  # non-None, ignored for plaintext
+    )
