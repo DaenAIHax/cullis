@@ -23,14 +23,19 @@ services:
       MCP_PROXY_ADMIN_SECRET:            ${MCP_PROXY_ADMIN_SECRET:?MCP_PROXY_ADMIN_SECRET is required in production proxy.env}
       MCP_PROXY_DASHBOARD_SIGNING_KEY:   ${MCP_PROXY_DASHBOARD_SIGNING_KEY:?MCP_PROXY_DASHBOARD_SIGNING_KEY is required in production proxy.env (run ./generate-proxy-env.sh --prod)}
       MCP_PROXY_PROXY_PUBLIC_URL:        ${MCP_PROXY_PROXY_PUBLIC_URL:?MCP_PROXY_PROXY_PUBLIC_URL is required in production proxy.env}
+    # mcp-proxy holds the audit hash-chain and per-agent crypto material in
+    # memory; the previous 512M cap OOMs around 40 concurrent agents at 4
+    # workers (roughly one MiB of headroom under that load). 2g matches the
+    # base compose and leaves room to grow. Scale memory with worker count
+    # and expected fleet size.
     deploy:
       resources:
         limits:
           cpus: "1.0"
-          memory: 512M
+          memory: 2g
         reservations:
           cpus: "0.25"
-          memory: 128M
+          memory: 256m
     logging:
       driver: "json-file"
       options:
