@@ -446,6 +446,12 @@ secrets:
   # in production. Empty → chart mints a random one. Set to match the
   # broker's POLICY_WEBHOOK_HMAC_SECRET when pairing with an external PDP.
   pdpWebhookHmacSecret: ""
+  # -- Shared HMAC secret for the RFC 9449 server nonce. With replicaCount > 1
+  # or the HPA enabled every pod must derive the same nonce, else DPoP clients
+  # (e.g. the /v1/llm/chat path) loop on ``use_dpop_nonce`` 401s when a retry
+  # lands on a different pod. Empty → chart mints a random one into the kept
+  # Secret (shared across all pods). Pin it to survive a Secret recreation.
+  dpopNonceSecret: ""
   # -- Org-level secret used by the proxy to authenticate to the broker
   # for admin/egress operations (when the broker is configured to require
   # one). Optional.
