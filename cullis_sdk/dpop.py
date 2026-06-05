@@ -98,7 +98,11 @@ class DpopKey:
     @classmethod
     def load(cls, path: Path) -> DpopKey:
         """Read a DpopKey from disk. Raises ``FileNotFoundError`` if absent."""
-        text = path.read_text()
+        from cullis_sdk._keystore import unwrap_identity_secret
+
+        # F5: decrypt the at-rest envelope when present; legacy plaintext
+        # JWK files pass through untouched.
+        text = unwrap_identity_secret(path.read_text())
         blob = json.loads(text)
         priv_jwk = blob.get("private_jwk") or blob
         if "d" not in priv_jwk:
@@ -139,11 +143,16 @@ class DpopKey:
         leaves either the old file or the fully-written new one, never
         a half-written secret.
         """
+        from cullis_sdk._keystore import wrap_identity_secret
+
         path.parent.mkdir(parents=True, exist_ok=True)
         priv_jwk = self.private_jwk()
         payload = json.dumps({"private_jwk": priv_jwk}, separators=(",", ":"))
+        # F5: encrypt at rest when a root passphrase is configured; the
+        # 0600 perm is kept as a second layer. With no root the plaintext
+        # JWK is written, preserving the legacy dev behaviour.
         tmp = path.with_suffix(path.suffix + f".tmp-{_pysecrets.token_hex(8)}")
-        tmp.write_text(payload)
+        tmp.write_text(wrap_identity_secret(payload))
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
         self.path = path
