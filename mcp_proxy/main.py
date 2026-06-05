@@ -817,6 +817,20 @@ async def lifespan(app: FastAPI):
     # degrade soft (both None) if identity bootstrap failed above.
     from mcp_proxy.auth.local_keystore import LocalKeyStore
     app.state.local_keystore = LocalKeyStore()
+
+    # F4 (panel 2026-06-05) — at-rest backfill for the Mastio signing key.
+    # ``mastio_keys.privkey_pem`` historically stored a plaintext PEM, so a
+    # DB read yielded the LocalIssuer signing key and let anyone forge
+    # LOCAL_TOKEN/JWT. New writes are now wrapped (enc:sec:v1); convert any
+    # legacy plaintext rows on boot when the master is configured. Idempotent
+    # + CAS-guarded for multi-worker; a no-op in dev (no master). Never block
+    # boot on it — the read path tolerates both forms.
+    try:
+        from mcp_proxy.db import reencrypt_plaintext_mastio_keys
+        await reencrypt_plaintext_mastio_keys()
+    except Exception as exc:  # noqa: BLE001 — backfill must not gate boot
+        _log.warning("F4 mastio_keys at-rest backfill raised %s — continuing", exc)
+
     app.state.local_issuer = None
     if getattr(agent_mgr, "mastio_loaded", False) and org_id:
         if getattr(agent_mgr, "is_sign_halted", False):
