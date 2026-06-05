@@ -880,7 +880,7 @@ def verify_anchors(
     allow_unverified_signature: bool = False,
     max_age_days: int = 3650,
     skew_seconds: int = 300,
-) -> int:
+) -> tuple[int, int]:
     """For each anchor, recompute the expected row_hash at the anchor's
     chain_seq and cross-check against the anchor's claim + TSA token.
 
@@ -891,8 +891,15 @@ def verify_anchors(
     in that mode the anchor is downgraded to the F-A-405 pre-fix
     behaviour and a warning is emitted.
 
-    Returns count of verified anchors. Exits 3 on mismatch, 5 on
-    unverifiable token."""
+    Returns ``(verified, dispute_grade)``: total anchors that passed
+    plus the subset proven to **dispute grade** — i.e. backend label
+    ``rfc3161-verified`` (full CMS signature + chain to a trusted TSA
+    root + EKU + imprint + genTime). Forgeable ``MK|`` mock tokens and
+    the downgraded imprint-only / imprint-eku-only RFC 3161 modes count
+    toward ``verified`` but NOT toward ``dispute_grade``: an operator
+    who can rewrite the store can mint a mock token for any row, so a
+    mock anchor proves nothing against the operator. Exits 3 on
+    mismatch, 5 on unverifiable token."""
     # Map (org_id, chain_seq) -> entry.entry_hash for quick lookup.
     head_hash: dict[tuple[str, int], str] = {}
     for e in entries:
@@ -901,6 +908,7 @@ def verify_anchors(
             head_hash[(e.get("org_id") or "", seq)] = e["entry_hash"]
 
     verified = 0
+    dispute_grade = 0
     for a in anchors:
         key = (a["org_id"], a["chain_seq"])
         actual_head = head_hash.get(key)
@@ -943,7 +951,9 @@ def verify_anchors(
                   f"token backend={backend} failed verification")
             sys.exit(3)
         verified += 1
-    return verified
+        if backend == "rfc3161-verified":
+            dispute_grade += 1
+    return verified, dispute_grade
 
 
 def cross_reconcile(bundles: list[tuple[str, list[dict]]]) -> int:
@@ -1533,9 +1543,16 @@ def _load_json_file(path: str, label: str) -> dict:
     return obj
 
 
-def enforce_anchor_floor(require_anchors: bool, total_anchors: int) -> None:
-    """Reject a bundle with zero verified TSA anchors when the caller
+def enforce_anchor_floor(require_anchors: bool, dispute_grade_anchors: int) -> None:
+    """Reject a bundle with zero dispute-grade TSA anchors when the caller
     passed ``--require-anchors`` (exit 8).
+
+    ``dispute_grade_anchors`` counts only anchors verified to backend
+    ``rfc3161-verified`` (full CMS signature chained to a trusted TSA
+    root). Forgeable ``MK|`` mock tokens and the downgraded imprint-only
+    modes are deliberately excluded: an operator with write access can
+    mint a mock token for any row, so a mock anchor proves nothing
+    against the operator — the exact adversary this floor defends against.
 
     ``verify_chains`` proves the SHA-256 hash chain is internally
     consistent, but the chain is *self-asserted*: an operator with write
@@ -1552,17 +1569,18 @@ def enforce_anchor_floor(require_anchors: bool, total_anchors: int) -> None:
     anchoring leaves a trailing window of rows written since the last
     anchor. Use ``--merkle-proof`` / archive proofs for per-row coverage.
     """
-    if not require_anchors or total_anchors > 0:
+    if not require_anchors or dispute_grade_anchors > 0:
         return
     print("")
     print("✗ ANCHOR REQUIREMENT NOT MET")
     print("")
-    print("  --require-anchors was set, but the bundle carries zero verified")
-    print("  RFC 3161 TSA anchors. The hash chain is internally consistent,")
-    print("  but a self-asserted SHA-256 chain with no external timestamp can")
-    print("  be recomputed wholesale by anyone with write access to the audit")
-    print("  store. Without an anchor the bundle is tamper-evident against the")
-    print("  agent, not against the operator who holds the database.")
+    print("  --require-anchors was set, but the bundle carries zero")
+    print("  RFC 3161-verified TSA anchors (mock MK| tokens and downgraded")
+    print("  imprint-only anchors do not count). The hash chain is internally")
+    print("  consistent, but a self-asserted SHA-256 chain with no external")
+    print("  timestamp can be recomputed wholesale by anyone with write access")
+    print("  to the audit store. Without an anchor the bundle is tamper-evident")
+    print("  against the agent, not against the operator who holds the database.")
     print("")
     print("  Re-export with TSA anchoring enabled, or drop --require-anchors")
     print("  to accept chain-only (non-dispute-grade) verification.")
@@ -1697,7 +1715,9 @@ def main() -> int:
         action="store_true",
         help=(
             "Dispute-grade mode: fail (exit 8) unless the bundle carries "
-            "at least one verified RFC 3161 TSA anchor. Without this flag "
+            "at least one RFC 3161-verified TSA anchor (forgeable MK| mock "
+            "tokens and downgraded imprint-only anchors do not count). "
+            "Without this flag "
             "a chain with zero anchors still verifies (exit 0) — useful "
             "for dev/integrity-only checks, but a self-asserted SHA-256 "
             "chain with no external timestamp is tamper-evident against "
@@ -1713,13 +1733,14 @@ def main() -> int:
 
     bundles: list[tuple[str, list[dict]]] = []
     total_legacy = total_per_org = total_anchors = 0
+    total_dispute_grade = 0
     total_entries = 0
     total_orgs: set[str] = set()
     total_agents: set[str] = set()
     for path in args.bundle:
         entries, anchors = load_bundle(path)
         legacy_n, per_org_n, _agent_n = verify_chains(entries)
-        anchor_n = verify_anchors(
+        anchor_n, dispute_grade_n = verify_anchors(
             entries,
             anchors,
             trust_store_path=args.tsa_trust_store,
@@ -1730,6 +1751,7 @@ def main() -> int:
         total_legacy += legacy_n
         total_per_org += per_org_n
         total_anchors += anchor_n
+        total_dispute_grade += dispute_grade_n
         total_entries += len(entries)
         for e in entries:
             if e.get("org_id"):
@@ -1752,8 +1774,11 @@ def main() -> int:
     # is tamper-evident against the agent but not against an operator who
     # can rewrite the store and recompute every row_hash. Exits 8 under
     # --require-anchors; a no-op otherwise (chain-only verification stays
-    # exit 0 for dev / integrity-only callers).
-    enforce_anchor_floor(args.require_anchors, total_anchors)
+    # exit 0 for dev / integrity-only callers). Only RFC 3161-verified
+    # anchors clear the floor — forgeable MK| mock tokens and the
+    # downgraded imprint-only modes do not, since the operator who holds
+    # the store can mint those at will.
+    enforce_anchor_floor(args.require_anchors, total_dispute_grade)
 
     # CISO-readable PASS summary. The line breaks below are deliberate
     # so the auditor's terminal output reads like a verdict, not a CSV.
@@ -1766,6 +1791,11 @@ def main() -> int:
         f"{len(total_orgs)} org{'s' if len(total_orgs) != 1 else ''} · "
         f"{total_legacy} legacy · {total_per_org} per-org · "
         f"{total_anchors} TSA anchor{'s' if total_anchors != 1 else ''}"
+        + (
+            f" ({total_dispute_grade} dispute-grade)"
+            if total_anchors != total_dispute_grade
+            else ""
+        )
     )
     if cross_n:
         print(f"  {cross_n} cross-org peer row{'s' if cross_n != 1 else ''} reconciled")
