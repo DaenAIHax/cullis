@@ -241,6 +241,87 @@ def decrypt_secret(envelope: str) -> str:
         ) from exc
 
 
+# ── explicit-passphrase variants (master-key rotation / rewrap) ──────
+#
+# The functions above derive the Fernet master from the *current*
+# ``MCP_PROXY_DB_ENCRYPTION_KEY`` env var. Rotating that key requires
+# decrypting every at-rest row under the OLD passphrase and re-encrypting
+# under the NEW one in a single pass — these variants take the passphrase
+# explicitly so the rewrap never has to mutate the process environment.
+
+
+def _validate_passphrase(raw: str) -> bytes:
+    """Same floor as :func:`_passphrase`, applied to an explicit value."""
+    raw = (raw or "").strip()
+    if not raw:
+        raise PKIKeyMissingError("passphrase must be non-empty")
+    if len(raw) < 16:
+        raise PKIKeyMissingError(
+            f"passphrase must be at least 16 characters (got {len(raw)})."
+        )
+    return raw.encode("utf-8")
+
+
+def master_key_from(passphrase: str) -> bytes:
+    """Derive the Fernet master key from an explicit passphrase string."""
+    return _derive_cached(_validate_passphrase(passphrase))
+
+
+def encrypt_secret_with(plaintext: str, passphrase: str) -> str:
+    """:func:`encrypt_secret` under an explicit passphrase."""
+    if not plaintext:
+        raise ValueError("encrypt_secret_with: plaintext must be non-empty")
+    token = Fernet(master_key_from(passphrase)).encrypt(
+        plaintext.encode("utf-8")
+    ).decode("utf-8")
+    return _SECRET_ENVELOPE_PREFIX + token
+
+
+def decrypt_secret_with(envelope: str, passphrase: str) -> str:
+    """:func:`decrypt_secret` under an explicit passphrase."""
+    if not envelope.startswith(_SECRET_ENVELOPE_PREFIX):
+        raise ValueError(
+            f"decrypt_secret_with: envelope does not start with "
+            f"{_SECRET_ENVELOPE_PREFIX!r}."
+        )
+    token = envelope[len(_SECRET_ENVELOPE_PREFIX):]
+    try:
+        return Fernet(master_key_from(passphrase)).decrypt(
+            token.encode("utf-8")
+        ).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError("secret envelope: wrong passphrase") from exc
+
+
+def encrypt_pki_payload_with(*, key_pem: str, cert_pem: str, passphrase: str) -> str:
+    """:func:`encrypt_pki_payload` under an explicit passphrase."""
+    if not key_pem or not cert_pem:
+        raise ValueError("encrypt_pki_payload_with: key_pem and cert_pem required")
+    payload = json.dumps({"key_pem": key_pem, "cert_pem": cert_pem})
+    token = Fernet(master_key_from(passphrase)).encrypt(
+        payload.encode("utf-8")
+    ).decode("utf-8")
+    return _ENVELOPE_PREFIX + token
+
+
+def decrypt_pki_payload_with(envelope: str, passphrase: str) -> tuple[str, str]:
+    """:func:`decrypt_pki_payload` under an explicit passphrase."""
+    if not envelope.startswith(_ENVELOPE_PREFIX):
+        raise ValueError(
+            f"decrypt_pki_payload_with: envelope does not start with "
+            f"{_ENVELOPE_PREFIX!r}."
+        )
+    token = envelope[len(_ENVELOPE_PREFIX):]
+    try:
+        decoded = Fernet(master_key_from(passphrase)).decrypt(
+            token.encode("utf-8")
+        ).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError("pki payload: wrong passphrase") from exc
+    bundle = json.loads(decoded)
+    return bundle["key_pem"], bundle["cert_pem"]
+
+
 def _reset_cache_for_tests() -> None:
     """Test hook: drop the PBKDF2 cache so monkeypatched env vars apply."""
     _derive_cached.cache_clear()
@@ -249,10 +330,15 @@ def _reset_cache_for_tests() -> None:
 __all__ = [
     "PKIKeyMissingError",
     "decrypt_pki_payload",
+    "decrypt_pki_payload_with",
     "decrypt_secret",
+    "decrypt_secret_with",
     "derive_master_key",
     "encrypt_pki_payload",
+    "encrypt_pki_payload_with",
     "encrypt_secret",
+    "encrypt_secret_with",
     "is_secret_envelope",
+    "master_key_from",
     "pki_master_key_configured",
 ]
