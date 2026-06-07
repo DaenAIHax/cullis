@@ -756,3 +756,30 @@ class AIProviderCredentials(Base):
     enabled = Column(Boolean, nullable=False, server_default="1")
     updated_at = Column(Text, nullable=False)
     updated_by = Column(Text, nullable=True)
+
+
+class AgentLLMBudget(Base):
+    """Per-agent cumulative LLM token budget for the embedded AI gateway.
+
+    One optional row per agent. ``tokens_per_day`` / ``tokens_per_month``
+    are cumulative ceilings over the calendar UTC day / month; ``0`` means
+    "no ceiling for that period" (same convention as the global
+    ``llm_tokens_per_day`` / ``llm_tokens_per_month`` settings, which apply
+    when no enabled row exists). Enforcement is a fast Redis calendar
+    counter (``mcp_proxy.egress.budget``) seeded from the audit chain, so
+    the number that blocks a call is re-derivable from the signed chain.
+
+    Declared here (not just in the alembic migration) so
+    ``metadata.create_all`` under ``PROXY_SKIP_MIGRATIONS=1`` builds a
+    schema matching the production INSERT shape — same reason the
+    audit_log alembic-only columns are mirrored above.
+    """
+
+    __tablename__ = "agent_llm_budgets"
+
+    agent_id = Column(Text, primary_key=True)
+    tokens_per_day = Column(Integer, nullable=False, server_default="0")
+    tokens_per_month = Column(Integer, nullable=False, server_default="0")
+    enabled = Column(Boolean, nullable=False, server_default="1")
+    updated_at = Column(Text, nullable=False)
+    updated_by = Column(Text, nullable=True)
