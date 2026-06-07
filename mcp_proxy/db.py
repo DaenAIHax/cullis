@@ -973,6 +973,143 @@ async def count_enrolled_agents() -> int:
         return int(row["n"]) if row else 0
 
 
+# ─── LLM usage metering (read-time aggregation from the audit chain) ──────
+#
+# The usage dashboard derives per-provider and per-agent token totals
+# straight from the append-only audit chain: every ``egress_llm_chat`` row
+# carries ``prompt_tokens`` / ``completion_tokens`` / ``cost_usd`` /
+# ``provider`` in its JSON ``detail``. There is deliberately no parallel
+# meter table — the number shown is the number an auditor can re-verify
+# from the signed chain. Tokens are always present; ``cost_usd`` is summed
+# only where the upstream provider reported it (best-effort). A materialised
+# rollup is the documented follow-up if volumes outgrow this read-time scan.
+
+_USAGE_SCAN_CAP = 200_000  # rows scanned before we truncate + flag (no silent cap)
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def aggregate_llm_usage(window_start: str | None = None) -> dict:
+    """Aggregate LLM token usage from the audit chain.
+
+    ``window_start`` is an ISO-8601 UTC timestamp; ``egress_llm_chat`` rows
+    with ``timestamp >= window_start`` are summed. ``None`` means all-time.
+    Returns per-provider and per-agent breakdowns (descending by total
+    tokens) plus grand totals. ``scanned`` is the row count examined and
+    ``capped`` is ``True`` when the scan hit :data:`_USAGE_SCAN_CAP` and was
+    truncated — surfaced in the UI so a partial total never reads as full.
+    """
+    conds = ["action = :action"]
+    params: dict[str, Any] = {"action": "egress_llm_chat"}
+    if window_start:
+        conds.append("timestamp >= :start")
+        params["start"] = window_start
+    where = " WHERE " + " AND ".join(conds)
+    # Pull one over the cap so we can detect (and flag) truncation.
+    params["_cap"] = _USAGE_SCAN_CAP + 1
+    sql = (
+        f"SELECT agent_id, detail FROM audit_log{where} "
+        "ORDER BY timestamp DESC LIMIT :_cap"
+    )
+
+    async with get_db() as conn:
+        result = await conn.execute(text(sql), params)
+        rows = result.mappings().all()
+
+    capped = len(rows) > _USAGE_SCAN_CAP
+    if capped:
+        rows = rows[:_USAGE_SCAN_CAP]
+        _log.warning(
+            "aggregate_llm_usage truncated at %d rows (window_start=%s); "
+            "totals are partial — consider a materialised rollup",
+            _USAGE_SCAN_CAP,
+            window_start,
+        )
+
+    by_provider: dict[str, dict] = {}
+    by_agent: dict[str, dict] = {}
+    totals = {
+        "calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_usd": 0.0,
+        "has_cost": False,
+    }
+
+    def _bump(bucket: dict[str, dict], key: str, prompt: int, completion: int,
+              cost: float, has_cost: bool) -> None:
+        row = bucket.setdefault(
+            key,
+            {
+                "key": key,
+                "calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "has_cost": False,
+            },
+        )
+        row["calls"] += 1
+        row["prompt_tokens"] += prompt
+        row["completion_tokens"] += completion
+        row["total_tokens"] += prompt + completion
+        if has_cost:
+            row["cost_usd"] += cost
+            row["has_cost"] = True
+
+    for row in rows:
+        detail = row["detail"]
+        if not detail:
+            continue
+        try:
+            payload = json.loads(detail)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        prompt = _coerce_int(payload.get("prompt_tokens"))
+        completion = _coerce_int(payload.get("completion_tokens"))
+        provider = payload.get("provider") or "unknown"
+        agent_id = row["agent_id"] or payload.get("principal_id") or "unknown"
+        raw_cost = payload.get("cost_usd")
+        has_cost = raw_cost is not None
+        cost = _coerce_float(raw_cost)
+
+        _bump(by_provider, provider, prompt, completion, cost, has_cost)
+        _bump(by_agent, agent_id, prompt, completion, cost, has_cost)
+
+        totals["calls"] += 1
+        totals["prompt_tokens"] += prompt
+        totals["completion_tokens"] += completion
+        totals["total_tokens"] += prompt + completion
+        if has_cost:
+            totals["cost_usd"] += cost
+            totals["has_cost"] = True
+
+    _by_total = lambda r: r["total_tokens"]  # noqa: E731
+    return {
+        "by_provider": sorted(by_provider.values(), key=_by_total, reverse=True),
+        "by_agent": sorted(by_agent.values(), key=_by_total, reverse=True),
+        "totals": totals,
+        "scanned": len(rows),
+        "capped": capped,
+    }
+
+
 async def list_user_principals() -> list[dict]:
     """List user principals registered on this Mastio.
 

@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Usage{% endblock %}
+{% block header_title %}LLM Usage{% endblock %}
+{% block content %}
+<div class="max-w-6xl">
+
+    <!-- Header -->
+    <div class="flex items-start justify-between mb-6 gap-6">
+        <div class="min-w-0">
+            <h2 class="text-lg font-semibold text-white uppercase tracking-wider">LLM Usage</h2>
+            <p class="text-xs text-gray-600 mt-0.5">
+                Token usage attributed per provider and per agent identity, derived
+                from the signed audit chain — re-verifiable, not a parallel counter.
+            </p>
+        </div>
+
+        <!-- Totals chip: total tokens · prompt · completion -->
+        <div class="flex items-center gap-0 flex-shrink-0 border border-gray-800/60 rounded-md overflow-hidden bg-surface-900/60 backdrop-blur-sm">
+            <div class="px-3 py-1.5 flex items-center gap-2"
+                 title="Total tokens (prompt + completion) summed over the selected window.">
+                <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">Tokens</span>
+                <span class="text-sm font-mono text-white">{{ "{:,}".format(totals.total_tokens) }}</span>
+            </div>
+            <div class="w-px h-5 bg-gray-800/80 self-center"></div>
+            <div class="px-3 py-1.5 flex items-center gap-2"
+                 title="Number of egress_llm_chat calls in the window.">
+                <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-blue-400/80">Calls</span>
+                <span class="text-sm font-mono text-blue-400">{{ "{:,}".format(totals.calls) }}</span>
+            </div>
+            {% if totals.has_cost %}
+            <div class="w-px h-5 bg-gray-800/80 self-center"></div>
+            <div class="px-3 py-1.5 flex items-center gap-2"
+                 title="Cost in USD where the upstream provider reported it (best-effort; not all calls carry a cost).">
+                <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-accent-400/80">Cost</span>
+                <span class="text-sm font-mono text-accent-400">${{ "%.2f"|format(totals.cost_usd) }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Window selector -->
+    <div class="flex items-center gap-2 mb-5">
+        <span class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">Window</span>
+        <div class="inline-flex border border-gray-800/60 rounded-md overflow-hidden bg-surface-900/60">
+            {% for w in windows %}
+            <a href="/proxy/usage?window={{ w }}"
+               class="px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider transition-colors {% if window == w %}bg-accent-400/15 text-accent-400{% else %}text-gray-500 hover:text-gray-300 hover:bg-gray-800/40{% endif %}">
+                {{ w }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if capped %}
+    <div class="mb-5 px-4 py-2.5 border border-amber-500/40 bg-amber-500/5 rounded-md text-xs text-amber-300/90">
+        Partial totals — the scan was truncated at {{ "{:,}".format(scanned) }} audit rows.
+        Narrow the window or enable a materialised rollup for full-history totals.
+    </div>
+    {% endif %}
+
+    <!-- By provider -->
+    <div class="mb-8">
+        <h3 class="text-[11px] font-heading uppercase tracking-[0.2em] text-gray-500 mb-2">By provider</h3>
+        <div class="border border-gray-800/60 rounded-md overflow-hidden">
+            <table class="w-full text-xs">
+                <thead class="bg-surface-900/60 text-gray-600">
+                    <tr class="text-left uppercase tracking-wider text-[10px]">
+                        <th class="px-4 py-2.5 font-heading">Provider</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Calls</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Prompt</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Completion</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Total tokens</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Cost</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/50">
+                    {% for row in by_provider %}
+                    <tr class="hover:bg-gray-800/20">
+                        <td class="px-4 py-2.5 font-mono text-gray-200">{{ row.key }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-400 text-right">{{ "{:,}".format(row.calls) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-400 text-right">{{ "{:,}".format(row.prompt_tokens) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-400 text-right">{{ "{:,}".format(row.completion_tokens) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-white text-right">{{ "{:,}".format(row.total_tokens) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-accent-400 text-right">{% if row.has_cost %}${{ "%.2f"|format(row.cost_usd) }}{% else %}<span class="text-gray-700">—</span>{% endif %}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-4 py-6 text-center text-gray-600">No LLM usage recorded in this window.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- By agent -->
+    <div class="mb-4">
+        <h3 class="text-[11px] font-heading uppercase tracking-[0.2em] text-gray-500 mb-2">By agent</h3>
+        <div class="border border-gray-800/60 rounded-md overflow-hidden">
+            <table class="w-full text-xs">
+                <thead class="bg-surface-900/60 text-gray-600">
+                    <tr class="text-left uppercase tracking-wider text-[10px]">
+                        <th class="px-4 py-2.5 font-heading">Agent</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Calls</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Prompt</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Completion</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Total tokens</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Cost</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/50">
+                    {% for row in by_agent %}
+                    <tr class="hover:bg-gray-800/20">
+                        <td class="px-4 py-2.5 font-mono text-gray-200">{{ row.key }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-400 text-right">{{ "{:,}".format(row.calls) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-400 text-right">{{ "{:,}".format(row.prompt_tokens) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-400 text-right">{{ "{:,}".format(row.completion_tokens) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-white text-right">{{ "{:,}".format(row.total_tokens) }}</td>
+                        <td class="px-4 py-2.5 font-mono text-accent-400 text-right">{% if row.has_cost %}${{ "%.2f"|format(row.cost_usd) }}{% else %}<span class="text-gray-700">—</span>{% endif %}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="px-4 py-6 text-center text-gray-600">No LLM usage recorded in this window.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
