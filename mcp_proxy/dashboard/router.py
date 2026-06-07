@@ -141,6 +141,11 @@ router.include_router(_settings_routes.router)
 from mcp_proxy.dashboard import api_status_routes as _api_status_routes  # noqa: E402
 router.include_router(_api_status_routes.router)
 
+# LLM usage metering — per-provider + per-agent token view derived
+# read-time from the audit chain (no parallel meter table).
+from mcp_proxy.dashboard import usage_routes as _usage_routes  # noqa: E402
+router.include_router(_usage_routes.router)
+
 
 # Helpers (_ctx, _enforce_safe_outbound_url, _login_client_ip,
 # _post_login_redirect, _load_display_name, generate_org_ca,
