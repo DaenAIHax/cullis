@@ -24,6 +24,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -33,6 +34,7 @@ from mcp_proxy.auth.dpop_client_cert import get_agent_from_dpop_client_cert
 from mcp_proxy.auth.rate_limit import get_token_sum_limiter
 from mcp_proxy.config import get_settings
 from mcp_proxy.db import list_ai_provider_creds, log_audit
+from mcp_proxy.egress.budget import effective_budget, get_budget_counter
 from mcp_proxy.egress.ai_gateway import (
     GatewayError,
     StreamingDispatch,
@@ -185,9 +187,55 @@ async def chat_completions(
                 },
             )
 
+    # Per-agent cumulative token budget (calendar UTC day / month). Skipped
+    # entirely when no ceiling is configured (per-agent row or global
+    # default), so it is zero-overhead until an operator sets one. The
+    # running total is a Redis counter seeded from the audit chain.
+    budget_day, budget_month = await effective_budget(agent.agent_id, settings)
+    budget_enforced = budget_day > 0 or budget_month > 0
+    if budget_enforced:
+        now = datetime.now(timezone.utc)
+        used_day, used_month = await get_budget_counter().current(agent.agent_id, now)
+        over_day = budget_day > 0 and used_day >= budget_day
+        over_month = budget_month > 0 and used_month >= budget_month
+        if over_day or over_month:
+            reason = "daily_budget_exceeded" if over_day else "monthly_budget_exceeded"
+            await log_audit(
+                agent_id=agent.agent_id,
+                action="egress_llm_chat",
+                status="denied",
+                details={
+                    "event": "llm.chat_completion",
+                    "principal_id": agent.agent_id,
+                    "principal_type": agent.principal_type,
+                    "backend": settings.ai_gateway_backend,
+                    "provider": settings.ai_gateway_provider,
+                    "model": req.model,
+                    "trace_id": trace_id,
+                    "reason": reason,
+                    "used_day_tokens": used_day,
+                    "used_month_tokens": used_month,
+                    "budget_tokens_per_day": budget_day,
+                    "budget_tokens_per_month": budget_month,
+                    "stream": req.stream,
+                },
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "reason": reason,
+                    "trace_id": trace_id,
+                    "used_day_tokens": used_day,
+                    "used_month_tokens": used_month,
+                    "budget_tokens_per_day": budget_day,
+                    "budget_tokens_per_month": budget_month,
+                },
+            )
+
     if req.stream:
         return await _handle_stream(
             req=req, agent=agent, settings=settings, trace_id=trace_id,
+            enforce_budget=budget_enforced,
         )
 
     started = time.perf_counter()
@@ -226,9 +274,13 @@ async def chat_completions(
     payload = result.response.model_dump()
     payload.setdefault("cullis_trace_id", trace_id)
 
+    weight = int(result.prompt_tokens) + int(result.completion_tokens)
     if settings.llm_tokens_per_minute > 0:
-        weight = int(result.prompt_tokens) + int(result.completion_tokens)
         await get_token_sum_limiter().consume(_token_bucket_key(agent), weight)
+    if budget_enforced:
+        await get_budget_counter().add(
+            agent.agent_id, weight, datetime.now(timezone.utc),
+        )
 
     await log_audit(
         agent_id=agent.agent_id,
@@ -266,6 +318,7 @@ async def _handle_stream(
     agent: InternalAgent,
     settings,
     trace_id: str,
+    enforce_budget: bool = False,
 ) -> StreamingResponse:
     """Open the upstream stream and fan it out as Server-Sent Events.
 
@@ -462,15 +515,18 @@ async def _handle_stream(
                     },
                 )
             else:
-                if settings.llm_tokens_per_minute > 0:
-                    weight = (
-                        int(streamer.prompt_tokens)
-                        + int(streamer.completion_tokens)
+                weight = (
+                    int(streamer.prompt_tokens)
+                    + int(streamer.completion_tokens)
+                )
+                if settings.llm_tokens_per_minute > 0 and weight > 0:
+                    await get_token_sum_limiter().consume(
+                        _token_bucket_key(agent), weight,
                     )
-                    if weight > 0:
-                        await get_token_sum_limiter().consume(
-                            _token_bucket_key(agent), weight,
-                        )
+                if enforce_budget and weight > 0:
+                    await get_budget_counter().add(
+                        agent.agent_id, weight, datetime.now(timezone.utc),
+                    )
                 await log_audit(
                     agent_id=agent.agent_id,
                     action="egress_llm_chat",

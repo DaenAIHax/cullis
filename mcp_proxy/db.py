@@ -1110,6 +1110,134 @@ async def aggregate_llm_usage(window_start: str | None = None) -> dict:
     }
 
 
+async def sum_principal_tokens_since(agent_id: str, window_start: str | None) -> int:
+    """Sum ``prompt + completion`` tokens for one agent since ``window_start``.
+
+    ``window_start`` is an ISO-8601 UTC timestamp (``None`` = all-time).
+    Seeds the per-agent budget counter (:mod:`mcp_proxy.egress.budget`) on a
+    cold Redis key: the running total an auditor re-derives from the signed
+    chain IS the enforcement input, so a counter that was lost to a restart
+    is rebuilt from the same source of truth. Bounded by the usage scan cap.
+    """
+    conds = ["action = :action", "agent_id = :aid"]
+    params: dict[str, Any] = {"action": "egress_llm_chat", "aid": agent_id}
+    if window_start:
+        conds.append("timestamp >= :start")
+        params["start"] = window_start
+    where = " WHERE " + " AND ".join(conds)
+    params["_cap"] = _USAGE_SCAN_CAP
+    sql = f"SELECT detail FROM audit_log{where} ORDER BY timestamp DESC LIMIT :_cap"
+
+    async with get_db() as conn:
+        result = await conn.execute(text(sql), params)
+        rows = result.mappings().all()
+
+    total = 0
+    for row in rows:
+        detail = row["detail"]
+        if not detail:
+            continue
+        try:
+            payload = json.loads(detail)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        total += _coerce_int(payload.get("prompt_tokens"))
+        total += _coerce_int(payload.get("completion_tokens"))
+    return total
+
+
+# ─── Per-agent LLM token budgets (migration 0046) ────────────────────────
+#
+# Stores only the *policy* (the cumulative ceiling per calendar day /
+# month); the running total lives in the Redis counter
+# (:mod:`mcp_proxy.egress.budget`), seeded from the audit chain. ``0`` for a
+# period means "no ceiling for that period". A disabled or absent row means
+# the global ``llm_tokens_per_day`` / ``_per_month`` settings apply.
+
+
+def _budget_row_to_dict(row: RowMapping) -> dict:
+    return {
+        "agent_id": row["agent_id"],
+        "tokens_per_day": int(row["tokens_per_day"]),
+        "tokens_per_month": int(row["tokens_per_month"]),
+        "enabled": bool(row["enabled"]),
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by"],
+    }
+
+
+_BUDGET_COLS = (
+    "agent_id, tokens_per_day, tokens_per_month, enabled, updated_at, updated_by"
+)
+
+
+async def get_agent_budget(agent_id: str) -> dict | None:
+    """Return the budget row for ``agent_id``, or ``None`` when unset."""
+    async with get_db() as conn:
+        result = await conn.execute(
+            text(f"SELECT {_BUDGET_COLS} FROM agent_llm_budgets WHERE agent_id = :a"),
+            {"a": agent_id},
+        )
+        row = result.mappings().first()
+    return _budget_row_to_dict(row) if row is not None else None
+
+
+async def list_agent_budgets() -> list[dict]:
+    """Return every configured per-agent budget (stable agent_id order)."""
+    async with get_db() as conn:
+        result = await conn.execute(
+            text(f"SELECT {_BUDGET_COLS} FROM agent_llm_budgets ORDER BY agent_id ASC"),
+        )
+        rows = result.mappings().all()
+    return [_budget_row_to_dict(r) for r in rows]
+
+
+async def upsert_agent_budget(
+    agent_id: str,
+    *,
+    tokens_per_day: int,
+    tokens_per_month: int,
+    enabled: bool = True,
+    updated_by: str | None = None,
+) -> None:
+    """Insert or replace a per-agent token budget."""
+    ts = datetime.now(timezone.utc).isoformat()
+    async with get_db() as conn:
+        await conn.execute(
+            text(
+                """INSERT INTO agent_llm_budgets
+                       (agent_id, tokens_per_day, tokens_per_month,
+                        enabled, updated_at, updated_by)
+                   VALUES (:a, :d, :m, :en, :ts, :ub)
+                   ON CONFLICT(agent_id) DO UPDATE SET
+                       tokens_per_day = excluded.tokens_per_day,
+                       tokens_per_month = excluded.tokens_per_month,
+                       enabled = excluded.enabled,
+                       updated_at = excluded.updated_at,
+                       updated_by = excluded.updated_by"""
+            ),
+            {
+                "a": agent_id,
+                "d": max(0, int(tokens_per_day)),
+                "m": max(0, int(tokens_per_month)),
+                "en": enabled,
+                "ts": ts,
+                "ub": updated_by,
+            },
+        )
+
+
+async def delete_agent_budget(agent_id: str) -> None:
+    """Remove a per-agent budget (falls back to the global default)."""
+    async with get_db() as conn:
+        await conn.execute(
+            text("DELETE FROM agent_llm_budgets WHERE agent_id = :a"),
+            {"a": agent_id},
+        )
+
+
 async def list_user_principals() -> list[dict]:
     """List user principals registered on this Mastio.
 

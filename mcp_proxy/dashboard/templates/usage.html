@@ -124,5 +124,90 @@
         </div>
     </div>
 
+    <!-- Per-agent budgets -->
+    <div class="mb-4 mt-10 pt-8 border-t border-gray-800/60">
+        <h3 class="text-[11px] font-heading uppercase tracking-[0.2em] text-gray-500 mb-1">Per-agent budgets</h3>
+        <p class="text-xs text-gray-600 mb-4">
+            Cumulative token ceiling per calendar UTC day / month. <span class="font-mono">0</span> = no ceiling for that period.
+            An exhausted budget returns <span class="font-mono">429</span> before the call reaches the provider, recorded in the audit chain.
+            Global default:
+            <span class="font-mono text-gray-400">{{ "{:,}".format(default_tokens_per_day) }}/day</span>,
+            <span class="font-mono text-gray-400">{{ "{:,}".format(default_tokens_per_month) }}/month</span>
+            (applies when no enabled per-agent row exists).
+        </p>
+
+        {% if saved == 'budget' %}
+        <div class="mb-4 px-4 py-2 border border-accent-400/40 bg-accent-400/5 rounded-md text-xs text-accent-400">Budget saved.</div>
+        {% elif saved == 'budget-removed' %}
+        <div class="mb-4 px-4 py-2 border border-gray-700/60 bg-gray-800/20 rounded-md text-xs text-gray-400">Budget removed.</div>
+        {% endif %}
+
+        <!-- Set / update a budget -->
+        <form method="post" action="/proxy/usage/budget/save" class="flex flex-wrap items-end gap-3 mb-5">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="flex flex-col gap-1">
+                <label class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">Agent</label>
+                <input list="usage-agent-ids" name="agent_id" required placeholder="org::agent"
+                       class="bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-xs text-gray-300 font-mono w-64" autocomplete="off">
+                <datalist id="usage-agent-ids">
+                    {% for aid in agent_ids %}<option value="{{ aid }}">{% endfor %}
+                </datalist>
+            </div>
+            <div class="flex flex-col gap-1">
+                <label class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">Tokens / day</label>
+                <input type="number" name="tokens_per_day" min="0" value="0"
+                       class="bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-xs text-gray-300 font-mono w-32">
+            </div>
+            <div class="flex flex-col gap-1">
+                <label class="text-[10px] font-heading uppercase tracking-[0.2em] text-gray-600">Tokens / month</label>
+                <input type="number" name="tokens_per_month" min="0" value="0"
+                       class="bg-surface-950 border border-gray-700/60 rounded px-3 py-2 text-xs text-gray-300 font-mono w-32">
+            </div>
+            <label class="flex items-center gap-2 text-xs text-gray-400 pb-2">
+                <input type="checkbox" name="enabled" checked class="accent-accent-400"> Enabled
+            </label>
+            <button type="submit"
+                    class="px-4 py-2 text-xs font-medium uppercase tracking-wider border border-accent-400/40 text-accent-400 bg-accent-400/5 rounded hover:bg-accent-400/15 transition-colors">
+                Save budget
+            </button>
+        </form>
+
+        <!-- Existing budgets -->
+        <div class="border border-gray-800/60 rounded-md overflow-hidden">
+            <table class="w-full text-xs">
+                <thead class="bg-surface-900/60 text-gray-600">
+                    <tr class="text-left uppercase tracking-wider text-[10px]">
+                        <th class="px-4 py-2.5 font-heading">Agent</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Tokens / day</th>
+                        <th class="px-4 py-2.5 font-heading text-right">Tokens / month</th>
+                        <th class="px-4 py-2.5 font-heading text-center">Status</th>
+                        <th class="px-4 py-2.5 font-heading"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/50">
+                    {% for b in budgets %}
+                    <tr class="hover:bg-gray-800/20">
+                        <td class="px-4 py-2.5 font-mono text-gray-200">{{ b.agent_id }}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-300 text-right">{% if b.tokens_per_day %}{{ "{:,}".format(b.tokens_per_day) }}{% else %}<span class="text-gray-700">∞</span>{% endif %}</td>
+                        <td class="px-4 py-2.5 font-mono text-gray-300 text-right">{% if b.tokens_per_month %}{{ "{:,}".format(b.tokens_per_month) }}{% else %}<span class="text-gray-700">∞</span>{% endif %}</td>
+                        <td class="px-4 py-2.5 text-center">
+                            {% if b.enabled %}<span class="text-accent-400">enabled</span>{% else %}<span class="text-gray-600">disabled</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-2.5 text-right">
+                            <form method="post" action="/proxy/usage/budget/delete" onsubmit="return confirm('Remove budget for {{ b.agent_id }}?');" class="inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="agent_id" value="{{ b.agent_id }}">
+                                <button type="submit" class="text-[11px] uppercase tracking-wider text-gray-500 hover:text-red-400 transition-colors">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="px-4 py-6 text-center text-gray-600">No per-agent budgets — the global default applies to every agent.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
 </div>
 {% endblock %}

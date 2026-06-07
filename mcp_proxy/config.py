@@ -232,6 +232,18 @@ class ProxySettings(BaseSettings):
     # deployment via MCP_PROXY_LLM_TOKENS_PER_MINUTE.
     llm_tokens_per_minute: int = 100_000
 
+    # Per-agent cumulative token budget over the calendar UTC day / month.
+    # These are the GLOBAL defaults; a per-agent override lives in the
+    # ``agent_llm_budgets`` table (migration 0046) and wins when enabled.
+    # ``0`` means "no ceiling for that period" — the default, so the budget
+    # path is a no-op until an operator sets a ceiling. The running total is
+    # a Redis counter (``mcp_proxy.egress.budget``) seeded from the audit
+    # chain; an exhausted budget → 429 ``daily_budget_exceeded`` /
+    # ``monthly_budget_exceeded`` before the request reaches the provider.
+    # Tune via MCP_PROXY_LLM_TOKENS_PER_DAY / MCP_PROXY_LLM_TOKENS_PER_MONTH.
+    llm_tokens_per_day: int = 0
+    llm_tokens_per_month: int = 0
+
     # Shared secret the proxy uses to verify the X-ATN-Signature HMAC
     # on inbound /pdp/policy webhook calls (audit 2026-04-30 lane 3 H3).
     # When set, every POST to /pdp/policy must carry a valid
