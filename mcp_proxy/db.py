@@ -2623,6 +2623,28 @@ async def mint_user_api_token(
             "expires_at and no_expiry are mutually exclusive; pass an "
             "explicit expiry OR opt out of the default TTL, not both",
         )
+    if expires_at is not None:
+        # Crypto-review F-B-15 follow-up: the expiry filter at verify
+        # time is a string comparison against ``datetime.now(UTC)
+        # .isoformat()``, so a non-ISO or non-UTC-normalised value
+        # silently breaks it — a lexicographically high garbage string
+        # would make the token de-facto eternal without the explicit
+        # ``no_expiry`` opt-in. Parse, require a timezone, normalise
+        # to the same UTC isoformat() shape the filter compares with.
+        try:
+            parsed_expiry = datetime.fromisoformat(expires_at)
+        except ValueError as exc:
+            raise ValueError(
+                f"expires_at must be an ISO-8601 timestamp; got "
+                f"{expires_at!r}",
+            ) from exc
+        if parsed_expiry.tzinfo is None:
+            raise ValueError(
+                "expires_at must carry an explicit timezone offset "
+                "(e.g. ...T00:00:00+00:00 or Z); naive timestamps "
+                "compare unsoundly against the UTC verify filter",
+            )
+        expires_at = parsed_expiry.astimezone(timezone.utc).isoformat()
 
     # Audit Wave A C3 (2026-05-11) — pre-fix the mint accepted ANY
     # ``principal_id``, including foreign-org or non-existent values.

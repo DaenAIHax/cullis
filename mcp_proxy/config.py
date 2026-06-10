@@ -9,7 +9,7 @@ import os
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _log = logging.getLogger("mcp_proxy.startup")
@@ -640,8 +640,10 @@ class ProxySettings(BaseSettings):
     # 0 disables the default (mint-time "never", pre-F-B-15 legacy
     # behaviour); explicit no-expiry per token remains available via
     # ``expires_in_days=0`` on the admin mint API. Existing rows are
-    # never touched — this only shapes new mints.
-    user_api_token_default_ttl_days: int = 90
+    # never touched — this only shapes new mints. ``ge=0`` so an
+    # operator typo (negative value) crashes the boot loudly instead
+    # of silently restoring the legacy never-expire default.
+    user_api_token_default_ttl_days: int = Field(default=90, ge=0)
 
     # ADR-032 Layer 2 — Connector OIDC login session TTL in seconds.
     # Default 1h aligns with ADR-032 decision D (banking-grade idle).

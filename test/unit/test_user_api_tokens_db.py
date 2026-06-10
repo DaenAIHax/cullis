@@ -236,6 +236,43 @@ async def test_mint_explicit_expires_at_passes_verbatim(fresh_db):
     assert minted["expires_at"] == future
 
 
+async def test_mint_rejects_non_iso_expires_at(fresh_db):
+    """Garbage expiry strings would compare lexicographically against
+    the UTC now() filter and could make a token de-facto eternal —
+    refused at mint instead (crypto-review F-B-15 follow-up)."""
+    for bad in ("zz-not-a-date", "", "9999"):
+        with pytest.raises(ValueError):
+            await mint_user_api_token(
+                principal_id="acme::user::alice",
+                label=f"bad-expiry-{bad or 'empty'}",
+                created_by="acme::admin",
+                expires_at=bad,
+            )
+
+
+async def test_mint_rejects_naive_expires_at(fresh_db):
+    """Timezone-naive expiry compares unsoundly vs the UTC filter."""
+    with pytest.raises(ValueError, match="timezone"):
+        await mint_user_api_token(
+            principal_id="acme::user::alice",
+            label="naive-expiry",
+            created_by="acme::admin",
+            expires_at="2027-01-01T00:00:00",
+        )
+
+
+async def test_mint_normalises_offset_expires_at_to_utc(fresh_db):
+    """A non-UTC offset is accepted but normalised, so the stored
+    string compares correctly against datetime.now(UTC).isoformat()."""
+    minted = await mint_user_api_token(
+        principal_id="acme::user::alice",
+        label="tokyo-expiry",
+        created_by="acme::admin",
+        expires_at="2027-01-01T09:00:00+09:00",
+    )
+    assert minted["expires_at"] == "2027-01-01T00:00:00+00:00"
+
+
 async def test_mint_expires_at_and_no_expiry_conflict(fresh_db):
     """Passing both an explicit expiry and the opt-out is a caller bug."""
     future = (
