@@ -64,6 +64,10 @@ def _prod_settings(**overrides) -> ProxySettings:
         # require Redis at first use. Pin a Redis URL so the SystemExit in
         # these TLS-focused tests isolates the knob under test.
         redis_url="redis://localhost:6379/0",
+        # F-B-15 — prod refuses the culk_ plain-Bearer surface without
+        # an explicit opt-in; disable it so the SystemExit in these
+        # TLS-focused tests isolates the knob under test.
+        user_api_tokens_enabled=False,
     )
     base.update(overrides)
     return ProxySettings(**base)

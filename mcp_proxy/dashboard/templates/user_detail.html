@@ -295,7 +295,11 @@
                     </label>
                     <input type="date" name="expires_at"
                            class="bg-surface-950 border border-gray-800 rounded px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-[#00e5c7]">
-                    <p class="text-[10px] text-gray-600 mt-1">Empty = never expire. Rotate via Revoke + Create.</p>
+                    <p class="text-[10px] text-gray-600 mt-1">Empty = default 90-day TTL. Rotate via Revoke + Create.</p>
+                    <label class="inline-flex items-center gap-1.5 cursor-pointer mt-2 text-xs text-gray-300">
+                        <input type="checkbox" name="never_expires" value="1" class="accent-[#00e5c7]">
+                        <span>Never expires (explicit opt-out of the default TTL)</span>
+                    </label>
                 </div>
 
                 <div>

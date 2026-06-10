@@ -177,6 +177,10 @@ async def get_agent_from_dpop_client_cert(request: Request) -> InternalAgent:
          resolved user principal is returned without going through
          cert + DPoP. The Bearer token IS the proof of identity for
          OpenAI-compat clients (LibreChat, Cursor, Cherry Studio, ...).
+         Gated by ``settings.user_api_tokens_enabled`` (F-B-15): when
+         off the resolver declines and the chain proceeds to step 1;
+         production refuses boot with the surface on unless the
+         operator opts in via MCP_PROXY_USER_API_TOKENS_INSECURE_OK.
       1. ADR-012 LOCAL_TOKEN short-circuit (cross-org Bearer JWT).
       2. ``get_agent_from_client_cert`` — identity from TLS-layer cert,
          pinned against ``internal_agents.cert_pem``, rate-limited.

@@ -24,7 +24,7 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
 
@@ -2582,6 +2582,7 @@ async def mint_user_api_token(
     scope_providers: list[str] | None = None,
     scope_paths: list[str] | None = None,
     expires_at: str | None = None,
+    no_expiry: bool = False,
 ) -> dict:
     """Mint a new API token for a user principal.
 
@@ -2590,6 +2591,12 @@ async def mint_user_api_token(
     reads (``get_user_api_token``, ``list_user_api_tokens``) return only
     metadata + ``token_last4``.
 
+    This is the single choke point every mint path goes through (admin
+    API, dashboard, any future self-service route), so the F-B-15
+    default-TTL policy lives here: a caller that wants a non-expiring
+    token must say so explicitly via ``no_expiry=True``. Any new mint
+    route must also honour ``settings.user_api_tokens_enabled``.
+
     Arguments:
         principal_id: ``local_user_principals.principal_id`` (user::name)
         label: operator-visible name, e.g. ``"Cursor laptop daniele"``
@@ -2597,7 +2604,13 @@ async def mint_user_api_token(
         scope_providers: empty list = no restriction; ``["anthropic"]`` =
             only that provider. Stored verbatim, not enforced here.
         scope_paths: defaults to ``["/v1/*"]``. Stored verbatim.
-        expires_at: ISO-8601 UTC, or ``None`` for no expiry.
+        expires_at: ISO-8601 UTC. ``None`` without ``no_expiry`` applies
+            the configured default TTL
+            (``settings.user_api_token_default_ttl_days``, 90 days;
+            0 restores the legacy mint-time "never").
+        no_expiry: explicit opt-out of the default TTL (ADR-027 claim
+            alignment — "never expire" is a deliberate choice, not the
+            silent default). Mutually exclusive with ``expires_at``.
     """
     if not principal_id:
         raise ValueError("principal_id is required")
@@ -2605,6 +2618,11 @@ async def mint_user_api_token(
         raise ValueError("label is required")
     if not created_by:
         raise ValueError("created_by is required")
+    if expires_at is not None and no_expiry:
+        raise ValueError(
+            "expires_at and no_expiry are mutually exclusive; pass an "
+            "explicit expiry OR opt out of the default TTL, not both",
+        )
 
     # Audit Wave A C3 (2026-05-11) — pre-fix the mint accepted ANY
     # ``principal_id``, including foreign-org or non-existent values.
@@ -2646,6 +2664,17 @@ async def mint_user_api_token(
             "POST /v1/admin/users or via Frontdesk SSO before minting "
             "tokens for it",
         )
+
+    # F-B-15 — apply the default TTL when the caller neither set an
+    # explicit expiry nor explicitly opted out. ADR-027's threat model
+    # promises a 90-day default; minting expires_at=NULL silently
+    # contradicted it. Existing rows are untouched (mint-time only).
+    if expires_at is None and not no_expiry:
+        ttl_days = settings.user_api_token_default_ttl_days
+        if ttl_days > 0:
+            expires_at = (
+                datetime.now(timezone.utc) + timedelta(days=ttl_days)
+            ).isoformat()
 
     plaintext = _new_api_token_plaintext()
     token_hash = _hash_api_token(plaintext)
