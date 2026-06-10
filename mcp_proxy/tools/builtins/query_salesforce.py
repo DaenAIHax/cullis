@@ -39,8 +39,8 @@ async def query_salesforce(ctx: ToolContext) -> dict:
 
     The demo returns static mock data.
     """
-    soql = ctx.parameters.get("soql", "")
-    # TODO: Replace with real Salesforce OAuth + SOQL query
+    # TODO: Replace with real Salesforce OAuth + SOQL query executing
+    # ctx.parameters["soql"]; the demo returns static mock data.
     return {
         "totalSize": 1,
         "done": True,

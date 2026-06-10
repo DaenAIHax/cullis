@@ -678,7 +678,7 @@ async def users_set_capabilities(principal_id: str, request: Request):
         )).first()
         if row is None:
             return RedirectResponse(
-                f"/proxy/users?error=user+not+found",
+                "/proxy/users?error=user+not+found",
                 status_code=303,
             )
         await conn.execute(

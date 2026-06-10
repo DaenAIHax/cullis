@@ -93,6 +93,21 @@ cullis-proxy = "mcp_proxy.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["cullis_sdk"]
 
+[tool.ruff]
+# The CI gate (.github/workflows/ci.yml job "ruff") runs exactly
+# `ruff check mcp_proxy cullis_sdk scripts test`. Ruff does not run on
+# every dev machine (NixOS needs nix-shell for libstdc++), so the CI
+# job is the authoritative lint gate — keep this config in sync with it.
+
+[tool.ruff.lint]
+# Default rule set (E4/E7/E9 + F) minus E402: the codebase deliberately
+# places imports mid-file in two load-bearing patterns — the router
+# mounts in mcp_proxy/main.py (import order IS the mount order) and the
+# lazy per-function imports that break circular dependencies between
+# db/config/auth. Flagging those 65 sites would invite mechanical
+# "fixes" that reintroduce import cycles.
+ignore = ["E402"]
+
 [tool.pytest.ini_options]
 # Aligns the public test surface with the suite the repatriated core
 # tests were written under (cullis-enterprise uses asyncio_mode=auto).

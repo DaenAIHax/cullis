@@ -37,7 +37,6 @@ Design notes captured from planning:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Iterable
 
@@ -50,7 +49,6 @@ from starlette.responses import RedirectResponse
 from mcp_proxy.dashboard._template_env import build_templates
 
 from mcp_proxy.dashboard.session import (
-    ProxyDashboardSession,
     require_login,
     verify_csrf,
 )

@@ -28,7 +28,6 @@ os.environ.setdefault("ALLOWED_ORIGINS", "")
 os.environ.setdefault("ADMIN_SECRET", "test-secret-not-default")
 os.environ.setdefault("SKIP_ALEMBIC", "1")
 
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest

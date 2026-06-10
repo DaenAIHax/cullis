@@ -42,11 +42,9 @@ the shared secret only when a deploy ever has to publish :9100.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import logging
-import re
 import urllib.parse
 from typing import Optional
 

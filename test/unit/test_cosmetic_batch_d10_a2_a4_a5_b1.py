@@ -44,7 +44,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mcp_proxy.config import get_settings
-from mcp_proxy.db import dispose_db, get_db, init_db
+from mcp_proxy.db import dispose_db, init_db
 from mcp_proxy.enrollment.router import router as enrollment_router
 
 

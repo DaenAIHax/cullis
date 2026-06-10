@@ -16,9 +16,7 @@ the docstring; these tests pin:
 from __future__ import annotations
 
 import base64
-from unittest.mock import MagicMock
 
-import pytest
 
 from mcp_proxy.policy import try_rego_decision
 from mcp_proxy.policy.rego_engine import RegoEvalError

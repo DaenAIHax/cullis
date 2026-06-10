@@ -30,20 +30,9 @@ in follow-up PRs of this sprint.
 import logging
 import pathlib
 
-import httpx
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from starlette.responses import RedirectResponse
+from fastapi import APIRouter
 
-from mcp_proxy.dashboard.session import (
-    get_session,
-    require_login,
-    verify_csrf,
-)
-from mcp_proxy.admin.approval_hook import (
-    maybe_intercept_for_approval,
-)
 
 _log = logging.getLogger("mcp_proxy.dashboard")
 

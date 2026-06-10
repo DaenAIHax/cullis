@@ -59,7 +59,9 @@ class BrokerBridge:
         countersign_fn = None
         if self._agent_manager.mastio_loaded:
             mgr = self._agent_manager
-            countersign_fn = lambda assertion: mgr.countersign(assertion.encode())
+
+            def countersign_fn(assertion: str) -> bytes:
+                return mgr.countersign(assertion.encode())
 
         client = CullisClient(self._broker_url, verify_tls=self._verify_tls)
         # login_from_pem is synchronous in the SDK — run in thread to avoid blocking

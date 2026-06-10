@@ -175,7 +175,7 @@ def main() -> int:
                         help="optional path to write a Markdown report")
     args = parser.parse_args()
 
-    print(f"=== Cullis Rego eval bench ===")
+    print("=== Cullis Rego eval bench ===")
     print(f"Source: in-script representative policy "
           f"({len(_REGO_SOURCE.splitlines())} lines)")
     print(f"Iterations: {args.iterations} (+ {args.warmup} warmup, discarded)")

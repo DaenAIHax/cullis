@@ -13,7 +13,6 @@ Public API:
 Every validation failure raises HTTPException 401.
 The DPoP JTI is consumed only after all checks pass — no partial state on failure.
 """
-import asyncio
 import base64
 import hashlib
 import hmac as _hmac

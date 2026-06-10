@@ -540,7 +540,7 @@ class _MessagingLegacyMixin:
                     decrypted = self.decrypt_payload(m, session_id=session_id)
                     result.append(InboxMessage.from_dict(decrypted))
                 return result
-            except httpx.HTTPStatusError as exc:
+            except httpx.HTTPStatusError:
                 # Propagate 409 (session closed) so callers can handle it
                 raise
             except (httpx.ConnectError, httpx.TimeoutException):

@@ -28,7 +28,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient

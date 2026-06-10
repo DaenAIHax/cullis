@@ -2140,7 +2140,7 @@ async def pdp_policy(request: Request):
     blocked = rules.get("blocked_agents", [])
     if initiator in blocked or target in blocked:
         decision = "deny"
-        reason = f"Agent blocked by policy"
+        reason = "Agent blocked by policy"
 
     allowed_orgs = rules.get("allowed_orgs", [])
     if allowed_orgs:

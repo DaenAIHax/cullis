@@ -30,7 +30,6 @@ os.environ.setdefault("SKIP_ALEMBIC", "1")
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio

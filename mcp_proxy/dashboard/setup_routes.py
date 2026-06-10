@@ -27,6 +27,8 @@ import asyncio as _asyncio
 import logging
 import pathlib
 
+import httpx
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -35,7 +37,6 @@ from starlette.responses import RedirectResponse
 from mcp_proxy.dashboard._helpers import (
     _ctx,
     _enforce_safe_outbound_url,
-    _load_display_name,
     _store_ca_key_in_vault,
     _test_vault_connectivity,
     generate_org_ca,

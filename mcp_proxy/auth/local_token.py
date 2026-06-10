@@ -23,7 +23,6 @@ from __future__ import annotations
 import base64
 import hmac
 import logging
-import time
 from typing import Any
 
 import jwt as jose_jwt
@@ -35,7 +34,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from mcp_proxy.auth.client_cert import _identity_from_cert
-from mcp_proxy.auth.local_issuer import LOCAL_AUDIENCE, LOCAL_SCOPE, LocalIssuer
+from mcp_proxy.auth.local_issuer import LOCAL_SCOPE, LocalIssuer
 from mcp_proxy.db import get_config
 
 _log = logging.getLogger("mcp_proxy.auth.local_token")

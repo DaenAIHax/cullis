@@ -36,7 +36,11 @@ from mcp_proxy.egress.adapters.base import DispatchContext
 
 if TYPE_CHECKING:
     from mcp_proxy.config import ProxySettings as Settings
-    from mcp_proxy.egress.ai_gateway import GatewayResult, StreamingDispatch
+    from mcp_proxy.egress.ai_gateway import (
+        GatewayError,
+        GatewayResult,
+        StreamingDispatch,
+    )
     from mcp_proxy.egress.schemas import ChatCompletionRequest
 
 
@@ -147,7 +151,6 @@ def _translate_messages(
     """
     system_chunks: list[dict[str, Any]] = []
     out: list[dict[str, Any]] = []
-    pending_assistant_tool_calls: list[dict[str, Any]] = []
 
     def _user_content_blocks(msg: dict[str, Any]) -> list[dict[str, Any]]:
         c = msg.get("content")
