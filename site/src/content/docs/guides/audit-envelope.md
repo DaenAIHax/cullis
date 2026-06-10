@@ -169,7 +169,7 @@ curl -s -H "X-Admin-Secret: $MASTIO_ADMIN_SECRET" \
 
 You should see your three strings under `_cullis_audit` inside the result. From there, the dashboard at `/proxy/audit` renders the card with the new header.
 
-For offline verification (auditor handed an NDJSON export), the standalone verifier preserves the envelope verbatim: `python scripts/cullis-audit-verify.py --chain <export.ndjson>` walks the chain and the per-row JSON keeps `_cullis_audit` for your tooling to consume.
+For offline verification (auditor handed an NDJSON export), the standalone verifier preserves the envelope verbatim: `python scripts/cullis-audit-verify.py --bundle <export.ndjson>` walks the chain and the per-row JSON keeps `_cullis_audit` for your tooling to consume. (`--chain` is a different flag — it forces the chain *schema*, see [Audit export](../operate/audit-export).)
 
 ## What's next
 
