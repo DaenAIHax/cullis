@@ -399,7 +399,7 @@ async def fetch_ollama_models(api_base: str, *, timeout_s: float = 2.0) -> list[
         return []
     from mcp_proxy.utils.url_safety import (
         UnsafeUrlError,
-        assert_safe_outbound_url,
+        assert_safe_outbound_url_async,
     )
     from mcp_proxy.config import get_settings
 
@@ -407,7 +407,10 @@ async def fetch_ollama_models(api_base: str, *, timeout_s: float = 2.0) -> list[
         getattr(get_settings(), "policy_webhook_allow_private_ips", False)
     )
     try:
-        assert_safe_outbound_url(api_base, allow_private=allow_private)
+        # Async variant — DNS resolve off the event loop (P2).
+        await assert_safe_outbound_url_async(
+            api_base, allow_private=allow_private,
+        )
     except UnsafeUrlError as exc:
         _log.warning(
             "ollama tag fetch refused unsafe api_base %s: %s", api_base, exc,
