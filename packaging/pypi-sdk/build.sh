@@ -30,14 +30,16 @@ find "${STAGE_DIR}/cullis_sdk" -type d -name __pycache__ -exec rm -rf {} +
 # Package readme for PyPI (lives next to pyproject.toml).
 cp -f "${REPO_ROOT}/cullis_sdk/README.md" "${STAGE_DIR}/README_PKG.md"
 
-# License + notices, required by FSL-1.1-Apache-2.0 distribution terms.
-# The SDK's per-file LICENSE in cullis_sdk/LICENSE already covers
-# the package itself; we additionally ship the repo-root copies so the
-# wheel is self-contained for distributors who only ever see the
-# installed package.
-cp -f "${REPO_ROOT}/LICENSE"            "${STAGE_DIR}/LICENSE"
-cp -f "${REPO_ROOT}/LICENSE-APACHE-2.0" "${STAGE_DIR}/LICENSE-APACHE-2.0"
+# License + notices. The wheel contains ONLY cullis_sdk/, which is
+# Apache-2.0 (see NOTICE) — so the wheel's top-level LICENSE must be
+# the SDK's own Apache text, NOT the repo-root FSL one. Shipping the
+# FSL text as LICENSE here made license scanners (and procurement)
+# read the package as FSL-licensed (2026-06-10 review, P0). NOTICE is
+# kept for the multi-license context of the source repo.
+cp -f "${REPO_ROOT}/cullis_sdk/LICENSE" "${STAGE_DIR}/LICENSE"
 cp -f "${REPO_ROOT}/NOTICE"             "${STAGE_DIR}/NOTICE"
+# Stale staged copy from builds prior to the license fix.
+rm -f "${STAGE_DIR}/LICENSE-APACHE-2.0"
 
 # CHANGELOG.md is authored in-place at ${STAGE_DIR}/CHANGELOG.md (SDK-
 # specific PyPI release history, distinct from the monorepo CHANGELOG

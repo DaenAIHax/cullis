@@ -28,13 +28,16 @@ Methods moved (movement only — byte-perfect):
 * ``from_spiffe_workload_api`` — legacy direct-to-Court SPIFFE auth;
   emits ``DeprecationWarning`` (ADR-011 sunset path).
 
-Every ``cls.__new__(cls)`` factory replicates the full ``__init__``
-attribute surface manually (``_pubkey_cache = {}``, ``_dpop_nonce =
-None``, ``_signing_key_pem = None``, ``server_role = None``, …) —
-preserved byte-identical here. See memory feedback
-``sdk_factory_init_skip``: any drift between the factories and
-``__init__`` re-introduces the ``AttributeError`` class of bugs the
-existing duplication was designed to prevent.
+Every ``cls.__new__(cls)`` factory calls
+``instance._init_common()`` first (the single source of truth for the
+default attribute surface, defined on ``CullisClient``) and then
+overwrites only the attributes it derives from its inputs. The
+factories used to replicate the full ``__init__`` surface by hand;
+that duplication is what kept re-introducing the ``AttributeError``
+class of bugs (memory feedback ``sdk_factory_init_skip``; last hit:
+``_user_session_lock`` missing from all factories, 2026-06-10 review).
+Any NEW default attribute belongs in ``_init_common``, never inline
+in a factory.
 
 The module-level helpers ``_check_insecure_tls`` and
 ``_build_proxy_http_client`` live in :mod:`cullis_sdk.client` (kept
@@ -174,6 +177,7 @@ class _EnrollmentMixin:
         # handshake — the caller is responsible for arranging cert+key
         # delivery (out-of-band, separate enrollment endpoint, etc.).
         instance = cls.__new__(cls)
+        instance._init_common()
         instance.base = config["proxy_url"].rstrip("/")
         instance._verify_tls = verify_tls
         # H10: thread the pinned Org CA into the long-lived runtime
@@ -184,25 +188,13 @@ class _EnrollmentMixin:
             timeout=timeout,
             ca_chain_path=ca_chain_path,
         )
-        instance.token = None
         instance._label = config["agent_id"]
-        instance._signing_key_pem = None
         # H7 audit — see from_identity_dir for the rationale.
         instance._ca_chain_path = Path(ca_chain_path) if ca_chain_path else None
-        instance._pubkey_cache = {}
-        instance._client_seq = {}
-        instance._dpop_privkey = None
-        instance._dpop_pubkey_jwk = None
-        instance._dpop_nonce = None
-        instance._egress_dpop_key = None
-        instance._egress_dpop_nonce = None
         instance._proxy_agent_id = config["agent_id"]
         instance._proxy_org_id = config["org_id"]
         # Dogfood Finding #9 — proxy-bound: see __init__.
         instance._use_egress_for_sessions = True
-        # Mirror __init__: callers may attach the on-disk identity bundle
-        # afterwards (see ``canonical_recipient`` in cullis_connector).
-        instance.identity = None
         # Bug #1 fix — fault in login on the first authed call so
         # ``list_mcp_tools`` / ``call_mcp_tool`` / ``send_oneshot`` /
         # ``chat_completion`` "just work" after ``from_enrollment``.
@@ -291,6 +283,7 @@ class _EnrollmentMixin:
         from cullis_sdk.client import _build_proxy_http_client
 
         instance = cls.__new__(cls)
+        instance._init_common()
         instance.base = mastio_url.rstrip("/")
         instance._verify_tls = verify_tls
 
@@ -350,9 +343,7 @@ class _EnrollmentMixin:
             key_path=key_path,
             ca_chain_path=ca_chain_path,
         )
-        instance.token = None
         instance._label = agent_id or "(client-cert-auth)"
-        instance._signing_key_pem = None
         # ADR-014 + Bug #1 follow-up: ``key_path`` is the agent's TLS
         # client cert private key — it IS the signing key under the
         # "TLS cert is the credential" model. Lifting it into
@@ -375,16 +366,9 @@ class _EnrollmentMixin:
                 f"is required for TLS mTLS handshake."
             ) from exc
         # H7 audit — share the operator-pinned Org CA with the sender-cert
-        # verifier. Without this attribute ``decrypt_oneshot`` crashes with
-        # AttributeError under the cls.__new__(cls) factory route.
+        # verifier, so ``decrypt_oneshot`` chain-validates against the
+        # operator pin rather than any syntactically valid cert.
         instance._ca_chain_path = Path(ca_chain_path) if ca_chain_path else None
-        instance._pubkey_cache = {}
-        instance._client_seq = {}
-        instance._dpop_privkey = None
-        instance._dpop_pubkey_jwk = None
-        instance._dpop_nonce = None
-        instance._egress_dpop_key = None
-        instance._egress_dpop_nonce = None
         instance._proxy_agent_id = agent_id
         instance._proxy_org_id = org_id
         # Bug #1 follow-up #2: ``login_via_proxy_with_local_key`` also
@@ -452,11 +436,6 @@ class _EnrollmentMixin:
                 )
         # Dogfood Finding #9 — proxy-bound: see __init__.
         instance._use_egress_for_sessions = True
-        # ``_update_nonce`` reads ``self.server_role`` on every response;
-        # since we skip ``__init__`` above (the ``cls.__new__(cls)`` route
-        # that other factories also use), the attribute must exist.
-        instance.server_role = None
-        instance.identity = None
         # Bug #1 fix — fault in login on the first authed call. See the
         # same flag set in ``from_enrollment`` and the lazy branch in
         # ``_AuthMixin._authed_request``. ADR-014 mTLS handshake remains
@@ -921,6 +900,7 @@ class _EnrollmentMixin:
                 key_path_runtime = persist_dir / "key.pem"
 
         instance = cls.__new__(cls)
+        instance._init_common()
         instance.base = mastio_url.rstrip("/")
         instance._verify_tls = verify_tls
         instance._http = _build_proxy_http_client(
@@ -930,24 +910,12 @@ class _EnrollmentMixin:
             key_path=key_path_runtime,
             ca_chain_path=ca_chain_path,
         )
-        instance.token = None
         instance._label = agent_id
-        instance._signing_key_pem = None
-        # H7 audit — see from_identity_dir for the rationale.
-        instance._ca_chain_path = None
-        instance._pubkey_cache = {}
-        instance._client_seq = {}
-        instance._dpop_privkey = None
-        instance._dpop_pubkey_jwk = None
-        instance._dpop_nonce = None
         instance._egress_dpop_key = dpop_key
-        instance._egress_dpop_nonce = None
         instance._proxy_agent_id = agent_id
         instance._proxy_org_id = org_id
         # Dogfood Finding #9 — proxy-bound: see __init__.
         instance._use_egress_for_sessions = True
-        instance.server_role = None
-        instance.identity = None
 
         log("sdk", f"Enrolled {agent_id} via {endpoint_path}")
         return instance
@@ -1059,11 +1027,10 @@ class _EnrollmentMixin:
             verify_tls = site_url.startswith("https://")
 
         instance = cls.__new__(cls)
+        instance._init_common()
         instance.base = site_url.rstrip("/")
         instance._verify_tls = verify_tls
-        instance.token = None
         instance._label = agent_id
-        instance.server_role = None
         # Load the on-disk signing key + cert eagerly so ``decrypt_oneshot``,
         # ``send_oneshot``, and ``login_via_proxy_with_local_key`` all
         # work out of the box without every caller having to read
@@ -1106,22 +1073,12 @@ class _EnrollmentMixin:
         # then chain-validate the sender's leaf cert against the
         # operator-confirmed CA, not just any syntactically valid cert.
         instance._ca_chain_path = _pinned_ca if _pinned_ca.exists() else None
-        instance._pubkey_cache = {}
-        instance._client_seq = {}
-        instance._dpop_privkey = None
-        instance._dpop_pubkey_jwk = None
-        instance._dpop_nonce = None
-        instance._egress_dpop_key = None
-        instance._egress_dpop_nonce = None
         instance._proxy_agent_id = agent_id
         instance._proxy_org_id = org_id
         # Dogfood Finding #9 — proxy-bound: route session ops through
         # /v1/egress/sessions* (handles intra-org locally, falls
         # through to broker bridge for cross-org).
         instance._use_egress_for_sessions = True
-        # Mirror __init__: callers may attach the on-disk identity bundle
-        # afterwards (see ``canonical_recipient`` in cullis_connector).
-        instance.identity = None
 
         # F-B-11 Phase 3c + 3d — load the DPoP keypair alongside the
         # rest of the Connector identity. Phase 3d (#181) has the
@@ -1602,11 +1559,10 @@ class _EnrollmentMixin:
             ca_path.write_text(ca_chain_pem)
 
         instance = cls.__new__(cls)
+        instance._init_common()
         instance.base = site_url.rstrip("/")
         instance._verify_tls = verify_tls
-        instance.token = None
         instance._label = agent_id
-        instance.server_role = None
         instance._signing_key_pem = key_pem
         instance._cert_pem = cert_pem
         instance._http = _build_proxy_http_client(
@@ -1617,17 +1573,9 @@ class _EnrollmentMixin:
             ca_chain_path=ca_path,
         )
         instance._ca_chain_path = ca_path
-        instance._pubkey_cache = {}
-        instance._client_seq = {}
-        instance._dpop_privkey = None
-        instance._dpop_pubkey_jwk = None
-        instance._dpop_nonce = None
-        instance._egress_dpop_key = None
-        instance._egress_dpop_nonce = None
         instance._proxy_agent_id = agent_id
         instance._proxy_org_id = org_id
         instance._use_egress_for_sessions = True
-        instance.identity = None
         # Track the temp dir so ``close()`` / ``__del__`` can wipe the
         # cert + key off disk. The temp files are mode 600 + key 600,
         # but the on-disk dwell-time still wants to be minimised.

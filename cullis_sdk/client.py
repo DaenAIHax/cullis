@@ -268,9 +268,30 @@ class CullisClient(_AiGatewayMixin, _AuthMixin, _DiscoveryMixin, _EnrollmentMixi
         timeout: float = 10.0,
     ) -> None:
         _check_insecure_tls(verify_tls)
+        self._init_common()
         self.base = broker_url.rstrip("/")
         self._verify_tls = verify_tls
         self._http = httpx.Client(timeout=timeout, verify=verify_tls)
+
+    def _init_common(self) -> None:
+        """Set the full default attribute surface of a client instance.
+
+        Single source of truth shared by ``__init__`` and every
+        ``cls.__new__(cls)`` factory in
+        :class:`cullis_sdk._client._enrollment._EnrollmentMixin`. The
+        factories used to replicate these assignments by hand, and every
+        attribute added to ``__init__`` but missed in one factory was a
+        latent ``AttributeError`` on that construction path (see memory
+        feedback ``sdk_factory_init_skip``; the 2026-06-10 review caught
+        ``_user_session_lock`` missing from ALL factories). Factories
+        call this first, then overwrite the handful of attributes they
+        derive from their inputs.
+
+        ``base`` / ``_verify_tls`` / ``_http`` are deliberately NOT
+        defaulted here: every construction path must set them
+        explicitly, and a path that forgets should fail loudly rather
+        than carry a half-built client.
+        """
         self.token: str | None = None
         self._label: str = "agent"
         self._signing_key_pem: str | None = None
@@ -373,6 +394,27 @@ class CullisClient(_AiGatewayMixin, _AuthMixin, _DiscoveryMixin, _EnrollmentMixi
         # together. Reader is lock-free (single attribute read under
         # the GIL) for the same hot-path reason.
         self._device_attestation: "dict | None" = None
+
+        # ── Factory-populated identity surface ─────────────────────
+        # Set by the proxy-bound factories (``from_identity_dir`` /
+        # ``from_connector`` / ``from_enrollment`` / ``_do_enroll`` /
+        # ``from_user_principal_pem``); ``None`` on a direct-broker
+        # client. Defaulted here so code reading them never has to
+        # know which construction path built the instance.
+        self._proxy_agent_id: str | None = None
+        self._proxy_org_id: str | None = None
+        # Leaf cert PEM (possibly ``leaf || Intermediate``) loaded from
+        # disk or handed in-memory; consumed by
+        # ``login_via_proxy_with_local_key`` and the oneshot crypto.
+        self._cert_pem: str | None = None
+        # Bug #1 fix — proxy-bound factories flip this so the first
+        # authed call faults in the right login method lazily. See
+        # ``_AuthMixin._authed_request``.
+        self._auto_login_pending: bool = False
+        # ADR-021 PR4c — per-process temp dir holding a user-principal
+        # cert + key; ``close()`` wipes it. Only
+        # ``from_user_principal_pem`` populates it.
+        self._user_principal_tmpdir: "str | None" = None
 
     def __enter__(self) -> CullisClient:
         return self
