@@ -26,6 +26,16 @@ from typing import Iterator
 
 import httpx
 
+# Default per-request timeout for the LLM chat path (seconds). The
+# client-wide httpx default is 10s — sized for control-plane calls
+# (login, tools/list, policy checks), not for a model spending half a
+# minute on a long completion. 2026-06-10 review P0: a non-trivial
+# Claude completion routinely exceeds 10s and surfaced as
+# ``httpx.ReadTimeout`` on the first serious chat. 60s matches the
+# budget ``providers_compat`` already uses for the same upstream.
+# Callers with longer generations override per call via ``timeout=``.
+LLM_CHAT_TIMEOUT_S = 60.0
+
 
 def _coerce_chat_request(request: dict | None, kwargs: dict) -> dict:
     """Normalise the dict-or-kwargs call shape used by
@@ -62,10 +72,21 @@ class _AiGatewayMixin:
 
     # ── ADR-017 — AI gateway egress ────────────────────────────────
     def chat_completion(
-        self, request: dict | None = None, **kwargs
+        self,
+        request: dict | None = None,
+        *,
+        timeout: float | None = None,
+        **kwargs,
     ) -> dict:
         """Forward an OpenAI-compatible chat completion to Mastio's
         ``/v1/llm/chat`` endpoint.
+
+        ``timeout`` overrides the per-request HTTP timeout in seconds
+        (default :data:`LLM_CHAT_TIMEOUT_S`, 60s — NOT the client-wide
+        10s, which is sized for control-plane calls and times out on
+        any non-trivial completion). It is a keyword-only parameter of
+        the method, never part of the request body, so it composes with
+        both calling conventions.
 
         Accepts two equivalent calling conventions, the historical
         dict-only form and the OpenAI / Anthropic SDK kwargs form::
@@ -97,17 +118,28 @@ class _AiGatewayMixin:
         (gateway upstream), 504 (timeout), 501 (not implemented).
         """
         request = _coerce_chat_request(request, kwargs)
-        resp = self._egress_http("post", "/v1/llm/chat", json=request)
+        resp = self._egress_http(
+            "post", "/v1/llm/chat", json=request,
+            timeout=LLM_CHAT_TIMEOUT_S if timeout is None else timeout,
+        )
         resp.raise_for_status()
         return resp.json()
 
     def chat_completion_stream(
-        self, request: dict | None = None, **kwargs
+        self,
+        request: dict | None = None,
+        *,
+        timeout: float | None = None,
+        **kwargs,
     ) -> Iterator[str]:
         """Streaming variant of :meth:`chat_completion`.
 
         Accepts the same dict-or-kwargs calling convention as
-        :meth:`chat_completion` (see that docstring for the rationale).
+        :meth:`chat_completion` (see that docstring for the rationale),
+        including the keyword-only ``timeout`` override (default
+        :data:`LLM_CHAT_TIMEOUT_S`). On the streaming path the read
+        timeout applies between chunks, not to the whole response, so
+        60s only trips when the upstream goes silent.
 
         Forces ``stream=True`` on the request and yields SSE frame
         strings exactly as they arrive from the Mastio, including
@@ -128,10 +160,16 @@ class _AiGatewayMixin:
         body["stream"] = True
         path = "/v1/llm/chat"
         url = f"{self.base}{path}"
+        effective_timeout = (
+            LLM_CHAT_TIMEOUT_S if timeout is None else timeout
+        )
 
         def _open():
             headers = self.proxy_headers("POST", url)
-            return self._http.stream("POST", url, headers=headers, json=body)
+            return self._http.stream(
+                "POST", url, headers=headers, json=body,
+                timeout=effective_timeout,
+            )
 
         cm = _open()
         resp = cm.__enter__()
