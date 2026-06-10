@@ -24,7 +24,10 @@ version = "0.2.2"
 description = "Python SDK for Cullis — federated agent-trust network. E2E-encrypted agent↔agent messaging, x509 mutual auth, DPoP-bound tokens."
 readme = "README_PKG.md"
 requires-python = ">=3.10"
-license = { text = "FSL-1.1-Apache-2.0" }
+# The SDK is Apache-2.0 (see cullis_sdk/LICENSE + repo NOTICE). Only
+# the Mastio (mcp_proxy/) is FSL-1.1-Apache-2.0 — that code is not in
+# this wheel.
+license = { text = "Apache-2.0" }
 authors = [
     { name = "Cullis Security", email = "hello@cullis.io" },
 ]
@@ -45,7 +48,7 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Software Development :: Libraries",
     "Topic :: System :: Networking",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
@@ -89,7 +92,6 @@ include = [
     "cullis_sdk/**/*.py",
     "cullis_sdk/py.typed",
     "LICENSE",
-    "LICENSE-APACHE-2.0",
     "NOTICE",
     "CHANGELOG.md",
     "README_PKG.md",
