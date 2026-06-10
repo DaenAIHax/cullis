@@ -36,6 +36,7 @@ Out of scope for PR-D
 """
 from __future__ import annotations
 
+import asyncio as _asyncio
 import json
 import logging
 import time
@@ -100,6 +101,10 @@ def _safe_api_base(creds: dict[str, str]) -> str:
     follows the existing ``policy_webhook_allow_private_ips`` knob so
     dev/sandbox stacks running Ollama on localhost / 192.168.0.0/16
     keep working.
+
+    Blocking (the SSRF check resolves DNS) — the async chat paths call
+    it via ``asyncio.to_thread`` so the resolve never stalls the event
+    loop (P2, 2026-06-10).
     """
     from mcp_proxy.config import get_settings
     from mcp_proxy.egress.ai_gateway import GatewayError
@@ -567,7 +572,7 @@ class OllamaAdapter:
         )
         from mcp_proxy.egress.schemas import ChatCompletionResponse
 
-        api_base = _safe_api_base(creds)
+        api_base = await _asyncio.to_thread(_safe_api_base, creds)
         body = req.model_dump(exclude_none=True)
         body.pop("stream", None)
         body.pop("stream_options", None)
@@ -669,7 +674,7 @@ class OllamaAdapter:
     ) -> "StreamingDispatch":
         from mcp_proxy.egress.ai_gateway import GatewayError, StreamingDispatch
 
-        api_base = _safe_api_base(creds)
+        api_base = await _asyncio.to_thread(_safe_api_base, creds)
         body = req.model_dump(exclude_none=True)
         body.pop("stream", None)
         body.pop("stream_options", None)

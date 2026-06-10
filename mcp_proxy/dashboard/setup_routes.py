@@ -23,6 +23,7 @@ Shared helpers ``generate_org_ca``, ``_test_vault_connectivity``,
 """
 from __future__ import annotations
 
+import asyncio as _asyncio
 import logging
 import pathlib
 
@@ -301,7 +302,7 @@ async def setup_submit(request: Request):
     # Handle Org CA
     ca_generated = False
     if org_ca_mode == "generate":
-        cert_pem, key_pem = generate_org_ca(org_id)
+        cert_pem, key_pem = await _asyncio.to_thread(generate_org_ca, org_id)
         await set_config("org_ca_cert", cert_pem)
         await set_config("org_ca_key", key_pem)
         ca_generated = True
@@ -576,7 +577,7 @@ async def _setup_submit_standalone(
         # primitive the lifespan uses. We avoid touching it when the
         # in-memory derivation already produced one — regenerate would
         # change org_id and orphan every existing agent cert.
-        cert_pem, key_pem = generate_org_ca(org_id)
+        cert_pem, key_pem = await _asyncio.to_thread(generate_org_ca, org_id)
         await set_config("org_ca_cert", cert_pem)
         await set_config("org_ca_key", key_pem)
         await log_audit(

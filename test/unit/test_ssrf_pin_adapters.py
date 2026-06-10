@@ -15,8 +15,14 @@ from mcp_proxy.utils.url_safety import UnsafeUrlError
 
 @pytest.mark.asyncio
 async def test_transport_pins_to_validated_ip(monkeypatch):
+    # P2 (2026-06-10): the transport now validates through the async
+    # wrapper (assert_safe_outbound_url_async, DNS off the event loop),
+    # which calls the sync validator in its OWN module namespace — the
+    # patch target moves from ssrf_transport to url_safety. Patching
+    # the old name silently stopped intercepting and the test resolved
+    # api.openai.com against live DNS.
     monkeypatch.setattr(
-        "mcp_proxy.utils.ssrf_transport.assert_safe_outbound_url",
+        "mcp_proxy.utils.url_safety.assert_safe_outbound_url",
         lambda url, allow_private=False: "93.184.216.34",
     )
     captured: dict = {}
@@ -44,8 +50,9 @@ async def test_transport_refuses_unsafe_before_connect(monkeypatch):
     def _refuse(url, allow_private=False):
         raise UnsafeUrlError("resolves to 169.254.169.254 (metadata)")
 
+    # Same namespace move as above (P2 async wrapper).
     monkeypatch.setattr(
-        "mcp_proxy.utils.ssrf_transport.assert_safe_outbound_url", _refuse,
+        "mcp_proxy.utils.url_safety.assert_safe_outbound_url", _refuse,
     )
     reached = {"super": False}
 

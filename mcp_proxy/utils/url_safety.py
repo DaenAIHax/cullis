@@ -214,6 +214,29 @@ def assert_safe_outbound_url(
     return pinned_ip
 
 
+async def assert_safe_outbound_url_async(
+    url: str,
+    *,
+    allow_private: bool = False,
+) -> str:
+    """Async wrapper around :func:`assert_safe_outbound_url`.
+
+    P2 (review 2026-06-10): the validation includes a blocking
+    ``socket.getaddrinfo`` — inline in a coroutine it stalls the whole
+    event loop for the duration of a DNS lookup (unbounded on a slow
+    or unreachable resolver) on EVERY outbound LLM / tool / federation
+    call. Same code path as the sync variant (single source of truth
+    for the SSRF rules), just run on the default thread pool. Use this
+    from async per-request paths; config-time / sync callers keep the
+    direct function.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(
+        assert_safe_outbound_url, url, allow_private=allow_private,
+    )
+
+
 def pin_request_to_ip(request, pinned_ip: str) -> None:
     """Rewrite an ``httpx.Request`` to connect to ``pinned_ip`` while keeping
     the original Host header and TLS SNI / cert hostname.

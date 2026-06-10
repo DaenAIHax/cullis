@@ -119,6 +119,10 @@ def generate_org_ca(org_id: str) -> tuple[str, str]:
     Part 1 §5.3.6 — root CAs held offline with long lifetimes).
     All online signing is done by the Mastio intermediate CA minted
     underneath this root; the intermediate rotates on a shorter cycle.
+
+    Blocking: RSA-4096 keygen is seconds of CPU. Async routes call it
+    via ``asyncio.to_thread`` (P2, 2026-06-10) so setup / CA rotation
+    does not freeze every other in-flight request.
     """
     from datetime import datetime, timedelta, timezone
     from cryptography import x509
