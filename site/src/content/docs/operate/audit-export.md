@@ -138,7 +138,7 @@ curl -sk -H "X-Admin-Secret: ${ADMIN_SECRET}" \
      -o acme.ndjson
 ```
 
-Parameters: `chain=audit_log|local_audit|both` (default `both`); `org_id` filters `local_audit` rows only (the `audit_log` chain is global — combining it with `chain=audit_log` is a 400); `since_seq` / `until_seq` are inclusive `chain_seq` bounds (a window that doesn't start at the genesis is forward-verified only, and the verifier says so); `include_anchors=false` drops the anchor rows. The response streams in keyset-paginated batches, so a multi-100k-row export doesn't hold DB locks for the duration of the download.
+Parameters: `chain=audit_log|local_audit|both` (default `both`); `org_id` filters `local_audit` rows only (the `audit_log` chain is global — combining it with `chain=audit_log` is a 400); `since_seq` / `until_seq` are inclusive `chain_seq` bounds (a window that doesn't start at the genesis is forward-verified only — the verifier says so, qualifies its verdict, and refuses such bundles under `--require-genesis`); `include_anchors=false` drops the anchor rows. Seq windows are meant for `audit_log`: a `local_audit` window that starts past an org's first row will fail that org's chain walk — export local_audit org-complete instead. The response streams in keyset-paginated batches, so a multi-100k-row export doesn't hold DB locks for the duration of the download.
 
 Every entry row carries an explicit `"chain"` key so the verifier never guesses the schema.
 

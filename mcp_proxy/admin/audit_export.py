@@ -22,9 +22,14 @@ Query parameters:
 * ``since_seq`` / ``until_seq`` — inclusive ``chain_seq`` bounds,
   applied to each chain independently. A window export that does not
   start at the genesis is forward-verified only (the verifier prints
-  an explicit NOTE). When a bound is set, pre-migration audit_log
-  rows with ``chain_seq IS NULL`` are omitted (they have no position
-  on the seq axis).
+  an explicit NOTE, qualifies the verdict, and ``--require-genesis``
+  refuses it). When a bound is set, pre-migration audit_log rows with
+  ``chain_seq IS NULL`` are omitted (they have no position on the seq
+  axis). NB: seq windows are designed for the audit_log chain — on
+  ``local_audit`` (per-org sequences) a window that starts past an
+  org's first row makes that org's chain fail verification, since the
+  local_audit walker has no forward-only mode. For local_audit,
+  export org-complete (``org_id`` filter, no seq bounds).
 * ``include_anchors`` — default true; emits ``kind="anchor"`` rows
   from ``audit_chain_anchors`` (RFC 3161, tagged ``chain=audit_log``
   because the anchor watcher runs over that chain) plus

@@ -283,6 +283,56 @@ def test_partial_export_forward_verifies_with_note(
     assert "from seq=4" in out
 
 
+def test_partial_export_verdict_is_qualified(tmp_path, monkeypatch, capsys):
+    """Crypto-review 2026-06-10: an unqualified 'intact end-to-end' on a
+    windowed export would also bless a truncated history."""
+    rows = _audit_chain(6)[3:]
+    path = _write_bundle(tmp_path, rows)
+    assert _run_main(monkeypatch, "--bundle", path) == 0
+    out = capsys.readouterr().out
+    assert "intact FROM audit_log seq=4" in out
+    assert "intact end-to-end" not in out
+
+
+def test_require_genesis_refuses_partial_export(tmp_path, monkeypatch, capsys):
+    rows = _audit_chain(6)[3:]
+    path = _write_bundle(tmp_path, rows)
+    with pytest.raises(SystemExit) as exc_info:
+        _run_main(monkeypatch, "--bundle", path, "--require-genesis")
+    assert exc_info.value.code == 10
+    assert "GENESIS REQUIREMENT NOT MET" in capsys.readouterr().out
+
+
+def test_require_genesis_accepts_full_chain(tmp_path, monkeypatch):
+    path = _write_bundle(tmp_path, _audit_chain(4))
+    assert _run_main(
+        monkeypatch, "--bundle", path, "--require-genesis",
+    ) == 0
+
+
+def test_non_numeric_chain_seq_exits_9(tmp_path, monkeypatch, capsys):
+    """Hostile bundles must fail loudly (exit 9), not crash with a
+    traceback (exit 1)."""
+    rows = _audit_chain(2)
+    rows.append(dict(rows[-1], chain_seq="not-a-number"))
+    path = _write_bundle(tmp_path, rows)
+    with pytest.raises(SystemExit) as exc_info:
+        _run_main(monkeypatch, "--bundle", path)
+    assert exc_info.value.code == 9
+    assert "non-numeric" in capsys.readouterr().out
+
+
+def test_unknown_kind_lines_are_surfaced(tmp_path, monkeypatch, capsys):
+    """load_bundle drops kinds it doesn't know — but never silently."""
+    rows = _audit_chain(2)
+    rows.append({"kind": "hologram", "chain_seq": 99})
+    path = _write_bundle(tmp_path, rows)
+    assert _run_main(monkeypatch, "--bundle", path) == 0
+    out = capsys.readouterr().out
+    assert "unknown kind='hologram'" in out
+    assert "NOT covered" in out
+
+
 def test_partial_export_tamper_still_caught(tmp_path, monkeypatch):
     rows = _audit_chain(6)[3:]
     rows[1]["status"] = "denied"

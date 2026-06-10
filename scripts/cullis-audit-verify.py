@@ -94,9 +94,14 @@ Exit codes:
        that chain, not the anchor-less local_audit chain.
   9  — bundle schema unrecognized: a row matches neither the audit_log
        shape (action/status/row_hash) nor the local_audit shape
-       (event_type/result/entry_hash), or contradicts an explicit
-       ``--chain`` override. The bundle is malformed or from a newer
-       export format this verifier predates.
+       (event_type/result/entry_hash), carries a non-numeric
+       chain_seq, or contradicts an explicit ``--chain`` override.
+       The bundle is malformed or from a newer export format this
+       verifier predates.
+  10 — --require-genesis set but the audit_log chain in the bundle
+       does not start at seq 1. A windowed (since_seq) export is
+       forward-verified only and is indistinguishable from a bundle
+       whose first rows were deleted.
 """
 from __future__ import annotations
 
@@ -246,9 +251,10 @@ def canonical_audit_log(entry: dict[str, Any], prev_hash: str) -> str:
       - NULL / ``'v1'``: the legacy form without those fields.
 
     Unlike the local_audit canonical, ``chain_seq`` leads the string
-    and ``prev_hash`` closes it.
+    and ``prev_hash`` closes it. The ``hash_format`` comparison is
+    exact (no case folding), matching the producer's ``== "v2"``.
     """
-    fmt = (entry.get("hash_format") or "v1").lower()
+    fmt = entry.get("hash_format")
     if fmt == "v2":
         return (
             f"v2|{entry['chain_seq']}|{entry['timestamp']}|"
@@ -858,9 +864,19 @@ def _verify_rfc3161_full(
 
 def load_bundle(path: str) -> tuple[list[dict], list[dict]]:
     """Return (entries, anchors). Lines missing the "kind" key are
-    treated as legacy (entry) format for backward compatibility."""
+    treated as legacy (entry) format for backward compatibility.
+
+    Skipped kinds are SURFACED, never silently dropped (crypto-review
+    2026-06-10): ``merkle_anchor`` rows (emitted by the export
+    endpoint; verified via ``--merkle-proof`` files, not inline) get
+    an informational line, and any truly unknown kind gets a NOTE so
+    an auditor handed a bundle from a newer export format knows part
+    of it was not covered by this verifier.
+    """
     entries: list[dict] = []
     anchors: list[dict] = []
+    merkle_anchor_n = 0
+    unknown: dict[str, int] = defaultdict(int)
     with open(path) as f:
         for raw in f:
             raw = raw.strip()
@@ -872,6 +888,23 @@ def load_bundle(path: str) -> tuple[list[dict], list[dict]]:
                 entries.append(obj)
             elif kind == "anchor":
                 anchors.append(obj)
+            elif kind == "merkle_anchor":
+                merkle_anchor_n += 1
+            else:
+                unknown[str(kind)] += 1
+    if merkle_anchor_n:
+        print(
+            f"  {merkle_anchor_n} merkle_anchor row"
+            f"{'s' if merkle_anchor_n != 1 else ''} present in {path} — "
+            f"not verified inline; pass --merkle-proof files for "
+            f"per-row inclusion coverage."
+        )
+    for kind, n in sorted(unknown.items()):
+        print(
+            f"  NOTE: {n} line{'s' if n != 1 else ''} of unknown "
+            f"kind={kind!r} skipped in {path} — written by a newer "
+            f"export format, NOT covered by this verification."
+        )
     return entries, anchors
 
 
@@ -1019,7 +1052,11 @@ def verify_audit_log_chain(entries: list[dict]) -> tuple[int, int]:
         verified forward from there, with an explicit NOTE so the
         auditor knows the guarantee starts at that seq.
 
-    Returns ``(verified_n, skipped_unhashed)``. Exits 2 on tamper.
+    Returns ``(verified_n, skipped_unhashed, partial_from)`` where
+    ``partial_from`` is the first verified seq when the export does
+    not reach the genesis (``None`` for a full chain). Exits 2 on
+    tamper, 9 on a non-numeric ``chain_seq`` (hostile/garbage bundle
+    must fail loudly, not crash with a traceback).
     """
     skipped = 0
     rows: list[dict] = []
@@ -1027,6 +1064,15 @@ def verify_audit_log_chain(entries: list[dict]) -> tuple[int, int]:
         if e.get("chain_seq") is None:
             skipped += 1
             continue
+        try:
+            int(e["chain_seq"])
+        except (TypeError, ValueError):
+            print(
+                f"BUNDLE SCHEMA UNRECOGNIZED id={e.get('id', '?')}: "
+                f"audit_log row has non-numeric "
+                f"chain_seq={e.get('chain_seq')!r}"
+            )
+            sys.exit(9)
         rows.append(e)
     rows.sort(key=lambda r: int(r["chain_seq"]))
 
@@ -1092,7 +1138,7 @@ def verify_audit_log_chain(entries: list[dict]) -> tuple[int, int]:
             f"from seq={partial_from}; rows before it are not covered by "
             f"this bundle."
         )
-    return verified, skipped
+    return verified, skipped, partial_from
 
 
 def verify_anchors(
@@ -1992,6 +2038,19 @@ def main() -> int:
         ),
     )
     ap.add_argument(
+        "--require-genesis",
+        action="store_true",
+        help=(
+            "Refuse (exit 10) a bundle whose audit_log chain does not "
+            "start at the genesis (seq 1). A windowed since_seq export "
+            "is forward-verified only — indistinguishable, by "
+            "construction, from a bundle whose first rows were "
+            "deleted. The default accepts it with an explicit NOTE "
+            "and a qualified verdict; a dispute-grade auditor who was "
+            "promised the FULL history should set this flag."
+        ),
+    )
+    ap.add_argument(
         "--require-anchors",
         action="store_true",
         help=(
@@ -2019,11 +2078,18 @@ def main() -> int:
     total_entries = 0
     total_orgs: set[str] = set()
     total_agents: set[str] = set()
+    partial_audit_from: int | None = None
     for path in args.bundle:
         entries, anchors = load_bundle(path)
         audit_rows, local_rows = split_entries_by_chain(entries, args.chain)
         legacy_n, per_org_n, _agent_n = verify_chains(local_rows)
-        audit_n, audit_skipped = verify_audit_log_chain(audit_rows)
+        audit_n, audit_skipped, partial_from = verify_audit_log_chain(
+            audit_rows,
+        )
+        if partial_from is not None and (
+            partial_audit_from is None or partial_from < partial_audit_from
+        ):
+            partial_audit_from = partial_from
         anchor_n, dispute_grade_n = verify_anchors(
             local_rows,
             anchors,
@@ -2066,6 +2132,22 @@ def main() -> int:
     # downgraded imprint-only modes do not, since the operator who holds
     # the store can mint those at will.
     enforce_anchor_floor(args.require_anchors, total_dispute_grade)
+
+    # Genesis floor: a windowed export is forward-verified only and,
+    # by construction, indistinguishable from a bundle whose first
+    # rows were deleted. The dispute-grade auditor who was promised
+    # the full history refuses it here.
+    if args.require_genesis and partial_audit_from is not None:
+        print("")
+        print("✗ GENESIS REQUIREMENT NOT MET")
+        print("")
+        print("  --require-genesis was set, but the audit_log chain in this")
+        print(f"  bundle starts at seq={partial_audit_from}, not at the genesis.")
+        print("  A windowed export and a bundle whose first rows were deleted")
+        print("  are indistinguishable. Re-export without since_seq, or drop")
+        print("  --require-genesis to accept forward-only verification.")
+        print("")
+        sys.exit(10)
 
     # CISO-readable PASS summary. The line breaks below are deliberate
     # so the auditor's terminal output reads like a verdict, not a CSV.
@@ -2115,8 +2197,18 @@ def main() -> int:
     print("  (row_hash on audit_log, entry_hash on local_audit).")
     print("  No prev-hash → next-hash break detected on any chain.")
     print("")
-    print("  Bundle is intact end-to-end. No row was added, altered, or")
-    print("  removed after the original audit chain was written.")
+    if partial_audit_from is not None:
+        # Crypto-review 2026-06-10: an unqualified "intact end-to-end"
+        # on a windowed export would also bless a bundle whose first
+        # rows were deleted — the two are indistinguishable. Qualify.
+        print(f"  Bundle is intact FROM audit_log seq={partial_audit_from}")
+        print("  ONWARD. Rows before that seq are not in this bundle and")
+        print("  are NOT covered by this verification (windowed export or")
+        print("  truncated history — indistinguishable offline; use")
+        print("  --require-genesis to refuse such bundles outright).")
+    else:
+        print("  Bundle is intact end-to-end. No row was added, altered, or")
+        print("  removed after the original audit chain was written.")
     print("")
     return 0
 
