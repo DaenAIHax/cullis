@@ -14,7 +14,7 @@
 
 **What Cullis gives an autonomous agent:**
 
-- **A real identity.** Each agent gets its own x509 certificate instead of an API key, presented over mTLS with a DPoP proof, so every request is tied to one agent rather than a shared key.
+- **A real identity.** Each agent gets its own x509 certificate instead of an API key, presented over mTLS with a DPoP proof, so every agent request is tied to one cryptographic identity rather than a shared key. (Human users on OpenAI-compatible clients use scoped, revocable API tokens instead — see [Identity](#cullis-mastio).)
 - **Policy before the call.** A decision point evaluates each request before the LLM or MCP tool runs, so an agent only does what you allowed.
 - **A tamper-evident trail.** Every action lands in an append-only, hash-chained audit log an external auditor can verify offline, without trusting Cullis or your IT team.
 
@@ -88,7 +88,7 @@ Copy `deploy/proxy/proxy.env.example` to `deploy/proxy/proxy.env` and fill in th
 
 Mastio is the gateway. One container, one organization, one source of truth for every agent action that touches the LLM or an MCP tool inside that organization. It runs standalone, air-gapped if you need it to be, with no external service dependency.
 
-**Identity.** Each agent receives an x509 leaf certificate signed by an organization-owned CA, bound to a SPIFFE SAN and pinned by thumbprint. The certificate is the credential: Mastio rejects any token presented without the matching client certificate (mTLS RFC 8705 §3) and verifies a DPoP proof (RFC 9449) on every authenticated request, refusing plain Bearer tokens outright.
+**Identity.** Each agent receives an x509 leaf certificate signed by an organization-owned CA, bound to a SPIFFE SAN and pinned by thumbprint. The certificate is the credential: Mastio rejects any token presented without the matching client certificate (mTLS RFC 8705 §3) and verifies a DPoP proof (RFC 9449) on every agent-authenticated request, refusing plain Bearer tokens on agent identity surfaces. The one deliberate exception is user API tokens (`culk_*`): scoped bearer credentials (path + provider scope, bcrypt-hashed at rest, revocable, 90-day default TTL) for human users on OpenAI-compatible clients that cannot perform DPoP — disabled in production unless the operator explicitly opts in (`MCP_PROXY_USER_API_TOKENS_INSECURE_OK`, gate F-B-15; threat model §5.1).
 
 **Policy.** A policy decision point evaluates each request before the LLM or MCP tool is reached. Operators author **Rego in the dashboard**; Mastio compiles it with the bundled `opa build` and evaluates the WebAssembly bundle in-process on every decision. A legacy allowlist (`blocked_agents`, `allowed_orgs`, capability gates per typed principal) backs up the Rego layer for deployments that haven't adopted it. Default-deny for new sessions, default-allow for messages, fail-safe on timeout.
 
