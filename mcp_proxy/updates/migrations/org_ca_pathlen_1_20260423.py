@@ -142,7 +142,10 @@ class OrgCAPathLenFix(Migration):
         assert old_key_pem is not None
 
         old_cert = x509.load_pem_x509_certificate(old_cert_pem.encode())
-        old_key = serialization.load_pem_private_key(
+        # Parse-validate the stored key before touching anything; the
+        # value itself is unused (the re-sign path reloads what it
+        # needs), but a corrupt key must abort the migration here.
+        serialization.load_pem_private_key(
             old_key_pem.encode(), password=None,
         )
 

@@ -11,7 +11,6 @@ unanchored chain_seq, 409 on chain_count drift.
 from __future__ import annotations
 
 import hashlib
-from typing import Any
 
 import pytest
 import pytest_asyncio

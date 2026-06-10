@@ -48,7 +48,7 @@ async def _get_authenticated_agent_dpop(request: Request) -> TokenPayload:
     """
     from mcp_proxy.main import get_jwks_client
     from mcp_proxy.auth.jwt_validator import decode_token
-    from mcp_proxy.auth.dpop import verify_dpop_proof, _normalize_htu
+    from mcp_proxy.auth.dpop import verify_dpop_proof
     from mcp_proxy.config import get_settings
 
     # -- 1. Authorization header (must be "DPoP <token>")

@@ -41,17 +41,16 @@ from typing import Callable
 
 import httpx
 
-from cullis_sdk.types import AgentInfo, InboxMessage
 from cullis_sdk._client._ai_gateway import _AiGatewayMixin
 from cullis_sdk._client._auth import _AuthMixin
-from cullis_sdk._client._discovery import PubkeyFetchError, _DiscoveryMixin
+from cullis_sdk._client._discovery import _DiscoveryMixin
 from cullis_sdk._client._enrollment import _EnrollmentMixin
 from cullis_sdk._client._guardian import _GuardianMixin
 from cullis_sdk._client._messaging_legacy import _MessagingLegacyMixin
 from cullis_sdk._client._messaging_oneshot import _MessagingOneshotMixin
 from cullis_sdk._client._rfq import _RfqMixin
 from cullis_sdk._client._sessions import _SessionsMixin
-from cullis_sdk._client._websocket import WebSocketConnection, _WebSocketMixin
+from cullis_sdk._client._websocket import _WebSocketMixin
 
 
 class InsecureTLSWarning(UserWarning):
@@ -234,7 +233,6 @@ def _check_insecure_tls(verify_tls: bool) -> None:
     """
     if verify_tls:
         return
-    import os
     import warnings
     if (
         os.environ.get("CULLIS_ENV", "").lower() == "production"

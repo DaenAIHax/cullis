@@ -11,11 +11,7 @@ upstream.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import os
-import sys
-from pathlib import Path
 
 import pytest
 import pytest_asyncio

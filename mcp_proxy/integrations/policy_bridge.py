@@ -48,7 +48,6 @@ import hashlib
 import hmac
 import json as _json
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse

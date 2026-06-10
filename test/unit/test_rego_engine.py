@@ -14,7 +14,6 @@ shipped), out of scope for this file.
 from __future__ import annotations
 
 import io
-import json
 import subprocess
 import tarfile
 from unittest.mock import MagicMock

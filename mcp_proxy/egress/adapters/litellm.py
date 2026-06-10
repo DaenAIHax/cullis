@@ -31,7 +31,11 @@ from mcp_proxy.egress.adapters.base import DispatchContext
 
 if TYPE_CHECKING:
     from mcp_proxy.config import ProxySettings as Settings
-    from mcp_proxy.egress.ai_gateway import GatewayResult, StreamingDispatch
+    from mcp_proxy.egress.ai_gateway import (
+        GatewayError,
+        GatewayResult,
+        StreamingDispatch,
+    )
     from mcp_proxy.egress.schemas import ChatCompletionRequest
 
 

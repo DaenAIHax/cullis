@@ -21,7 +21,6 @@ credentials for a principal in org B.
 from __future__ import annotations
 
 import base64
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status

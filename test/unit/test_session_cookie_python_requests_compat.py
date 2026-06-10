@@ -35,7 +35,6 @@ import hashlib
 import hmac
 import http.server
 import json
-import os
 import re
 import threading
 import time

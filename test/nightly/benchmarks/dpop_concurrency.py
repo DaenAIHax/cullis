@@ -43,7 +43,7 @@ def _probe_loop(agent_id: str, requests: int) -> list[tuple[int, bool]]:
     """Open one client, fire N requests, collect (latency_ms, ok)."""
     try:
         client = load_client(agent_id)
-    except Exception as exc:
+    except Exception:
         return [(0, False) for _ in range(requests)] + [(-1, False)]
 
     out: list[tuple[int, bool]] = []

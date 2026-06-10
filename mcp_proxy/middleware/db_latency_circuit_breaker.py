@@ -58,7 +58,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mcp_proxy.observability.db_latency import DbLatencyTracker
+    pass
 
 
 _BYPASS_PREFIXES: tuple[str, ...] = (

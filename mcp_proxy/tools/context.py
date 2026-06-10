@@ -6,7 +6,7 @@ httpx client whose transport enforces the tool's domain whitelist.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx

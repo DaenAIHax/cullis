@@ -114,7 +114,6 @@ def build_client_assertion(
     chain_certs = crypto_x509.load_pem_x509_certificates(cert_bytes)
     if not chain_certs:
         raise ValueError("cert_pem contains no certificate")
-    cert = chain_certs[0]
     x5c = [
         base64.b64encode(c.public_bytes(serialization.Encoding.DER)).decode()
         for c in chain_certs
