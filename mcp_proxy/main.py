@@ -2413,6 +2413,12 @@ app.include_router(admin_observability_router)
 from mcp_proxy.admin.audit_merkle import router as admin_audit_merkle_router
 app.include_router(admin_audit_merkle_router)
 
+# Offline-verification export — /v1/admin/audit/export (NDJSON stream
+# of audit_log + local_audit + anchors in the bundle shape
+# scripts/cullis-audit-verify.py consumes).
+from mcp_proxy.admin.audit_export import router as admin_audit_export_router
+app.include_router(admin_audit_export_router)
+
 # ADR-009 sandbox — Connector JSON API for MCP resources + bindings.
 from mcp_proxy.admin.mcp_resources import router as admin_mcp_resources_router
 app.include_router(admin_mcp_resources_router)

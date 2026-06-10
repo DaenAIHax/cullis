@@ -1,22 +1,44 @@
 #!/usr/bin/env python3
 """Standalone offline verifier for Cullis audit exports (issue #75).
 
-Consumes the NDJSON bundle produced by `GET /v1/admin/audit/export`
-and verifies, with zero network calls:
+Consumes the NDJSON bundle produced by ``GET /v1/admin/audit/export``
+(X-Admin-Secret, NDJSON streaming; ``chain=audit_log|local_audit|both``)
+or by the documented SQL export recipes, and verifies, with zero
+network calls:
 
-  1. Each per-org hash chain is internally consistent (every entry's
-     `entry_hash` is the sha256 of its canonical string, and
-     `previous_hash` links to the prior entry in the same org).
-  2. The residual legacy global chain (rows with `chain_seq is None`)
-     is intact under the pre-per-org rules.
+  1. The **primary ``audit_log`` chain** (one global chain per Mastio):
+     every row's ``row_hash`` is the sha256 of its canonical string —
+     v2 rows bind ``dpop_jkt`` + ``on_behalf_of_user_id`` — and
+     ``prev_hash`` links to the prior row by ``chain_seq``.
+  2. Each **``local_audit`` per-org chain** is internally consistent
+     (every entry's `entry_hash` is the sha256 of its canonical
+     string, and `previous_hash` links to the prior entry in the same
+     org), plus the residual legacy global chain (rows with
+     `chain_seq is None`) under the pre-per-org rules.
   3. Every TSA anchor row matches a real chain head + the TSA token
      cryptographically binds the recorded `row_hash` (mock tokens are
      verified by prefix matching; RFC 3161 tokens are verified via
      the `rfc3161-client` library if installed, otherwise flagged).
+     Anchors produced by the Mastio's watchers are built over the
+     ``audit_log`` chain.
   4. Cross-org reconciliation (optional): when two bundles from two
      orgs are supplied, rows with `peer_org_id` + `peer_row_hash`
      must point at the counterpart row in the other bundle and the
      two rows must agree on event_type / session_id / details.
+
+The two chains carry different schemas; the verifier auto-detects per
+row (an explicit ``"chain"`` key wins; otherwise ``action``+``status``
+⇒ audit_log, ``event_type``+``result`` ⇒ local_audit) and ``--chain``
+forces the interpretation. A bundle may carry both chains at once
+(``chain=both`` export) — their ``chain_seq`` sequences are
+independent and never mixed.
+
+Export example:
+
+  curl -H "X-Admin-Secret: $ADMIN_SECRET" \\
+      "https://mastio.example.com:9443/v1/admin/audit/export?chain=both" \\
+      -o bundle.ndjson
+  python cullis-audit-verify.py --bundle bundle.ndjson
 
 For RFC 3161 anchors, the verifier validates:
   - CMS SignerInfo signature against the embedded signing cert
@@ -67,7 +89,14 @@ Exit codes:
        anchors. The SHA-256 chain is internally consistent yet bound to
        no external timestamp, so it is tamper-evident against the agent
        but not against an operator who can rewrite the store. Dispute-
-       grade verification demands at least one anchor.
+       grade verification demands at least one anchor. NOTE: only the
+       audit_log chain produces anchors today; a satisfied floor binds
+       that chain, not the anchor-less local_audit chain.
+  9  — bundle schema unrecognized: a row matches neither the audit_log
+       shape (action/status/row_hash) nor the local_audit shape
+       (event_type/result/entry_hash), or contradicts an explicit
+       ``--chain`` override. The bundle is malformed or from a newer
+       export format this verifier predates.
 """
 from __future__ import annotations
 
@@ -147,6 +176,96 @@ def canonical(entry: dict[str, Any], previous_hash: str | None) -> str:
     if pt and pt != "agent":
         canonical_str = f"{canonical_str}|pt={pt}"
     return canonical_str
+
+
+def detect_chain(entry: dict[str, Any]) -> str | None:
+    """Classify a bundle row as ``audit_log`` or ``local_audit``.
+
+    An explicit ``"chain"`` key (written by ``GET /v1/admin/audit/
+    export``) always wins. Bundles produced by the documented SQL
+    recipes carry no such key, so fall back to the schema heuristic:
+    the two tables share no required-field pair — ``audit_log`` rows
+    have ``action`` + ``status``, ``local_audit`` rows have
+    ``event_type`` + ``result``. Returns ``None`` when the row matches
+    neither or both (malformed / unknown format — caller exits 9).
+    """
+    explicit = entry.get("chain")
+    if explicit in ("audit_log", "local_audit"):
+        return explicit
+    looks_audit = "action" in entry and "status" in entry
+    looks_local = "event_type" in entry and "result" in entry
+    if looks_audit and not looks_local:
+        return "audit_log"
+    if looks_local and not looks_audit:
+        return "local_audit"
+    return None
+
+
+def split_entries_by_chain(
+    entries: list[dict], forced: str,
+) -> tuple[list[dict], list[dict]]:
+    """Partition bundle rows into ``(audit_log_rows, local_audit_rows)``.
+
+    ``forced`` is the ``--chain`` value: ``auto`` classifies per row;
+    ``audit_log`` / ``local_audit`` force the interpretation, and any
+    row whose detected schema contradicts the override is a hard error.
+    Exits 9 on an unclassifiable row either way — silently guessing a
+    canonical form would let a malformed bundle "verify".
+    """
+    audit_rows: list[dict] = []
+    local_rows: list[dict] = []
+    for e in entries:
+        detected = detect_chain(e)
+        if detected is None:
+            print(
+                f"BUNDLE SCHEMA UNRECOGNIZED id={e.get('id', '?')}: row "
+                f"matches neither the audit_log (action/status) nor the "
+                f"local_audit (event_type/result) shape"
+            )
+            sys.exit(9)
+        if forced != "auto" and detected != forced:
+            print(
+                f"BUNDLE SCHEMA CONFLICT id={e.get('id', '?')}: row is "
+                f"{detected} but --chain {forced} was forced"
+            )
+            sys.exit(9)
+        (audit_rows if detected == "audit_log" else local_rows).append(e)
+    return audit_rows, local_rows
+
+
+def canonical_audit_log(entry: dict[str, Any], prev_hash: str) -> str:
+    """Reconstruct the canonical string behind ``audit_log.row_hash``.
+
+    Mirrors ``mcp_proxy.db.compute_audit_row_hash`` byte-for-byte
+    (parity-pinned by ``test_cullis_audit_verify_audit_log.py``):
+
+      - ``hash_format == 'v2'`` (migration 0042 onward): prefixed with
+        the literal ``v2|`` and extended with ``dpop_jkt`` +
+        ``on_behalf_of_user_id``, binding the RFC 9449 key thumbprint
+        and the ADR-032 on-behalf-of attribution to chain integrity.
+      - NULL / ``'v1'``: the legacy form without those fields.
+
+    Unlike the local_audit canonical, ``chain_seq`` leads the string
+    and ``prev_hash`` closes it.
+    """
+    fmt = (entry.get("hash_format") or "v1").lower()
+    if fmt == "v2":
+        return (
+            f"v2|{entry['chain_seq']}|{entry['timestamp']}|"
+            f"{entry['agent_id']}|{entry['action']}|"
+            f"{entry.get('tool_name') or ''}|{entry['status']}|"
+            f"{entry.get('detail') or ''}|"
+            f"{entry.get('request_id') or ''}|"
+            f"{entry.get('dpop_jkt') or ''}|"
+            f"{entry.get('on_behalf_of_user_id') or ''}|{prev_hash}"
+        )
+    return (
+        f"{entry['chain_seq']}|{entry['timestamp']}|"
+        f"{entry['agent_id']}|{entry['action']}|"
+        f"{entry.get('tool_name') or ''}|{entry['status']}|"
+        f"{entry.get('detail') or ''}|"
+        f"{entry.get('request_id') or ''}|{prev_hash}"
+    )
 
 
 def _chain_reaches_trust_store(
@@ -763,6 +882,8 @@ def _print_tamper_detail(
     computed: str | None = None,
     declared_prev: str | None = None,
     expected_prev: str | None = None,
+    hash_field: str = "entry_hash",
+    prev_field: str = "previous_hash",
 ) -> None:
     """Print a CISO-readable explanation of a chain failure.
 
@@ -774,6 +895,11 @@ def _print_tamper_detail(
       * ``BREAK`` — the row's ``previous_hash`` does not point at
         the prior row's ``entry_hash``. Either a row was deleted, or
         the linkage was tampered. Show declared vs expected prev.
+
+    ``hash_field`` / ``prev_field`` name the columns of the chain
+    being walked (``entry_hash``/``previous_hash`` on local_audit,
+    ``row_hash``/``prev_hash`` on audit_log) so the auditor's output
+    matches the table they will inspect.
     """
     print("")
     print("✗ CHAIN TAMPER DETECTED")
@@ -781,25 +907,26 @@ def _print_tamper_detail(
     where = (
         f"  org={e.get('org_id', '?')}"
         f" · chain_seq={e.get('chain_seq', '-')}"
-        f" · id={e['id']}"
+        f" · id={e.get('id', '-')}"
     )
     print(where)
     print(f"  timestamp={e.get('timestamp', '-')}")
-    print(f"  event_type={e.get('event_type', '-')}")
+    event = e.get("event_type") or e.get("action") or "-"
+    print(f"  event={event}")
     print(f"  agent_id={e.get('agent_id', '-')}")
     print("")
     if kind == "MISMATCH":
-        print("  The row's content does not produce the entry_hash it carries.")
+        print(f"  The row's content does not produce the {hash_field} it carries.")
         print("  A field on this row was altered after the chain was written.")
         print("")
-        print(f"    expected entry_hash (computed from row): {computed}")
-        print(f"    observed entry_hash (recorded on row):   {e['entry_hash']}")
+        print(f"    expected {hash_field} (computed from row): {computed}")
+        print(f"    observed {hash_field} (recorded on row):   {e.get(hash_field)}")
     else:  # BREAK
-        print("  The row's previous_hash does not point at the prior row's entry_hash.")
+        print(f"  The row's {prev_field} does not point at the prior row's {hash_field}.")
         print("  A row was deleted, reordered, or the linkage was rewritten.")
         print("")
-        print(f"    declared previous_hash: {declared_prev}")
-        print(f"    expected previous_hash: {expected_prev}")
+        print(f"    declared {prev_field}: {declared_prev}")
+        print(f"    expected {prev_field}: {expected_prev}")
     print("")
     print(f"  Rows after seq={e.get('chain_seq', '?')} cannot be trusted.")
     print("")
@@ -872,10 +999,107 @@ def verify_chains(entries: list[dict]) -> tuple[int, int, int]:
     return (legacy_n, per_org_n, len(agents_seen))
 
 
+def verify_audit_log_chain(entries: list[dict]) -> tuple[int, int]:
+    """Verify the primary ``audit_log`` chain in a bundle.
+
+    Unlike ``local_audit``, this chain is **global per Mastio** (the
+    table has no org column; ``chain_seq`` is a single monotonic
+    sequence guarded by a UNIQUE index), so there is no per-org
+    grouping. Rules:
+
+      - rows with ``chain_seq IS NULL`` predate migration 0023 and
+        carry no hash — skipped, counted, surfaced in the summary;
+      - a duplicate ``chain_seq`` is a tamper (the live table cannot
+        produce one);
+      - a gap in ``chain_seq`` is a BREAK (a row was deleted from the
+        export window);
+      - when the export starts past the genesis (``since_seq`` filter)
+        the first row's ``prev_hash`` cannot be recomputed from
+        content — it is taken as the trust anchor and the chain is
+        verified forward from there, with an explicit NOTE so the
+        auditor knows the guarantee starts at that seq.
+
+    Returns ``(verified_n, skipped_unhashed)``. Exits 2 on tamper.
+    """
+    skipped = 0
+    rows: list[dict] = []
+    for e in entries:
+        if e.get("chain_seq") is None:
+            skipped += 1
+            continue
+        rows.append(e)
+    rows.sort(key=lambda r: int(r["chain_seq"]))
+
+    verified = 0
+    prev_hash: str | None = None
+    prev_seq: int | None = None
+    partial_from: int | None = None
+    for e in rows:
+        seq = int(e["chain_seq"])
+        if prev_seq is not None and seq == prev_seq:
+            print(
+                f"AUDIT_LOG DUPLICATE chain_seq={seq}: two rows claim the "
+                f"same position — the live table enforces UNIQUE, so a "
+                f"duplicate in the export is a tamper or a forged row"
+            )
+            sys.exit(2)
+        if prev_seq is None:
+            if seq == 1:
+                expected_prev = "genesis"
+            else:
+                # Partial export: cannot reach back to genesis. Anchor
+                # trust on this row's declared prev_hash and verify
+                # forward only.
+                partial_from = seq
+                expected_prev = e.get("prev_hash")
+        else:
+            if seq != prev_seq + 1:
+                _print_tamper_detail(
+                    kind="BREAK", e=e,
+                    declared_prev=e.get("prev_hash"),
+                    expected_prev=(
+                        f"(row with chain_seq={prev_seq + 1} is missing "
+                        f"from the export)"
+                    ),
+                    hash_field="row_hash", prev_field="prev_hash",
+                )
+                sys.exit(2)
+            expected_prev = prev_hash
+        if e.get("prev_hash") != expected_prev:
+            _print_tamper_detail(
+                kind="BREAK", e=e,
+                declared_prev=e.get("prev_hash"),
+                expected_prev=expected_prev,
+                hash_field="row_hash", prev_field="prev_hash",
+            )
+            sys.exit(2)
+        computed = hashlib.sha256(
+            canonical_audit_log(e, expected_prev or "genesis").encode("utf-8"),
+        ).hexdigest()
+        if computed != e.get("row_hash"):
+            _print_tamper_detail(
+                kind="MISMATCH", e=e, computed=computed,
+                hash_field="row_hash", prev_field="prev_hash",
+            )
+            sys.exit(2)
+        prev_hash = str(e["row_hash"])
+        prev_seq = seq
+        verified += 1
+
+    if partial_from is not None:
+        print(
+            f"  NOTE: partial audit_log export — chain verified forward "
+            f"from seq={partial_from}; rows before it are not covered by "
+            f"this bundle."
+        )
+    return verified, skipped
+
+
 def verify_anchors(
     entries: list[dict],
     anchors: list[dict],
     *,
+    audit_entries: list[dict] | None = None,
     trust_store_path: str | None = None,
     allow_unverified_signature: bool = False,
     max_age_days: int = 3650,
@@ -883,6 +1107,15 @@ def verify_anchors(
 ) -> tuple[int, int]:
     """For each anchor, recompute the expected row_hash at the anchor's
     chain_seq and cross-check against the anchor's claim + TSA token.
+
+    The Mastio's anchor watchers run over the **audit_log** chain, so
+    an anchor row whose ``chain`` key says ``audit_log`` (or, absent
+    the key, whose ``chain_seq`` only matches audit_log rows) is
+    checked against ``audit_entries`` by ``chain_seq → row_hash``; the
+    anchor's ``org_id`` stays in the error messages but is not part of
+    the lookup, because the audit_log chain is global. local_audit
+    anchors keep the legacy ``(org_id, chain_seq) → entry_hash`` match
+    so pre-existing bundles verify unchanged.
 
     For RFC 3161 anchors the TSA token's CMS signature is verified
     against ``trust_store_path`` (a PEM bundle of TSA root certs).
@@ -906,12 +1139,29 @@ def verify_anchors(
         seq = e.get("chain_seq")
         if seq is not None:
             head_hash[(e.get("org_id") or "", seq)] = e["entry_hash"]
+    # Global audit_log chain: chain_seq -> row_hash.
+    audit_head: dict[int, str] = {}
+    for e in audit_entries or []:
+        seq = e.get("chain_seq")
+        if seq is not None and e.get("row_hash"):
+            audit_head[int(seq)] = str(e["row_hash"])
 
     verified = 0
     dispute_grade = 0
     for a in anchors:
         key = (a["org_id"], a["chain_seq"])
-        actual_head = head_hash.get(key)
+        # Prefer the legacy local_audit match when it exists so
+        # pre-existing bundles keep their exact behaviour; route to
+        # the audit_log chain on an explicit chain tag or when only
+        # that chain holds the seq.
+        if a.get("chain") == "audit_log" or (
+            a.get("chain") is None
+            and key not in head_hash
+            and int(a["chain_seq"]) in audit_head
+        ):
+            actual_head = audit_head.get(int(a["chain_seq"]))
+        else:
+            actual_head = head_hash.get(key)
         if actual_head is None:
             print(f"ANCHOR ORPHAN org={a['org_id']} seq={a['chain_seq']} — "
                   f"no matching chain entry in bundle")
@@ -1042,6 +1292,38 @@ def _merkle_verify_inclusion(
     return current == expected_root
 
 
+def _chain_seq_map(bundles: list[tuple[str, list[dict]]]) -> dict[int, dict]:
+    """Flatten bundles into a ``chain_seq → entry`` lookup for the
+    Merkle / archive proof paths.
+
+    The Mastio's Merkle + archive anchors are built over the
+    **audit_log** chain, whose ``chain_seq`` sequence is independent
+    from (and numerically overlaps) every per-org local_audit
+    sequence. When a bundle carries audit_log rows, ONLY those feed
+    the map — mixing the two chains here would let a local_audit row
+    shadow the audit_log row at the same seq and fail (or worse,
+    accidentally pass) the leaf comparison. Bundles without audit_log
+    rows keep the legacy behaviour (all rows), so pre-existing
+    local_audit + proof workflows are unchanged.
+    """
+    audit_rows: list[dict] = []
+    all_rows: list[dict] = []
+    for _path, entries in bundles:
+        for e in entries:
+            if e.get("chain_seq") is None:
+                continue
+            all_rows.append(e)
+            if detect_chain(e) == "audit_log":
+                audit_rows.append(e)
+    by_seq: dict[int, dict] = {}
+    for e in (audit_rows if audit_rows else all_rows):
+        try:
+            by_seq[int(e["chain_seq"])] = e
+        except (TypeError, ValueError):
+            continue
+    return by_seq
+
+
 def verify_merkle_proofs(
     proof_paths: list[str],
     bundles: list[tuple[str, list[dict]]],
@@ -1066,17 +1348,9 @@ def verify_merkle_proofs(
     if not proof_paths:
         return 0
 
-    # Flatten bundle entries into a single chain_seq → entry lookup.
-    by_seq: dict[int, dict] = {}
-    for _path, entries in bundles:
-        for e in entries:
-            seq = e.get("chain_seq")
-            if seq is None:
-                continue
-            try:
-                by_seq[int(seq)] = e
-            except (TypeError, ValueError):
-                continue
+    # Flatten bundle entries into a single chain_seq → entry lookup —
+    # audit_log rows only when present (see _chain_seq_map).
+    by_seq = _chain_seq_map(bundles)
 
     verified = 0
     for path in proof_paths:
@@ -1456,16 +1730,9 @@ def verify_archive_proofs(
     # with the standalone one and that disagreement is the signal an
     # operator needs to see.
     proof_verified = 0
-    by_chain_seq: dict[int, dict] = {}
-    for _path, entries in bundles:
-        for e in entries:
-            seq = e.get("chain_seq")
-            if seq is None:
-                continue
-            try:
-                by_chain_seq[int(seq)] = e
-            except (TypeError, ValueError):
-                continue
+    # audit_log rows only when present (see _chain_seq_map) — the
+    # archive plugin seals the audit_log chain.
+    by_chain_seq = _chain_seq_map(bundles)
 
     for path in proof_paths:
         proof = _load_json_file(path, "ARCHIVE PROOF")
@@ -1711,6 +1978,20 @@ def main() -> int:
         ),
     )
     ap.add_argument(
+        "--chain",
+        choices=("auto", "audit_log", "local_audit"),
+        default="auto",
+        help=(
+            "Which chain schema the bundle rows carry. ``auto`` "
+            "(default) classifies per row: an explicit ``chain`` key "
+            "(written by GET /v1/admin/audit/export) wins, otherwise "
+            "action+status ⇒ audit_log and event_type+result ⇒ "
+            "local_audit. Forcing a value makes any row that "
+            "contradicts it a hard error (exit 9) — for the paranoid "
+            "auditor who wants no heuristic in the loop."
+        ),
+    )
+    ap.add_argument(
         "--require-anchors",
         action="store_true",
         help=(
@@ -1734,15 +2015,19 @@ def main() -> int:
     bundles: list[tuple[str, list[dict]]] = []
     total_legacy = total_per_org = total_anchors = 0
     total_dispute_grade = 0
+    total_audit = total_audit_skipped = 0
     total_entries = 0
     total_orgs: set[str] = set()
     total_agents: set[str] = set()
     for path in args.bundle:
         entries, anchors = load_bundle(path)
-        legacy_n, per_org_n, _agent_n = verify_chains(entries)
+        audit_rows, local_rows = split_entries_by_chain(entries, args.chain)
+        legacy_n, per_org_n, _agent_n = verify_chains(local_rows)
+        audit_n, audit_skipped = verify_audit_log_chain(audit_rows)
         anchor_n, dispute_grade_n = verify_anchors(
-            entries,
+            local_rows,
             anchors,
+            audit_entries=audit_rows,
             trust_store_path=args.tsa_trust_store,
             allow_unverified_signature=args.tsa_allow_unverified_signature,
             max_age_days=args.tsa_max_age_days,
@@ -1750,6 +2035,8 @@ def main() -> int:
         )
         total_legacy += legacy_n
         total_per_org += per_org_n
+        total_audit += audit_n
+        total_audit_skipped += audit_skipped
         total_anchors += anchor_n
         total_dispute_grade += dispute_grade_n
         total_entries += len(entries)
@@ -1789,6 +2076,7 @@ def main() -> int:
         f"  {total_entries} entries · "
         f"{len(total_agents)} agent{'s' if len(total_agents) != 1 else ''} · "
         f"{len(total_orgs)} org{'s' if len(total_orgs) != 1 else ''} · "
+        f"{total_audit} audit_log (global) · "
         f"{total_legacy} legacy · {total_per_org} per-org · "
         f"{total_anchors} TSA anchor{'s' if total_anchors != 1 else ''}"
         + (
@@ -1797,6 +2085,13 @@ def main() -> int:
             else ""
         )
     )
+    if total_audit_skipped:
+        print(
+            f"  {total_audit_skipped} pre-migration audit_log "
+            f"row{'s' if total_audit_skipped != 1 else ''} without a hash "
+            f"skipped (chain_seq IS NULL — written before chaining "
+            f"shipped, not covered by this verification)"
+        )
     if cross_n:
         print(f"  {cross_n} cross-org peer row{'s' if cross_n != 1 else ''} reconciled")
     if merkle_n:
@@ -1816,8 +2111,9 @@ def main() -> int:
             )
         print(f"  {' · '.join(parts)} verified against the Mastio pubkey")
     print("")
-    print("  Every entry_hash matches the SHA-256 of its canonical row.")
-    print("  No previous_hash → next entry_hash break detected.")
+    print("  Every row hash matches the SHA-256 of its canonical row")
+    print("  (row_hash on audit_log, entry_hash on local_audit).")
+    print("  No prev-hash → next-hash break detected on any chain.")
     print("")
     print("  Bundle is intact end-to-end. No row was added, altered, or")
     print("  removed after the original audit chain was written.")
