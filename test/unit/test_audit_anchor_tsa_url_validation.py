@@ -60,6 +60,9 @@ def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # the F-A-406 gate under test is reachable. Provide Redis so the only
     # SystemExit comes from the audit-anchor URL gate.
     monkeypatch.setenv("MCP_PROXY_REDIS_URL", "redis://localhost:6379/0")
+    # F-B-15 — disable the culk_ surface so the SystemExit in these
+    # TSA-URL-focused tests isolates the knob under test.
+    monkeypatch.setenv("MCP_PROXY_USER_API_TOKENS_ENABLED", "false")
 
 
 def _fresh_settings():

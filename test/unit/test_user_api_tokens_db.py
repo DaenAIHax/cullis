@@ -101,7 +101,13 @@ async def test_mint_returns_cleartext_only_once(fresh_db):
     assert minted["created_by"] == "acme::admin"
     assert minted["scope_providers"] == []
     assert minted["scope_paths"] == ["/v1/*"]
-    assert minted["expires_at"] is None
+    # F-B-15 — a mint without an explicit expiry gets the configured
+    # default TTL (90 days), no longer NULL/never. The never-expire
+    # behaviour is pinned separately in test_mint_no_expiry_explicit.
+    assert minted["expires_at"] is not None
+    default_expiry = datetime.fromisoformat(minted["expires_at"])
+    expected = datetime.now(timezone.utc) + timedelta(days=90)
+    assert abs((default_expiry - expected).total_seconds()) < 300
     assert minted["revoked_at"] is None
 
     # get_user_api_token never returns cleartext
@@ -162,6 +168,124 @@ async def test_mint_two_tokens_for_same_user_are_independent(fresh_db):
     assert a["token_last4"] != b["token_last4"] or True  # collision possible
     rows = await list_user_api_tokens("acme::user::carol")
     assert {r["id"] for r in rows} == {a["id"], b["id"]}
+
+
+# ── default TTL (F-B-15) ──────────────────────────────────────────────
+
+
+async def test_mint_no_expiry_explicit(fresh_db):
+    """``no_expiry=True`` is the deliberate opt-out: NULL expires_at."""
+    minted = await mint_user_api_token(
+        principal_id="acme::user::alice",
+        label="never-expires",
+        created_by="acme::admin",
+        no_expiry=True,
+    )
+    assert minted["expires_at"] is None
+
+
+async def test_mint_default_ttl_env_override(fresh_db, monkeypatch):
+    """MCP_PROXY_USER_API_TOKEN_DEFAULT_TTL_DAYS shapes the default."""
+    from mcp_proxy.config import get_settings
+
+    monkeypatch.setenv("MCP_PROXY_USER_API_TOKEN_DEFAULT_TTL_DAYS", "30")
+    get_settings.cache_clear()
+    try:
+        minted = await mint_user_api_token(
+            principal_id="acme::user::alice",
+            label="short-lived",
+            created_by="acme::admin",
+        )
+        expiry = datetime.fromisoformat(minted["expires_at"])
+        expected = datetime.now(timezone.utc) + timedelta(days=30)
+        assert abs((expiry - expected).total_seconds()) < 300
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_mint_default_ttl_zero_restores_legacy_never(
+    fresh_db, monkeypatch,
+):
+    """TTL_DAYS=0 is the operator-level opt-out: legacy NULL default."""
+    from mcp_proxy.config import get_settings
+
+    monkeypatch.setenv("MCP_PROXY_USER_API_TOKEN_DEFAULT_TTL_DAYS", "0")
+    get_settings.cache_clear()
+    try:
+        minted = await mint_user_api_token(
+            principal_id="acme::user::alice",
+            label="legacy-default",
+            created_by="acme::admin",
+        )
+        assert minted["expires_at"] is None
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_mint_explicit_expires_at_passes_verbatim(fresh_db):
+    """An explicit expiry is stored untouched — no default applied."""
+    future = (
+        datetime.now(timezone.utc) + timedelta(days=7)
+    ).isoformat()
+    minted = await mint_user_api_token(
+        principal_id="acme::user::alice",
+        label="one-week",
+        created_by="acme::admin",
+        expires_at=future,
+    )
+    assert minted["expires_at"] == future
+
+
+async def test_mint_rejects_non_iso_expires_at(fresh_db):
+    """Garbage expiry strings would compare lexicographically against
+    the UTC now() filter and could make a token de-facto eternal —
+    refused at mint instead (crypto-review F-B-15 follow-up)."""
+    for bad in ("zz-not-a-date", "", "9999"):
+        with pytest.raises(ValueError):
+            await mint_user_api_token(
+                principal_id="acme::user::alice",
+                label=f"bad-expiry-{bad or 'empty'}",
+                created_by="acme::admin",
+                expires_at=bad,
+            )
+
+
+async def test_mint_rejects_naive_expires_at(fresh_db):
+    """Timezone-naive expiry compares unsoundly vs the UTC filter."""
+    with pytest.raises(ValueError, match="timezone"):
+        await mint_user_api_token(
+            principal_id="acme::user::alice",
+            label="naive-expiry",
+            created_by="acme::admin",
+            expires_at="2027-01-01T00:00:00",
+        )
+
+
+async def test_mint_normalises_offset_expires_at_to_utc(fresh_db):
+    """A non-UTC offset is accepted but normalised, so the stored
+    string compares correctly against datetime.now(UTC).isoformat()."""
+    minted = await mint_user_api_token(
+        principal_id="acme::user::alice",
+        label="tokyo-expiry",
+        created_by="acme::admin",
+        expires_at="2027-01-01T09:00:00+09:00",
+    )
+    assert minted["expires_at"] == "2027-01-01T00:00:00+00:00"
+
+
+async def test_mint_expires_at_and_no_expiry_conflict(fresh_db):
+    """Passing both an explicit expiry and the opt-out is a caller bug."""
+    future = (
+        datetime.now(timezone.utc) + timedelta(days=7)
+    ).isoformat()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await mint_user_api_token(
+            principal_id="acme::user::alice",
+            label="conflict",
+            created_by="acme::admin",
+            expires_at=future,
+            no_expiry=True,
+        )
 
 
 # ── verify ────────────────────────────────────────────────────────────

@@ -14,6 +14,12 @@ flow until the next `## ` heading.
 
 Polish on `main` accumulating for the next minor. No release tag is cut for each individual patch any more; release cadence is intentionally throttled to one minor every 2-3 weeks plus emergency-only patches, matching the practice of comparable alpha-stage open-core projects.
 
+### Breaking — production deployments using `culk_*` user API tokens
+
+- **F-B-15 boot gate.** `culk_*` user API tokens are plain Bearer credentials (no mTLS client cert, no RFC 9449 DPoP proof). With `MCP_PROXY_ENVIRONMENT=production` the Mastio now **refuses to boot** while the surface is enabled (the default) unless the operator either disables it (`MCP_PROXY_USER_API_TOKENS_ENABLED=false`) or explicitly accepts the risk (`MCP_PROXY_USER_API_TOKENS_INSECURE_OK=true`), mirroring the F-B-11/F-B-14 gates. Listing and revoking existing tokens keeps working with the surface disabled; only authentication and minting are gated. Threat model §5.1 documents the trade-off.
+- **90-day default TTL at mint.** Tokens minted without an explicit expiry now default to 90 days (`MCP_PROXY_USER_API_TOKEN_DEFAULT_TTL_DAYS`, 0 restores the legacy behaviour). "Never expires" remains available as an explicit choice (`expires_in_days: 0` on the admin API, the new checkbox in the dashboard). Existing tokens are untouched.
+- README and threat model no longer claim "refuses plain Bearer outright" unqualified: the claim is now scoped to agent identity surfaces, with the `culk_*` exception documented instead of implied away.
+
 ## [v0.6.6] — Security super-audit + production-shape resilience hardening — 2026-06-05
 
 Two waves of adversarial work on top of v0.6.5. First, an 11-agent red-team super-audit with adversarial verification closed a batch of trust-boundary bugs (SSRF connect-pin gaps, an unauthenticated bridge path, a weak-key signing floor, a multi-worker PKI race, and audit-chain binding gaps). Second, a destructive prod-shape stress test (Postgres + Vault + `environment=production` + 4 workers, validated live end-to-end and under chaos/fault injection) found and fixed the failures that only surface under a real multi-agent production load: a Postgres-only enrollment crash, a runtime that booted green then 500'd on the first login without Redis, identity-creation events that fell outside the tamper-evident hash chain, and `/v1/llm/chat` 401-churn under worker concurrency. Plus the carry-over fixes from the 48h soak.

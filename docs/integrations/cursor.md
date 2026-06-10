@@ -62,6 +62,15 @@ curl -X POST "${MASTIO_URL}/v1/admin/api-tokens" \
   }'
 ```
 
+> **Production note (F-B-15).** `culk_*` tokens are plain Bearer
+> credentials (no mTLS, no DPoP), so with
+> `MCP_PROXY_ENVIRONMENT=production` the Mastio refuses to boot while
+> the surface is enabled unless you explicitly accept the trade-off
+> with `MCP_PROXY_USER_API_TOKENS_INSECURE_OK=true` (threat model
+> §5.1). Tokens minted without an expiry now default to a 90-day TTL;
+> pass `"expires_in_days": 0` only if you deliberately want a
+> non-expiring token.
+
 ## 2. Configure Cursor
 
 1. Open Cursor → **Cursor Settings** (`Cmd+,` on Mac).

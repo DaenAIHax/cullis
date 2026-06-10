@@ -64,6 +64,9 @@ def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MCP_PROXY_PDP_WEBHOOK_HMAC_SECRET", _PDP_HMAC_OK)
     monkeypatch.setenv("MCP_PROXY_AUDIT_FAIL_DENY", "true")
     monkeypatch.setenv("MCP_PROXY_REDIS_URL", "redis://redis:6379/0")
+    # F-B-15 — disable the culk_ surface so the SystemExit in these
+    # F-B-14-focused tests isolates the knob under test.
+    monkeypatch.setenv("MCP_PROXY_USER_API_TOKENS_ENABLED", "false")
     # Default the override OFF; the opt-in test sets it explicitly.
     monkeypatch.delenv("MCP_PROXY_LOCAL_TOKEN_DPOP_INSECURE_OK", raising=False)
 

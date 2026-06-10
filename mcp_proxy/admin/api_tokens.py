@@ -86,8 +86,17 @@ class MintRequest(BaseModel):
     scope_providers: list[str] = Field(default_factory=list)
     # Default applied by the DB helper when omitted (``["/v1/*"]``).
     scope_paths: Optional[list[str]] = None
-    # ISO-8601 UTC, e.g. ``2026-08-11T00:00:00Z``. Null means never expire.
+    # ISO-8601 UTC, e.g. ``2026-08-11T00:00:00Z``. Omitted = the
+    # configured default TTL applies (90 days unless
+    # MCP_PROXY_USER_API_TOKEN_DEFAULT_TTL_DAYS overrides it).
+    # Mutually exclusive with ``expires_in_days``.
     expires_at: Optional[str] = Field(None, max_length=64)
+    # Relative expiry helper (F-B-15 claim alignment). None (default) =
+    # apply the configured default TTL. 0 = explicit no-expiry — the
+    # caller must say "never" deliberately, it is no longer the silent
+    # default. N>0 = now + N days. Mutually exclusive with
+    # ``expires_at``.
+    expires_in_days: Optional[int] = Field(None, ge=0, le=3650)
     # The admin can pass an explicit ``created_by`` (e.g. an audit
     # identifier for a Terraform run); when omitted we record the
     # static string ``"admin-secret"`` since the X-Admin-Secret auth
@@ -147,6 +156,37 @@ async def mint_token(body: MintRequest) -> MintResponse:
     will be returned. The caller must capture it now; subsequent reads
     expose only ``token_last4``.
     """
+    # F-B-15 — minting is refused while the culk_ surface is disabled.
+    # List / get / revoke stay available so operators can audit and
+    # clean up existing tokens with the flag off.
+    if not get_settings().user_api_tokens_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "user API tokens are disabled on this Mastio "
+                "(MCP_PROXY_USER_API_TOKENS_ENABLED=false); minting is "
+                "refused. Existing tokens can still be listed and revoked."
+            ),
+        )
+    if body.expires_at is not None and body.expires_in_days is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "expires_at and expires_in_days are mutually exclusive; "
+                "pass one or neither (default TTL applies)"
+            ),
+        )
+    expires_at = body.expires_at
+    no_expiry = False
+    if body.expires_in_days is not None:
+        if body.expires_in_days == 0:
+            no_expiry = True
+        else:
+            from datetime import datetime, timedelta, timezone
+            expires_at = (
+                datetime.now(timezone.utc)
+                + timedelta(days=body.expires_in_days)
+            ).isoformat()
     created_by = body.created_by or "admin-secret"
     try:
         minted = await mint_user_api_token(
@@ -155,7 +195,8 @@ async def mint_token(body: MintRequest) -> MintResponse:
             created_by=created_by,
             scope_providers=body.scope_providers,
             scope_paths=body.scope_paths,
-            expires_at=body.expires_at,
+            expires_at=expires_at,
+            no_expiry=no_expiry,
         )
     except ValueError as exc:
         # mint_user_api_token raises ValueError for unknown principal /

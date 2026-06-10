@@ -60,6 +60,7 @@ async def create_api_token(
     request: Request,
     label: str = Form(""),
     expires_at: str = Form(""),
+    never_expires: str = Form(""),
     scope_providers: list[str] | None = Form(None),
 ) -> RedirectResponse:
     """Mint a new culk_ token for ``principal_id`` and redirect back to
@@ -71,6 +72,19 @@ async def create_api_token(
     if not await verify_csrf(request, session):
         return _back_to_user(principal_id, "error=csrf")
 
+    # F-B-15 — minting is refused while the culk_ surface is disabled
+    # (revoke below stays available so operators can clean up).
+    from mcp_proxy.config import get_settings
+    if not get_settings().user_api_tokens_enabled:
+        return _back_to_user(
+            principal_id,
+            "token_error="
+            + quote(
+                "API tokens are disabled on this Mastio "
+                "(MCP_PROXY_USER_API_TOKENS_ENABLED=false)."
+            ),
+        )
+
     clean_label = (label or "").strip()
     if not clean_label:
         return _back_to_user(principal_id, "token_error=label+is+required")
@@ -81,6 +95,19 @@ async def create_api_token(
     # (string comparison vs ``datetime.now(UTC).isoformat()``) works.
     if clean_expiry and len(clean_expiry) == 10:
         clean_expiry = f"{clean_expiry}T23:59:59+00:00"
+    # "Never expires" checkbox (F-B-15): an empty date no longer means
+    # "never" — the DB helper applies the 90-day default TTL. Ticking
+    # the checkbox is the explicit opt-out; it wins over a date typo by
+    # being rejected, not silently preferred.
+    wants_never = bool((never_expires or "").strip())
+    if wants_never and clean_expiry:
+        return _back_to_user(
+            principal_id,
+            "token_error="
+            + quote(
+                "Pick an expiry date OR tick Never expires, not both."
+            ),
+        )
 
     scope_list = [s.strip() for s in (scope_providers or []) if s.strip()]
 
@@ -97,6 +124,7 @@ async def create_api_token(
             created_by=created_by,
             scope_providers=scope_list,
             expires_at=clean_expiry,
+            no_expiry=wants_never,
         )
     except ValueError:
         # mint_user_api_token raises ValueError for unknown principal /

@@ -23,6 +23,12 @@ handler does not need to know which auth class minted the agent — the
 ``InternalAgent.principal_type=="user"`` is the signal that downstream
 audit code uses to attribute correctly.
 
+F-B-15 (claim-alignment 2026-06-10): the whole surface is gated by
+``settings.user_api_tokens_enabled``. When false the resolver declines
+every request before any DB lookup, and ``validate_config`` refuses a
+production boot with the flag on unless the operator explicitly accepts
+the plain-Bearer risk via ``MCP_PROXY_USER_API_TOKENS_INSECURE_OK``.
+
 Touch tracking:
     Every successful auth updates ``last_used_at`` + ``last_used_ip`` on
     the token row via ``touch_user_api_token``. Best-effort: failures in
@@ -48,6 +54,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request, status
 
+from mcp_proxy.config import get_settings
 from mcp_proxy.db import (
     touch_user_api_token,
     verify_user_api_token,
@@ -169,6 +176,13 @@ async def _maybe_api_token_principal(request: Request) -> InternalAgent | None:
     not "auth failed" — that decision belongs to the resolver chain
     further down the pipeline.
     """
+    # F-B-15 — culk_ surface disabled. Decline before any header parse
+    # or DB lookup so the request falls through to the LOCAL_TOKEN /
+    # cert+DPoP resolvers; a culk_-only client ends in the cert path's
+    # 401. Tokens already in the DB stop authenticating immediately.
+    if not get_settings().user_api_tokens_enabled:
+        return None
+
     token = _extract_bearer_token(request)
     if token is None:
         return None

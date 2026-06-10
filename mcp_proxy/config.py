@@ -9,7 +9,7 @@ import os
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _log = logging.getLogger("mcp_proxy.startup")
@@ -616,6 +616,34 @@ class ProxySettings(BaseSettings):
     #     mint AND at validation. Use after the SDK has rolled out and
     #     the existing token TTL has fully expired.
     local_token_require_dpop: bool = False
+
+    # ADR-027 / F-B-15 (claim-alignment, 2026-06-10) — culk_ user API
+    # tokens. ``user_api_tokens_enabled`` controls the entire culk_
+    # surface: the Bearer-resolver short-circuit in
+    # ``get_agent_from_dpop_client_cert`` (step 0) AND minting via the
+    # admin API / dashboard. A culk_ token is a plain Bearer credential
+    # — no mTLS client cert, no RFC 9449 key-possession proof — for
+    # OpenAI-compatible clients (LibreChat, Cursor) that cannot do
+    # DPoP. Default ON for dev / integration ergonomics; production
+    # refuses boot unless the operator either disables this or
+    # explicitly accepts the risk via
+    # ``MCP_PROXY_USER_API_TOKENS_INSECURE_OK=true`` (validate_config
+    # gate, mirrors F-B-11 / F-B-14). Listing and revoking existing
+    # tokens stays available regardless of the flag so operators can
+    # audit and clean up.
+    user_api_tokens_enabled: bool = True
+
+    # ADR-027 §threat-model — default mint TTL in days applied when the
+    # caller does not specify an expiry. The ADR promises "TTL
+    # configurabile (default 90 giorni)"; the original implementation
+    # minted expires_at=NULL (never expire), which contradicted it.
+    # 0 disables the default (mint-time "never", pre-F-B-15 legacy
+    # behaviour); explicit no-expiry per token remains available via
+    # ``expires_in_days=0`` on the admin mint API. Existing rows are
+    # never touched — this only shapes new mints. ``ge=0`` so an
+    # operator typo (negative value) crashes the boot loudly instead
+    # of silently restoring the legacy never-expire default.
+    user_api_token_default_ttl_days: int = Field(default=90, ge=0)
 
     # ADR-032 Layer 2 — Connector OIDC login session TTL in seconds.
     # Default 1h aligns with ADR-032 decision D (banking-grade idle).
@@ -1327,6 +1355,38 @@ def validate_config(settings: ProxySettings) -> None:
                     "migration window explicitly opt in via "
                     "MCP_PROXY_LOCAL_TOKEN_DPOP_INSECURE_OK=true and track a "
                     "sunset date (F-B-14)."
+                )
+                raise SystemExit(1)
+
+        # F-B-15 (claim-alignment 2026-06-10). ADR-027 culk_ user API
+        # tokens. A culk_ token is a plain Bearer credential: no mTLS
+        # client cert, no RFC 9449 key-possession proof. It is scoped
+        # (path + provider), bcrypt-hashed at rest, revocable and
+        # TTL-bounded (90d default), but a leaked or replayed token
+        # still authenticates as the user until expiry or revocation.
+        # That contradicts the "agent surfaces require mTLS+DPoP, plain
+        # Bearer refused" production posture, so the surface is opt-in
+        # in production: disable it, or declare the accepted risk
+        # explicitly and track a review date, mirroring F-B-11/F-B-14.
+        if settings.user_api_tokens_enabled:
+            insecure_ok = (
+                os.environ.get("MCP_PROXY_USER_API_TOKENS_INSECURE_OK", "")
+                .strip()
+                .lower()
+            ) in {"1", "true", "yes"}
+            if not insecure_ok:
+                _log.critical(
+                    "MCP_PROXY_USER_API_TOKENS_ENABLED=true is not permitted "
+                    "in production without explicit risk acceptance: culk_ "
+                    "user API tokens are plain Bearer credentials — no mTLS "
+                    "client cert, no RFC 9449 key-possession proof — so a "
+                    "leaked or replayed token authenticates as the user "
+                    "until expiry or revocation. Set "
+                    "MCP_PROXY_USER_API_TOKENS_ENABLED=false, or for "
+                    "OpenAI-compatible client deployments (LibreChat, "
+                    "Cursor) explicitly opt in via "
+                    "MCP_PROXY_USER_API_TOKENS_INSECURE_OK=true and track a "
+                    "review date (F-B-15)."
                 )
                 raise SystemExit(1)
 

@@ -150,7 +150,7 @@ pinned TSA roots — a property no MITM gains from being on the wire.
 
 ## 5. DPoP + mTLS binding
 
-Every authenticated request to Mastio carries **both**:
+Every **agent-authenticated** request to Mastio carries **both**:
 
 - An x509 client cert presented over mTLS (RFC 8705 §3).
 - A DPoP proof JWT (RFC 9449) bound to the agent's signing key.
@@ -161,9 +161,45 @@ provided by the JTI store (Redis in production, in-memory in dev for
 single-worker stacks). DPoP `htu` is checked against the operator's
 configured `MCP_PROXY_PROXY_PUBLIC_URL`.
 
-Mastio refuses plain Bearer authentication on every endpoint that
-matters. The dashboard cookie-auth path is bound by httponly + secure
-+ samesite + CSRF token.
+Mastio refuses plain Bearer authentication on every agent identity
+surface. The dashboard cookie-auth path is bound by httponly + secure
++ samesite + CSRF token. The single scoped exception for human users
+is documented in §5.1.
+
+### 5.1 User API tokens (`culk_*`) — scoped bearer exception
+
+ADR-027 user API tokens exist for OpenAI-compatible clients
+(LibreChat, Cursor, Cherry Studio) driven by a **human user**: those
+clients speak `Authorization: Bearer <key>` and cannot present a
+client certificate or sign DPoP proofs. A `culk_*` token therefore
+authenticates **by itself** on the paths it is scoped to (default
+`/v1/*`; in practice `/v1/chat/completions`, `/v1/llm/chat`,
+`/v1/models`) — no mTLS, no proof-of-possession.
+
+**Threat.** Token leak (shell history, client config files,
+unencrypted backups) and replay: whoever holds the bearer string
+authenticates as the user until expiry or revocation. This is the
+same threat class as a leaked OpenAI API key.
+
+**Mitigations.**
+
+- 256-bit entropy; bcrypt (cost 12) at rest, only `last4` displayed
+  after mint.
+- `scope_paths` (default `["/v1/*"]`) enforced at the resolver;
+  `scope_providers` enforced on `/v1/chat/completions`.
+- Immediate revocation (admin API + dashboard); `last_used_at` /
+  `last_used_ip` visible for anomaly review.
+- Default 90-day TTL at mint
+  (`MCP_PROXY_USER_API_TOKEN_DEFAULT_TTL_DAYS`); "never expires" is
+  an explicit per-token opt-out, not the default.
+- **Off in production unless explicitly accepted**: with
+  `environment=production`, boot refuses while the surface is enabled
+  unless the operator sets `MCP_PROXY_USER_API_TOKENS_INSECURE_OK=true`
+  (gate F-B-15, same family as F-B-11/F-B-14) or disables it via
+  `MCP_PROXY_USER_API_TOKENS_ENABLED=false`. Listing and revoking
+  existing tokens keeps working with the surface disabled.
+- TLS is the transport security boundary, as for every other
+  credential in this model.
 
 ---
 
