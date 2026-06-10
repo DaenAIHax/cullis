@@ -8,11 +8,33 @@ updated: "2026-05-22"
 
 # Audit export
 
-**Who this is for**: a compliance operator, security reviewer, or investigator who needs a tamper-evident record of what happened on the Mastio for a given time window. Every significant event — enrollment, session open, MCP tool call, key rotation, framework update apply — lands in an append-only, SHA-256 hash-chained table called `local_audit`.
+**Who this is for**: a compliance operator, security reviewer, or investigator who needs a tamper-evident record of what happened on the Mastio for a given time window. Every significant event lands in one of two append-only, SHA-256 hash-chained tables:
 
-## What's in the chain
+- **`audit_log`** — the primary chain: every gateway action (LLM chat egress, MCP tool calls, admin mutations, token mints/revokes). One **global** chain per Mastio. Rows written since migration 0042 use the v2 canonical, which binds the agent's DPoP key thumbprint (`dpop_jkt`) and the on-behalf-of user into the hash. The RFC 3161 and Merkle anchors are built over this chain.
+- **`local_audit`** — the per-org chain: enrollment, session open, A2A messaging, key rotation, framework update apply.
 
-The `local_audit` table has the following columns:
+## What's in the chains
+
+The `audit_log` table:
+
+| Column | Meaning |
+|---|---|
+| `id` | Auto-increment primary key |
+| `timestamp` | ISO 8601 UTC |
+| `agent_id` | Actor |
+| `action` | e.g. `egress_llm_chat`, `tool_call`, `api_token.mint` |
+| `tool_name` | Tool when applicable |
+| `status` | `success` / `denied` / `error` |
+| `detail` | Event-specific payload |
+| `request_id`, `duration_ms` | Correlation + timing |
+| `chain_seq` | Monotonic global sequence (UNIQUE) |
+| `prev_hash` | Link to the prior row's `row_hash` (`genesis` for the first) |
+| `row_hash` | SHA-256 over the canonical representation of the row |
+| `hash_format` | `v2` (binds the two columns below) or NULL/`v1` legacy |
+| `dpop_jkt` | RFC 9449 key thumbprint bound into v2 hashes |
+| `on_behalf_of_user_id` | ADR-032 attribution bound into v2 hashes |
+
+The `local_audit` table:
 
 | Column | Meaning |
 |---|---|
@@ -29,12 +51,12 @@ The `local_audit` table has the following columns:
 | `chain_seq` | Monotonic sequence within the chain |
 | `peer_org_id`, `peer_row_hash` | Reserved for future cross-org reconciliation. Empty on standalone deploys. |
 
-The chain is **per-org** on the Mastio. The standalone Mastio (the default bundle deploy) writes a single per-org chain.
+The `local_audit` chain is **per-org**; the standalone Mastio (the default bundle deploy) writes a single per-org chain. The `audit_log` chain is **global** for the whole Mastio.
 
-Tamper-evidence properties:
+Tamper-evidence properties (both tables):
 
-- Append-only via SQLite triggers `local_audit_no_update` + `local_audit_no_delete` — even admin DB access cannot UPDATE / DELETE without dropping the triggers (an act that itself leaves audit trail).
-- Each row's `entry_hash` covers a canonical serialization including `previous_hash`, so any modification of an earlier row breaks every subsequent hash.
+- Append-only via DB triggers — even admin DB access cannot UPDATE / DELETE without dropping the triggers (an act that itself leaves audit trail).
+- Each row's hash (`row_hash` / `entry_hash`) covers a canonical serialization including the previous row's hash, so any modification of an earlier row breaks every subsequent hash.
 
 ## 1. View in the dashboard
 
@@ -93,9 +115,38 @@ A failure means the chain was tampered with after write (UPDATE / DELETE bypass,
 
 ## 3. Export for offline forensic review
 
-The Mastio doesn't yet expose an HTTP export endpoint (it's on the roadmap; the chain-integrity verify endpoint above covers the most common online use case). For an offline NDJSON dump suitable for the standalone verifier or for handing to an auditor, query the database directly.
+### HTTP endpoint (recommended)
 
-### SQLite (default bundle)
+`GET /v1/admin/audit/export` streams a verifier-ready NDJSON bundle — both chains plus the TSA / Merkle anchor rows — with admin-secret auth:
+
+```bash
+ADMIN_SECRET="$(grep ^MCP_PROXY_ADMIN_SECRET proxy.env | cut -d= -f2)"
+
+# Everything: audit_log + local_audit + anchors
+curl -sk -H "X-Admin-Secret: ${ADMIN_SECRET}" \
+     "https://mastio.example.com:9443/v1/admin/audit/export?chain=both" \
+     -o bundle.ndjson
+
+# Only the primary chain, a chain_seq window
+curl -sk -H "X-Admin-Secret: ${ADMIN_SECRET}" \
+     "https://mastio.example.com:9443/v1/admin/audit/export?chain=audit_log&since_seq=5000&until_seq=9000" \
+     -o window.ndjson
+
+# Only one org's local_audit chain
+curl -sk -H "X-Admin-Secret: ${ADMIN_SECRET}" \
+     "https://mastio.example.com:9443/v1/admin/audit/export?chain=local_audit&org_id=acme" \
+     -o acme.ndjson
+```
+
+Parameters: `chain=audit_log|local_audit|both` (default `both`); `org_id` filters `local_audit` rows only (the `audit_log` chain is global — combining it with `chain=audit_log` is a 400); `since_seq` / `until_seq` are inclusive `chain_seq` bounds (a window that doesn't start at the genesis is forward-verified only — the verifier says so, qualifies its verdict, and refuses such bundles under `--require-genesis`); `include_anchors=false` drops the anchor rows. Seq windows are meant for `audit_log`: a `local_audit` window that starts past an org's first row will fail that org's chain walk — export local_audit org-complete instead. The response streams in keyset-paginated batches, so a multi-100k-row export doesn't hold DB locks for the duration of the download.
+
+Every entry row carries an explicit `"chain"` key so the verifier never guesses the schema.
+
+### SQL (alternative)
+
+For a window keyed on timestamp rather than `chain_seq`, or where the admin secret isn't available to the exporting party, query the database directly.
+
+#### SQLite (default bundle)
 
 ```bash
 docker compose -p cullis-mastio exec mcp-proxy \
@@ -109,7 +160,9 @@ docker compose -p cullis-mastio exec mcp-proxy \
     > audit-april-2026.ndjson
 ```
 
-### Postgres (opt-in)
+The same recipe works for the primary chain — substitute `audit_log` and `ORDER BY chain_seq`; the verifier auto-detects the schema per row.
+
+#### Postgres (opt-in)
 
 ```bash
 psql -h "$PG_HOST" -U cullis -d cullis -A -t -c \
@@ -128,8 +181,10 @@ Store the resulting file in append-only cold storage (S3 Object Lock, WORM files
 The repo ships `scripts/cullis-audit-verify.py` — a zero-network, offline verifier consumable by anyone holding the NDJSON dump (your compliance team, an external auditor, a federated peer reconciling cross-org events).
 
 ```bash
-python scripts/cullis-audit-verify.py --bundle audit-april-2026.ndjson
+python scripts/cullis-audit-verify.py --bundle bundle.ndjson
 ```
+
+The verifier walks both chains: the global `audit_log` chain (recomputing every `row_hash` from content, including the v2 DPoP/on-behalf-of binding) and each per-org `local_audit` chain. `--chain audit_log|local_audit` forces the schema interpretation for the paranoid auditor (default `auto`: the export's explicit `chain` key wins, with a field-shape heuristic for SQL dumps). TSA anchor rows are matched against the `audit_log` chain they were minted over. For dispute-grade verification add `--require-anchors` and `--tsa-trust-store`.
 
 Example output:
 
@@ -145,10 +200,12 @@ Per-org chains: 1
 `cullis-audit-verify.py` exits with:
 
 - `0` — all checks passed
-- `2` — chain tamper detected (mismatch or break)
+- `2` — chain tamper detected (mismatch or break, on either chain)
 - `3` — TSA anchor mismatch (when applicable; the bundle includes RFC 3161 / mock TSA tokens and one doesn't match its row)
 - `4` — reserved (cross-org reconciliation, future use)
 - `5` — unrecognized TSA token format
+- `8` — `--require-anchors` set but zero dispute-grade anchors in the bundle
+- `9` — bundle schema unrecognized (a row matches neither chain shape, or contradicts an explicit `--chain` override)
 
 ## Troubleshoot
 

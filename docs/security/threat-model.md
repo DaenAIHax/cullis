@@ -61,6 +61,14 @@ trigger (drop trigger + manual edit) breaks the chain at the edit
 point, which the offline verifier (`scripts/cullis-audit-verify.py`)
 detects.
 
+Two chains exist and **both are recomputable offline from content**
+by the verifier: the primary `audit_log` chain (one global chain per
+Mastio; v2 rows additionally bind the agent's DPoP thumbprint and the
+on-behalf-of user into the hash) and the per-org `local_audit` chain.
+The RFC 3161 / Merkle anchors below are built over the `audit_log`
+chain. `GET /v1/admin/audit/export` streams either or both chains as
+the NDJSON bundle the verifier consumes.
+
 ### 2.2 Merkle batch + STH (ADR-037)
 
 Per-epoch batches of leaves are hashed into a Merkle tree; the
