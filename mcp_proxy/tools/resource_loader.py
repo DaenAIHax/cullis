@@ -85,7 +85,7 @@ async def _fetch_upstream_schema(endpoint_url: str, tool_name: str) -> dict | No
     import httpx as _httpx
     from mcp_proxy.utils.url_safety import (
         UnsafeUrlError,
-        assert_safe_outbound_url,
+        assert_safe_outbound_url_async,
     )
     from mcp_proxy.config import get_settings
 
@@ -93,7 +93,10 @@ async def _fetch_upstream_schema(endpoint_url: str, tool_name: str) -> dict | No
         getattr(get_settings(), "policy_webhook_allow_private_ips", False)
     )
     try:
-        assert_safe_outbound_url(endpoint_url, allow_private=allow_private)
+        # Async variant — DNS resolve off the event loop (P2).
+        await assert_safe_outbound_url_async(
+            endpoint_url, allow_private=allow_private,
+        )
     except UnsafeUrlError as exc:
         _log.warning(
             "upstream schema fetch refused unsafe endpoint %s: %s",

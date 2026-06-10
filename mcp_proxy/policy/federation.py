@@ -84,7 +84,7 @@ async def call_remote_tool_call_policy(
     # the attacker-controlled destination on every PDP call.
     from mcp_proxy.utils.url_safety import (
         UnsafeUrlError,
-        assert_safe_outbound_url,
+        assert_safe_outbound_url_async,
     )
     from mcp_proxy.config import get_settings
 
@@ -92,7 +92,11 @@ async def call_remote_tool_call_policy(
         getattr(get_settings(), "policy_webhook_allow_private_ips", False)
     )
     try:
-        assert_safe_outbound_url(federation_url, allow_private=allow_private)
+        # Async variant — DNS resolve off the event loop on the
+        # per-PDP-call path (P2, 2026-06-10).
+        await assert_safe_outbound_url_async(
+            federation_url, allow_private=allow_private,
+        )
     except UnsafeUrlError as exc:
         _log.warning(
             "federation tool-call refused unsafe URL target=%s url=%s err=%s",

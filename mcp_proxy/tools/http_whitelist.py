@@ -50,7 +50,7 @@ class WhitelistedTransport(httpx.AsyncHTTPTransport):
         # to a cloud-metadata side-channel).
         from mcp_proxy.utils.url_safety import (
             UnsafeUrlError,
-            assert_safe_outbound_url,
+            assert_safe_outbound_url_async,
             pin_request_to_ip,
         )
         from mcp_proxy.config import get_settings
@@ -59,7 +59,9 @@ class WhitelistedTransport(httpx.AsyncHTTPTransport):
             getattr(get_settings(), "policy_webhook_allow_private_ips", False)
         )
         try:
-            pinned_ip = assert_safe_outbound_url(
+            # Async variant: the DNS resolve inside must not block the
+            # event loop on a per-tool-call path (P2, 2026-06-10).
+            pinned_ip = await assert_safe_outbound_url_async(
                 str(request.url), allow_private=allow_private,
             )
         except UnsafeUrlError as exc:

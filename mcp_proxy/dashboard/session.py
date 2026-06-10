@@ -23,6 +23,7 @@ so Starlette emits the value unquoted and unescaped. Python ``requests``,
 (``json_payload + "." + signature``) is still accepted on read so a
 worker upgrade does not invalidate every live admin session.
 """
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -456,7 +457,11 @@ async def set_admin_password(plaintext: str) -> None:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
 
     from mcp_proxy.db import set_config
-    hashed = bcrypt.hashpw(plaintext.encode(), bcrypt.gensalt(rounds=12))
+    # bcrypt cost 12 ≈ 200ms of CPU — off the event loop (P2, review
+    # 2026-06-10); bcrypt releases the GIL in the thread.
+    hashed = await asyncio.to_thread(
+        bcrypt.hashpw, plaintext.encode(), bcrypt.gensalt(rounds=12),
+    )
     await set_config(ADMIN_PASSWORD_KEY, hashed.decode())
 
 
@@ -471,7 +476,11 @@ async def verify_admin_password(plaintext: str) -> bool:
         return False
 
     try:
-        return bcrypt.checkpw(plaintext.encode(), stored.encode())
+        # bcrypt cost 12 ≈ 200ms of CPU on every dashboard login —
+        # off the event loop (P2, review 2026-06-10).
+        return await asyncio.to_thread(
+            bcrypt.checkpw, plaintext.encode(), stored.encode(),
+        )
     except (ValueError, TypeError):
         return False
 

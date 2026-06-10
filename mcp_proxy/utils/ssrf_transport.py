@@ -27,6 +27,7 @@ import httpx
 
 from mcp_proxy.utils.url_safety import (
     assert_safe_outbound_url,
+    assert_safe_outbound_url_async,
     pin_request_to_ip,
 )
 
@@ -41,8 +42,10 @@ class SSRFPinnedTransport(httpx.AsyncHTTPTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         # Raises UnsafeUrlError (a ValueError) on a blocked/unresolvable
-        # host — fail closed; the caller surfaces it as an error.
-        pinned_ip = assert_safe_outbound_url(
+        # host — fail closed; the caller surfaces it as an error. Async
+        # variant: the validation resolves DNS, which must not block
+        # the event loop on the hot outbound path (P2, 2026-06-10).
+        pinned_ip = await assert_safe_outbound_url_async(
             str(request.url), allow_private=self._allow_private,
         )
         pin_request_to_ip(request, pinned_ip)

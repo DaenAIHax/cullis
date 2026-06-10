@@ -21,6 +21,7 @@ handling are preserved verbatim.
 """
 from __future__ import annotations
 
+import asyncio as _asyncio
 import logging
 import pathlib
 from datetime import datetime, timezone
@@ -222,7 +223,7 @@ async def pki_rotate_ca(request: Request):
     if not org_id:
         raise HTTPException(status_code=400, detail="Organization ID not configured. Run setup first.")
 
-    cert_pem, key_pem = generate_org_ca(org_id)
+    cert_pem, key_pem = await _asyncio.to_thread(generate_org_ca, org_id)
     await set_config("org_ca_cert", cert_pem)
     await set_config("org_ca_key", key_pem)
 

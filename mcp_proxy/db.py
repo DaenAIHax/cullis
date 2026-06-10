@@ -2699,7 +2699,9 @@ async def mint_user_api_token(
             ).isoformat()
 
     plaintext = _new_api_token_plaintext()
-    token_hash = _hash_api_token(plaintext)
+    # bcrypt cost 12 ≈ 200ms of CPU — off the event loop (P2, same
+    # rationale as the verify path).
+    token_hash = await _asyncio.to_thread(_hash_api_token, plaintext)
     last4 = plaintext[-4:]
     token_id = _new_token_id()
     ts = datetime.now(timezone.utc).isoformat()
@@ -2880,7 +2882,13 @@ async def verify_user_api_token(plaintext: str) -> dict | None:
     last4 = plaintext[-4:]
     candidates = await _find_active_token_candidates_by_last4(last4)
     for cand in candidates:
-        if _check_api_token(plaintext, cand["token_hash"]):
+        # P2 (review 2026-06-10): bcrypt cost 12 is ~200-300ms of pure
+        # CPU — inline it would stall the event loop for every other
+        # in-flight request on EVERY culk_-authenticated call. Run it
+        # on the default thread pool; bcrypt releases the GIL.
+        if await _asyncio.to_thread(
+            _check_api_token, plaintext, cand["token_hash"],
+        ):
             # Drop the hash before handing back to caller — never let it
             # leave this function. Defence-in-depth against accidental
             # logging of the row.
