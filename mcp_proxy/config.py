@@ -461,14 +461,36 @@ class ProxySettings(BaseSettings):
     #                                  via the legacy per-row path (same
     #                                  semantics as batch_size=1 but skips
     #                                  the queue + background task spawn
-    #                                  entirely). Compliance customers that
-    #                                  insist on per-row durability under
-    #                                  fail-deny=True must keep this true.
+    #                                  entirely).
+    #   audit_chain_durable          — compliance-facing alias for the
+    #                                  per-row path (review 2026-06-10):
+    #                                  same routing as ``disabled`` but
+    #                                  named for what an auditor asks for
+    #                                  ("per-row durable writes"), not for
+    #                                  what it switches off. Every audit
+    #                                  row is hashed + INSERTed + fsynced
+    #                                  before the request proceeds, and a
+    #                                  write failure surfaces per
+    #                                  ``audit_fail_deny``. Cost: the
+    #                                  batched chain's 50-100x audit-path
+    #                                  throughput gain is gone. When true,
+    #                                  batch_size / flush_interval_s are
+    #                                  unused.
+    #
+    # Crash-loss window (batched mode): rows queued but not yet flushed
+    # are lost on SIGKILL / OOM / power loss — bounded by batch_size rows
+    # or flush_interval_s seconds, whichever is hit first. SIGTERM is NOT
+    # affected (the lifespan shutdown drains the queue). The loss is not
+    # detectable by chain verification: hashes are computed at flush
+    # time, so the chain stays contiguous and verifies clean without the
+    # lost tail. Documented in docs/security/threat-model.md §2 and
+    # declared at startup via the audit-durability boot line.
     #
     # See enterprise-kit/compliance-posture.md for the trade-off matrix.
     audit_chain_batch_size: int = 100
     audit_chain_flush_interval_s: float = 1.0
     audit_chain_disabled: bool = False
+    audit_chain_durable: bool = False
 
     # Per-call cap on the success-path ``detail`` JSON the tool executor
     # attaches to a ``tool_execute`` audit row (parameters + result
@@ -1566,7 +1588,13 @@ def validate_config(settings: ProxySettings) -> None:
                 "the legacy drop-and-continue behaviour. Audit F-A-404.",
             )
             raise SystemExit(1)
-        if not settings.audit_chain_disabled and settings.audit_fail_deny:
+        # ``durable`` routes log_audit through the legacy per-row path
+        # exactly like ``disabled`` — no background flush exists, so the
+        # F-A-404 decision is moot in both cases.
+        if (
+            not (settings.audit_chain_disabled or settings.audit_chain_durable)
+            and settings.audit_fail_deny
+        ):
             if not (
                 settings.audit_chain_background_fail_deny
                 or settings.audit_chain_background_fail_open
