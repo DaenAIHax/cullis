@@ -725,8 +725,6 @@ class OllamaAdapter:
                         for chunk in acc.on_chunk(parsed):
                             yield chunk
                 # Final OpenAI chunk with finish_reason + usage.
-                dispatch_obj.prompt_tokens = acc.prompt_tokens
-                dispatch_obj.completion_tokens = acc.completion_tokens
                 yield acc.build_final_chunk()
             except GatewayError:
                 raise
@@ -735,6 +733,14 @@ class OllamaAdapter:
             except httpx.HTTPError as exc:
                 raise GatewayError(502, "provider_unreachable", detail=str(exc)) from exc
             finally:
+                # Copy the accumulator counts here, not only after a
+                # full drain (EG-1): Ollama reports prompt_eval_count /
+                # eval_count on its final ``done`` line, so a partial
+                # drain usually leaves these at 0 and the router falls
+                # back to its char-count estimate — but whatever the
+                # accumulator did capture still reaches the audit row.
+                dispatch_obj.prompt_tokens = acc.prompt_tokens
+                dispatch_obj.completion_tokens = acc.completion_tokens
                 dispatch_obj.latency_ms = int(
                     (time.perf_counter() - dispatch_obj.started_at) * 1000
                 )

@@ -7,10 +7,12 @@ day and month — the budget an org sets per agent.
 
 The source of truth is the audit chain. On a cold key the counter is
 seeded from the chain's token sum for the current period
-(``sum_principal_tokens_since``), then advanced by ``INCRBY`` per call. A
-counter lost to a restart is rebuilt from the same signed rows an auditor
-re-derives — the number that blocks a call is always chain-derivable,
-never a free-floating tally.
+(``sum_principal_tokens_since``), then adjusted per call: an optimistic
+reservation at admission (EG-2) settled to actual usage at end of
+request. The write path never creates a key (EG-3) — only the seed path
+may, via ``SET NX`` — so a counter lost to a restart is always rebuilt
+from the same signed rows an auditor re-derives; the number that blocks
+a call is chain-derivable, never a free-floating tally.
 
 Backends:
   * Redis (shared across workers) — ``INCRBY`` + ``EXPIRE`` on a
@@ -96,16 +98,31 @@ class _PeriodBudgetCounter:
         return day, month
 
     async def add(self, agent_id: str, amount: int, now: datetime) -> None:
-        """Advance both period counters by ``amount`` (no-op when <= 0).
-
-        Callers MUST have run :meth:`current` first (the enforcement check),
-        which seeds the key from the chain — so ``add`` never creates an
-        un-seeded key that a later :meth:`current` would trust as complete.
-        """
+        """Advance both period counters by ``amount`` (no-op when <= 0)."""
         if amount <= 0:
             return
-        await self._add(_day_key(agent_id, now), amount, _DAY_TTL)
-        await self._add(_month_key(agent_id, now), amount, _MONTH_TTL)
+        await self.add_delta(agent_id, amount, now)
+
+    async def add_delta(self, agent_id: str, delta: int, now: datetime) -> None:
+        """Adjust both period counters by ``delta``.
+
+        Positive = spend (or an optimistic reservation, EG-2); negative =
+        refund of the unused part of a reservation. The counter is clamped
+        at 0 so a refund racing a chain re-seed can never drive it negative.
+
+        Callers MUST have run :meth:`current` first (the enforcement check),
+        which seeds the key from the chain. The write path enforces that
+        contract instead of trusting it (EG-3): the adjustment only lands on
+        a key that already exists, so a cold key can only ever be created by
+        the seed path. Pre-fix, an ``INCRBY`` racing a seeder created the
+        key with just this call's tokens and the ``SET NX`` seed lost — the
+        whole chain-derived period sum silently vanished until the next
+        period rollover.
+        """
+        if delta == 0:
+            return
+        await self._apply_delta(_day_key(agent_id, now), delta, _DAY_TTL)
+        await self._apply_delta(_month_key(agent_id, now), delta, _MONTH_TTL)
 
     async def _get(
         self, agent_id: str, key: str, period_start_iso: str, ttl: int
@@ -139,21 +156,41 @@ class _PeriodBudgetCounter:
             self._seeded.add(key)
         return self._mem.get(key, 0)
 
-    async def _add(self, key: str, amount: int, ttl: int) -> None:
+    # EXISTS-gated adjustment (EG-3): never creates the key — only the
+    # seed path in ``_get`` may, via SET NX — and clamps at 0 so a
+    # negative refund delta cannot underflow the period sum. When the key
+    # is missing the delta is dropped: the next ``current`` re-seeds from
+    # the chain, whose audit row already carries these tokens.
+    _DELTA_LUA = """
+    if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+    local v = redis.call('INCRBY', KEYS[1], ARGV[1])
+    if v < 0 then
+        redis.call('SET', KEYS[1], 0)
+        v = 0
+    end
+    redis.call('EXPIRE', KEYS[1], ARGV[2])
+    return v
+    """
+
+    async def _apply_delta(self, key: str, delta: int, ttl: int) -> None:
         from mcp_proxy.redis.pool import get_redis
 
         redis = get_redis()
         if redis is not None:
             try:
-                await redis.incrby(key, int(amount))
-                await redis.expire(key, ttl)
+                await redis.eval(self._DELTA_LUA, 1, key, int(delta), ttl)
             except Exception as exc:  # fail-open
                 _log.warning(
-                    "budget counter Redis incr failed (%s) — skipped: %s", key, exc
+                    "budget counter Redis adjust failed (%s) — skipped: %s", key, exc
                 )
             return
-        self._mem[key] = self._mem.get(key, 0) + int(amount)
-        self._seeded.add(key)
+        # In-memory fallback mirrors the same contract: only adjust a key
+        # the seed path created (pre-fix this write marked the key as
+        # seeded, so a later ``current`` trusted a tally that had skipped
+        # the chain seed — the same lost-sum bug as the Redis race).
+        if key not in self._seeded:
+            return
+        self._mem[key] = max(0, self._mem.get(key, 0) + int(delta))
 
 
 _counter: _PeriodBudgetCounter | None = None
