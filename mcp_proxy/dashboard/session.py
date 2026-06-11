@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass
 
 import bcrypt
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from starlette.responses import RedirectResponse
 
 _log = logging.getLogger("mcp_proxy.dashboard")
@@ -336,11 +336,49 @@ def clear_session(response: Response) -> None:
     )
 
 
+# DASH-3 (blind-spot audit 2026-06-10) — write gate. Every mutating
+# dashboard route is a POST behind ``require_login``, but role
+# enforcement used to live only on the bundle-download route: with the
+# enterprise ``rbac_multi_admin`` plugin a *viewer* could reset an
+# admin's password, change KMS/OIDC config or apply migrations. Gating
+# centrally here (instead of per-route ``require_role`` decorations)
+# makes write-denial the default for every current and future POST
+# route — a forgotten decoration fails closed, not open. Roles beyond
+# these two stay read-only; finer admin-vs-operator splits remain
+# per-route (e.g. the bundle download's admin-only check).
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_WRITER_ROLES = frozenset({"admin", "operator"})
+
+
 def require_login(request: Request) -> ProxyDashboardSession | RedirectResponse:
-    """Return the session if logged in, or a redirect to /proxy/login."""
+    """Return the session if logged in, or a redirect to /proxy/login.
+
+    On write methods the session must also carry a writer role
+    (``admin`` / ``operator`` — community single-admin sessions always
+    do); a ``viewer`` (or any other plugin-minted read-only role) gets
+    a 403 instead of reaching the mutation body. Pre-session routes
+    (login / register) and logout don't call this helper, so they are
+    unaffected.
+    """
     session = get_session(request)
     if not session.logged_in:
         return RedirectResponse(url="/proxy/login", status_code=303)
+    if (
+        request.method in _WRITE_METHODS
+        and not any(r in _WRITER_ROLES for r in session.roles)
+    ):
+        _log.warning(
+            "dashboard write denied: role(s) %s on %s %s",
+            ",".join(session.roles) or "<none>",
+            request.method, request.url.path,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "role_required",
+                "allowed": sorted(_WRITER_ROLES),
+            },
+        )
     return session
 
 
