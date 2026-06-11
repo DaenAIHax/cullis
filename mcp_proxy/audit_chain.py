@@ -13,11 +13,16 @@ instead of per row. Trade-off:
   * Audit visibility lag: bounded by ``flush_interval_s`` between
     ``append()`` and the row landing on disk.
   * Crash safety: rows queued in memory but not flushed are lost on
-    SIGKILL / OOM. Mitigation is the bounded flush interval plus
-    ``verify_audit_chain`` catching structural breaks; operators
-    requiring per-row durability must set ``batch_size=1`` or
-    ``MCP_PROXY_AUDIT_CHAIN_DISABLED=true`` to fall back to the
-    legacy per-row ``log_audit()`` path.
+    SIGKILL / OOM / power loss (SIGTERM drains via the lifespan
+    shutdown). The window is bounded by ``batch_size`` rows or
+    ``flush_interval_s`` seconds, whichever fires first. NB the loss
+    is NOT detectable by ``verify_audit_chain``: hashes are computed
+    at flush time, so a lost tail leaves a contiguous chain that
+    verifies clean — completeness needs an external cross-check
+    (request logs vs chain). Operators requiring per-row durability
+    set ``MCP_PROXY_AUDIT_CHAIN_DURABLE=true`` (compliance-facing
+    alias for the legacy per-row ``log_audit()`` path; see
+    docs/security/threat-model.md §2).
 
 Cross-process serialisation: each uvicorn worker carries its own
 ``BatchedAuditChain`` instance. The ``audit_log`` ``UNIQUE(chain_seq)``
@@ -392,16 +397,36 @@ async def build_and_start_from_settings() -> BatchedAuditChain | None:
     """Construct + start the singleton from the active Settings.
 
     Returns the newly registered instance, or ``None`` when the
-    operator set ``MCP_PROXY_AUDIT_CHAIN_DISABLED=true`` (in which
-    case no instance is registered and ``log_audit`` keeps using
-    the legacy path). Idempotent: a second call replaces the
-    previous singleton after stopping it.
+    operator picked the per-row path — ``MCP_PROXY_AUDIT_CHAIN_DURABLE=
+    true`` (compliance-facing: every row hashed + INSERTed before the
+    request proceeds) or ``MCP_PROXY_AUDIT_CHAIN_DISABLED=true``
+    (emergency opt-out). In both cases no instance is registered and
+    ``log_audit`` keeps using the legacy per-row path. Idempotent: a
+    second call replaces the previous singleton after stopping it.
+
+    Always declares the resulting audit durability posture on stderr
+    (lifespan-safe) so the crash-loss window is on the record for an
+    auditor reading the boot log, not buried in source comments.
     """
     from mcp_proxy.config import get_settings
 
     settings = get_settings()
-    if settings.audit_chain_disabled:
+    if settings.audit_chain_durable or settings.audit_chain_disabled:
         await shutdown_singleton()
+        knob = (
+            "MCP_PROXY_AUDIT_CHAIN_DURABLE"
+            if settings.audit_chain_durable
+            else "MCP_PROXY_AUDIT_CHAIN_DISABLED"
+        )
+        emit_lifespan_log(
+            level="INFO",
+            logger="mcp_proxy.audit_chain",
+            message=(
+                f"AUDIT_DURABILITY: per-row ({knob}=true) — every audit "
+                "row is hashed and written before the request proceeds; "
+                "no crash-loss window"
+            ),
+        )
         return None
 
     await shutdown_singleton()
@@ -421,6 +446,17 @@ async def build_and_start_from_settings() -> BatchedAuditChain | None:
     )
     await chain.start()
     set_batched_chain(chain)
+    emit_lifespan_log(
+        level="INFO",
+        logger="mcp_proxy.audit_chain",
+        message=(
+            "AUDIT_DURABILITY: batched — crash-loss window up to "
+            f"{chain.batch_size} queued row(s) / "
+            f"{chain.flush_interval_s}s on SIGKILL/OOM (SIGTERM drains); "
+            "lost tail is NOT detectable by chain verification. "
+            "Set MCP_PROXY_AUDIT_CHAIN_DURABLE=true for per-row writes"
+        ),
+    )
     return chain
 
 

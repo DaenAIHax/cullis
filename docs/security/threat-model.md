@@ -90,6 +90,41 @@ TimeStampToken with a credible `genTime` from a TSA they do not
 control, because the TSA signature is verifiable offline against the
 TSA's public certificate chain.
 
+### 2.4 Durability window: what a hard crash can lose
+
+The integrity claims above are about **tampering with rows that were
+written**. They say nothing about rows that never reached disk, and we
+state that boundary explicitly rather than let the verifier's clean
+exit imply it.
+
+The default write path is batched (`MCP_PROXY_AUDIT_CHAIN_BATCH_SIZE=100`,
+`MCP_PROXY_AUDIT_CHAIN_FLUSH_INTERVAL_S=1.0`): rows queue in memory and
+land on disk at the next size or time trigger. Consequences:
+
+- **SIGTERM / graceful shutdown loses nothing** — the lifespan shutdown
+  drains the queue before the process exits.
+- **SIGKILL, OOM-kill, kernel panic, power loss** can lose the queued
+  tail: at most `batch_size` rows or `flush_interval_s` seconds of
+  audit evidence, whichever bound is hit first.
+- **The loss is invisible to chain verification.** Hashes are computed
+  at flush time, so a lost tail leaves a contiguous chain that the
+  offline verifier accepts without complaint. The same applies to the
+  Merkle/TSA anchors: they prove the rows that exist were not
+  rewritten, not that every action produced a row. Detecting a lost
+  tail requires an external cross-check (gateway request logs or
+  client-side records vs the chain).
+
+Deployments whose audit posture cannot tolerate this window set
+`MCP_PROXY_AUDIT_CHAIN_DURABLE=true`: every row is hashed, INSERTed and
+fsynced before the request proceeds, and a write failure surfaces
+according to `MCP_PROXY_AUDIT_FAIL_DENY`. The cost is the batched
+chain's ~50-100x audit-path throughput headroom — acceptable when the
+bottleneck is compliance, not RPS.
+
+Mastio declares the active posture at startup with an
+`AUDIT_DURABILITY:` line in the boot log, so the window is on the
+record for an auditor without reading source.
+
 ---
 
 ## 3. TSA anchoring: transport decisions

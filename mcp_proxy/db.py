@@ -678,11 +678,19 @@ async def log_audit(
         from mcp_proxy.audit_chain import get_batched_chain
         from mcp_proxy.config import get_settings as _get_settings_for_audit
         _chain = get_batched_chain()
-        _chain_disabled = _get_settings_for_audit().audit_chain_disabled
+        _audit_settings = _get_settings_for_audit()
+        # ``durable`` (per-row compliance mode) bypasses the batched
+        # chain exactly like ``disabled``; with either set the lifespan
+        # never registers a singleton, but a stale instance (tests,
+        # manual wiring) must not silently re-batch durable deploys.
+        _chain_bypassed = (
+            _audit_settings.audit_chain_disabled
+            or _audit_settings.audit_chain_durable
+        )
     except Exception:  # pragma: no cover — defensive: never break audit on config errors
         _chain = None
-        _chain_disabled = True
-    if _chain is not None and not _chain_disabled:
+        _chain_bypassed = True
+    if _chain is not None and not _chain_bypassed:
         from mcp_proxy.audit_chain import AuditChainExhausted
         try:
             await _chain.append({
