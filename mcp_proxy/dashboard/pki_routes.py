@@ -16,8 +16,10 @@ Routes (3):
 Shared helpers ``generate_org_ca``, ``_test_vault_connectivity``,
 ``_store_ca_key_in_vault``, ``_ctx`` live in
 ``mcp_proxy/dashboard/_helpers.py`` since F-B-201 PR-1 / PR-3. The
-approval-hook intercept on ``rotate-ca`` and the CA private-key
-handling are preserved verbatim.
+approval-hook intercept on ``rotate-ca`` is preserved verbatim; the
+rotated CA private key goes through the KMS provider (DASH-1,
+blind-spot audit 2026-06-10) instead of a plaintext ``proxy_config``
+row.
 """
 from __future__ import annotations
 
@@ -217,15 +219,32 @@ async def pki_rotate_ca(request: Request):
     if intercept is not None:
         return intercept
 
-    from mcp_proxy.db import get_config, set_config, log_audit
+    from mcp_proxy.db import delete_proxy_config, get_config, set_config, log_audit
+    from mcp_proxy.kms import get_kms_provider
+    from mcp_proxy.kms.pki_at_rest import pki_master_key_configured
 
     org_id = await get_config("org_id")
     if not org_id:
         raise HTTPException(status_code=400, detail="Organization ID not configured. Run setup first.")
 
     cert_pem, key_pem = await _asyncio.to_thread(generate_org_ca, org_id)
+    # DASH-1 (blind-spot audit 2026-06-10): the private key must go
+    # through the KMS provider like the steady-state mint path
+    # (``AgentManager._persist_org_ca``), never as a plaintext
+    # ``proxy_config`` upsert — a ``pg_dump`` taken between rotation and
+    # the next boot-time wipe would otherwise capture the Org Root key
+    # forever. The provider handles at-rest encryption (local + master
+    # key), Vault, or the dev plaintext fallback with its own warning.
+    provider = get_kms_provider()
+    await provider.store_org_ca(key_pem, cert_pem)
+    # Public material only: the legacy ``/pki/ca.crt`` and
+    # connector-bootstrap readers still consume this row.
     await set_config("org_ca_cert", cert_pem)
-    await set_config("org_ca_key", key_pem)
+    if not (provider.name == "local" and not pki_master_key_configured()):
+        # Encrypted store is authoritative — drop any stale plaintext
+        # private-key row so the new cert never sits next to the old
+        # key (the boot-time legacy wipe would see a mismatched pair).
+        await delete_proxy_config("org_ca_key")
 
     # Render the new CA's algorithm label from the freshly minted cert so
     # the audit trail tracks whatever ``generate_org_ca`` actually
@@ -240,7 +259,11 @@ async def pki_rotate_ca(request: Request):
         agent_id="admin",
         action="ca.rotate",
         status="success",
-        detail=f"org_id={org_id}, new self-signed {_new_ca_algo}. All agent certs need re-issue.",
+        detail=(
+            f"org_id={org_id}, new self-signed {_new_ca_algo}, "
+            f"key persisted via kms={provider.name}. "
+            "All agent certs need re-issue."
+        ),
     )
 
     # Store in Vault if configured

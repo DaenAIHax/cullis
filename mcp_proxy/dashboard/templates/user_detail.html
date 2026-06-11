@@ -515,5 +515,11 @@ function switchTab(name) {
     btn.classList.add('border-[#00e5c7]', 'text-white');
     btn.classList.remove('border-transparent', 'text-gray-500');
 }
+{% if new_api_token or api_token_error %}
+// The mint POST renders this page directly (DASH-2: the cleartext
+// token never rides a redirect query string) — land the operator on
+// the API Tokens tab so the one-time banner is actually visible.
+switchTab('api-tokens');
+{% endif %}
 </script>
 {% endblock %}

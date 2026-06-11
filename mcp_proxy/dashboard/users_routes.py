@@ -535,13 +535,25 @@ async def users_create(request: Request):
     )
 
 
-@router.get("/users/{principal_id:path}", response_class=HTMLResponse)
-async def user_detail_page(principal_id: str, request: Request):
-    """Per-user detail: Mastio attribution + Frontdesk credential state + audit."""
-    session = require_login(request)
-    if isinstance(session, RedirectResponse):
-        return session
+async def render_user_detail(
+    request: Request,
+    session,
+    principal_id: str,
+    *,
+    action_message: str | None = None,
+    error: str | None = None,
+    new_api_token: str | None = None,
+    new_api_token_label: str | None = None,
+    api_token_error: str | None = None,
+):
+    """Build + render the user detail page.
 
+    Shared by the GET route below and by the API-token mint POST in
+    :mod:`mcp_proxy.dashboard.api_tokens`: the freshly minted ``culk_``
+    cleartext is rendered directly in the POST response body (DASH-2,
+    blind-spot audit 2026-06-10) instead of riding a ``?new_token=``
+    redirect through nginx access logs / browser history / Referer.
+    """
     users, fd_enabled = await _build_user_view()
     user = next(
         (u for u in users if u.get("principal_id") == principal_id),
@@ -579,31 +591,16 @@ async def user_detail_page(principal_id: str, request: Request):
     except Exception:
         org_id, trust_domain = "", "cullis.local"
 
-    # ADR-034 follow-up, passwords are admin-input now, not
-    # server-generated. The Wave B G2 ticket store + ``?new_pw_ticket``
-    # / ``?reset_pw_ticket`` redirect params are removed: the admin
-    # already knows the password (they typed it in the form), so
-    # there is nothing to surface back on this page. Any stale URL
-    # with the legacy params is silently ignored, the bookmark
-    # rendered nothing useful anyway because the ticket store would
-    # have popped on first read.
-    action_message = request.query_params.get("ok")
-    error = request.query_params.get("error")
-
-    # ADR-027, show this user's API tokens inline + render the
-    # one-time cleartext banner when ``?new_token=`` is set (the mint
-    # POST redirects back here with the freshly-minted token in the
-    # URL exactly once; if the operator reloads the page, the query
-    # param is gone and the banner does not re-render).
+    # ADR-027, show this user's API tokens inline. The one-time
+    # cleartext banner renders only when the mint POST passes
+    # ``new_api_token`` directly into this helper — never from a
+    # query param (DASH-2).
     api_tokens: list[dict] = []
     try:
         from mcp_proxy.db import list_user_api_tokens
         api_tokens = await list_user_api_tokens(principal_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("user_detail_page: api_tokens query failed: %s", exc)
-    new_api_token = request.query_params.get("new_token")
-    new_api_token_label = request.query_params.get("new_token_label")
-    api_token_error = request.query_params.get("token_error")
 
     return templates.TemplateResponse("user_detail.html", _ctx(
         request, session,
@@ -620,6 +617,30 @@ async def user_detail_page(principal_id: str, request: Request):
         new_api_token_label=new_api_token_label,
         api_token_error=api_token_error,
     ))
+
+
+@router.get("/users/{principal_id:path}", response_class=HTMLResponse)
+async def user_detail_page(principal_id: str, request: Request):
+    """Per-user detail: Mastio attribution + Frontdesk credential state + audit.
+
+    ADR-034 follow-up, passwords are admin-input now, not
+    server-generated. The Wave B G2 ticket store + ``?new_pw_ticket``
+    / ``?reset_pw_ticket`` redirect params are removed: the admin
+    already knows the password (they typed it in the form), so there
+    is nothing to surface back on this page. The legacy ``?new_token=``
+    param is likewise gone (DASH-2) — the mint POST renders the banner
+    in its own response body; stale URLs carrying it are ignored.
+    """
+    session = require_login(request)
+    if isinstance(session, RedirectResponse):
+        return session
+
+    return await render_user_detail(
+        request, session, principal_id,
+        action_message=request.query_params.get("ok"),
+        error=request.query_params.get("error"),
+        api_token_error=request.query_params.get("token_error"),
+    )
 
 
 _CAPABILITY_RE = __import__("re").compile(r"^[a-z_][a-z0-9_.]{0,63}$")
