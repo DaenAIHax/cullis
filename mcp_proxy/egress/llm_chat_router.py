@@ -58,6 +58,43 @@ def _token_bucket_key(agent: InternalAgent) -> str:
     return f"principal:{agent.agent_id}:llm_tokens"
 
 
+# Rough chars-per-token divisor for the estimation fallback (EG-1). The
+# point is denying budget evasion, not billing-grade accounting: an
+# adapter that only learns usage at full drain reports 0 on a truncated
+# stream, so we charge an estimate derived from what actually crossed
+# the wire instead of letting the call ride for free.
+_CHARS_PER_TOKEN = 4
+# Completion-side reservation when the caller did not set ``max_tokens``
+# (EG-2). Deliberately a constant, not a setting: it only bounds the
+# concurrent-admission overshoot window and is settled against the real
+# usage at end of request.
+_DEFAULT_COMPLETION_RESERVE = 1024
+
+
+def _estimate_prompt_tokens(req: ChatCompletionRequest) -> int:
+    """Char-count estimate of the prompt size (EG-1 fallback)."""
+    chars = 0
+    for msg in req.messages:
+        content = msg.content
+        if isinstance(content, str):
+            chars += len(content)
+        elif content:
+            try:
+                chars += len(json.dumps(content, default=str))
+            except (TypeError, ValueError):
+                pass
+    return max(1, chars // _CHARS_PER_TOKEN)
+
+
+def _reservation_tokens(req: ChatCompletionRequest) -> int:
+    """Optimistic admission reservation (EG-2): estimated prompt +
+    requested (or default) completion ceiling. Settled to actual usage
+    when the request finishes, so over-reservation self-corrects."""
+    return _estimate_prompt_tokens(req) + int(
+        req.max_tokens or _DEFAULT_COMPLETION_RESERVE
+    )
+
+
 def _gateway_error_detail(exc: GatewayError, trace_id: str) -> dict:
     """Build the JSON error body for a caught :class:`GatewayError`.
 
@@ -193,6 +230,7 @@ async def chat_completions(
     # running total is a Redis counter seeded from the audit chain.
     budget_day, budget_month = await effective_budget(agent.agent_id, settings)
     budget_enforced = budget_day > 0 or budget_month > 0
+    reserve_tokens = 0
     if budget_enforced:
         now = datetime.now(timezone.utc)
         used_day, used_month = await get_budget_counter().current(agent.agent_id, now)
@@ -231,11 +269,21 @@ async def chat_completions(
                     "budget_tokens_per_month": budget_month,
                 },
             )
+        # EG-2 — optimistic reservation. The admission check above is
+        # read-only, so N concurrent requests at 95% of the ceiling all
+        # used to pass and overshoot it together. Charging an estimate
+        # up-front makes concurrent admissions see each other; the
+        # reservation is settled against actual usage (refund or top-up)
+        # in every terminal path below.
+        reserve_tokens = _reservation_tokens(req)
+        await get_budget_counter().add_delta(
+            agent.agent_id, reserve_tokens, now,
+        )
 
     if req.stream:
         return await _handle_stream(
             req=req, agent=agent, settings=settings, trace_id=trace_id,
-            enforce_budget=budget_enforced,
+            enforce_budget=budget_enforced, reserve_tokens=reserve_tokens,
         )
 
     started = time.perf_counter()
@@ -249,6 +297,13 @@ async def chat_completions(
             settings=settings,
         )
     except GatewayError as exc:
+        if budget_enforced:
+            # Refund the EG-2 reservation in full: a pre-response
+            # gateway failure (bad model id, provider auth, timeout
+            # before first byte) consumed nothing chargeable.
+            await get_budget_counter().add_delta(
+                agent.agent_id, -reserve_tokens, datetime.now(timezone.utc),
+            )
         await log_audit(
             agent_id=agent.agent_id,
             action="egress_llm_chat",
@@ -278,8 +333,9 @@ async def chat_completions(
     if settings.llm_tokens_per_minute > 0:
         await get_token_sum_limiter().consume(_token_bucket_key(agent), weight)
     if budget_enforced:
-        await get_budget_counter().add(
-            agent.agent_id, weight, datetime.now(timezone.utc),
+        # Settle the EG-2 reservation against actual usage.
+        await get_budget_counter().add_delta(
+            agent.agent_id, weight - reserve_tokens, datetime.now(timezone.utc),
         )
 
     await log_audit(
@@ -319,6 +375,7 @@ async def _handle_stream(
     settings,
     trace_id: str,
     enforce_budget: bool = False,
+    reserve_tokens: int = 0,
 ) -> StreamingResponse:
     """Open the upstream stream and fan it out as Server-Sent Events.
 
@@ -328,6 +385,16 @@ async def _handle_stream(
     disconnect). The ``data: [DONE]`` sentinel is appended only on the
     happy path; on upstream error we emit a single ``data: {"error":...}``
     frame so OpenAI-shaped clients see a terminal event.
+
+    Terminal accounting (EG-1): a client disconnect used to land in the
+    success branch with the adapter's drain-time token counts still at
+    0 — no budget charge and a ``success`` audit row claiming 0/0
+    tokens, i.e. indefinite evasion of the #1074 ceiling plus a chain
+    that under-reports real spend (and poisons the seed-from-chain
+    rebuild). Now the stream tracks whether the upstream actually
+    drained; a partial drain settles the budget from the adapter's
+    incremental counts (or a char-count estimate of what crossed the
+    wire) and writes an honest ``truncated`` row instead of ``success``.
     """
     try:
         streamer: StreamingDispatch = await dispatch_stream(
@@ -338,6 +405,11 @@ async def _handle_stream(
             settings=settings,
         )
     except GatewayError as exc:
+        if enforce_budget:
+            # Refund the EG-2 reservation: the stream never opened.
+            await get_budget_counter().add_delta(
+                agent.agent_id, -reserve_tokens, datetime.now(timezone.utc),
+            )
         await log_audit(
             agent_id=agent.agent_id,
             action="egress_llm_chat",
@@ -409,6 +481,13 @@ async def _handle_stream(
 
     async def sse():
         terminated_with_error: GatewayError | None = None
+        # EG-1 bookkeeping: ``upstream_drained`` flips once the adapter's
+        # iterator is exhausted (the only point where drain-time usage
+        # counts are trustworthy); ``observed_completion_chars`` counts
+        # the delta text that actually crossed the wire, feeding the
+        # estimation fallback when the adapter reported nothing.
+        upstream_drained = False
+        observed_completion_chars = 0
         try:
             async for chunk in streamer.aiter():
                 # Inject the trace id on every chunk so a downstream
@@ -426,6 +505,9 @@ async def _handle_stream(
                     if choices:
                         choice0 = choices[0]
                         delta = choice0.get("delta") or {}
+                        content_piece = delta.get("content")
+                        if isinstance(content_piece, str):
+                            observed_completion_chars += len(content_piece)
                         tc_list = delta.get("tool_calls") or []
                         for tc in tc_list:
                             idx = tc.get("index", 0)
@@ -464,6 +546,11 @@ async def _handle_stream(
 
                 yield f"data: {json.dumps(chunk)}\n\n"
 
+            # The upstream iterator is exhausted — drain-time usage on
+            # ``streamer`` is now authoritative. A disconnect on the
+            # trailing frames below still counts as drained.
+            upstream_drained = True
+
             # Trailing summary event the SPA uses to populate the
             # audit panel ("3 tools called in 470ms"). Shape mirrors
             # the mock ambassador (frontend/cullis-chat/mock/ambassador.mjs).
@@ -494,7 +581,54 @@ async def _handle_stream(
             }
             yield f"data: {json.dumps(err_frame)}\n\n"
         finally:
-            if terminated_with_error is not None:
+            # EG-1 settlement — runs on every terminal path: full drain,
+            # upstream error mid-stream, client disconnect (GeneratorExit
+            # reaches this block when Starlette closes the generator).
+            prompt_tokens = int(streamer.prompt_tokens)
+            completion_tokens = int(streamer.completion_tokens)
+            tokens_estimated = False
+            errored = terminated_with_error is not None
+            if not upstream_drained:
+                # Most adapters only learn usage at full drain, so a cut
+                # stream under-reports (often 0/0; Anthropic knows the
+                # prompt from message_start but never sees the final
+                # message_delta). Estimate each missing component from
+                # what provably went through: the full prompt (the
+                # provider processed it) and the delta text observed
+                # before the cut. A gateway error before the first
+                # observed byte is the one case left unestimated — that
+                # request consumed nothing chargeable, same policy as
+                # the pre-stream error path.
+                observed_anything = (
+                    prompt_tokens + completion_tokens > 0
+                    or observed_completion_chars > 0
+                )
+                if observed_anything or not errored:
+                    if prompt_tokens == 0:
+                        prompt_tokens = _estimate_prompt_tokens(req)
+                        tokens_estimated = True
+                    if completion_tokens == 0 and observed_completion_chars > 0:
+                        completion_tokens = (
+                            observed_completion_chars // _CHARS_PER_TOKEN
+                        )
+                        tokens_estimated = True
+            weight = prompt_tokens + completion_tokens
+
+            if settings.llm_tokens_per_minute > 0 and weight > 0:
+                await get_token_sum_limiter().consume(
+                    _token_bucket_key(agent), weight,
+                )
+            if enforce_budget:
+                # Settle the EG-2 reservation against what the stream
+                # actually consumed (refund or top-up). Pre-fix the
+                # error path never charged at all and the disconnect
+                # path charged 0 — both indefinite cap-evasion vectors.
+                await get_budget_counter().add_delta(
+                    agent.agent_id, weight - reserve_tokens,
+                    datetime.now(timezone.utc),
+                )
+
+            if errored:
                 await log_audit(
                     agent_id=agent.agent_id,
                     action="egress_llm_chat",
@@ -510,50 +644,50 @@ async def _handle_stream(
                         "reason": terminated_with_error.reason,
                         "upstream_detail": terminated_with_error.detail,
                         "stream": True,
-                        "prompt_tokens": streamer.prompt_tokens,
-                        "completion_tokens": streamer.completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "tokens_estimated": tokens_estimated,
                     },
                 )
             else:
-                weight = (
-                    int(streamer.prompt_tokens)
-                    + int(streamer.completion_tokens)
-                )
-                if settings.llm_tokens_per_minute > 0 and weight > 0:
-                    await get_token_sum_limiter().consume(
-                        _token_bucket_key(agent), weight,
-                    )
-                if enforce_budget and weight > 0:
-                    await get_budget_counter().add(
-                        agent.agent_id, weight, datetime.now(timezone.utc),
-                    )
+                # Honest status (EG-1): ``success`` means the upstream
+                # stream drained; a client disconnect mid-stream is
+                # ``truncated``. The chain consumers
+                # (sum_principal_tokens_since, aggregate_llm_usage)
+                # filter on action only, so truncated rows keep feeding
+                # the budget seed and the usage dashboard.
+                status = "success" if upstream_drained else "truncated"
+                details = {
+                    "event": "llm.chat_completion",
+                    "principal_id": agent.agent_id,
+                    "principal_type": agent.principal_type,
+                    "backend": streamer.backend,
+                    "provider": streamer.provider,
+                    "model": req.model,
+                    "trace_id": trace_id,
+                    "upstream_request_id": streamer.upstream_request_id,
+                    "latency_ms": streamer.latency_ms,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "cost_usd": streamer.cost_usd,
+                    "cache_hit": False,
+                    "stream": True,
+                }
+                if status == "truncated":
+                    details["reason"] = "stream_not_drained"
+                    details["tokens_estimated"] = tokens_estimated
                 await log_audit(
                     agent_id=agent.agent_id,
                     action="egress_llm_chat",
-                    status="success",
+                    status=status,
                     duration_ms=float(streamer.latency_ms),
-                    details={
-                        "event": "llm.chat_completion",
-                        "principal_id": agent.agent_id,
-                        "principal_type": agent.principal_type,
-                        "backend": streamer.backend,
-                        "provider": streamer.provider,
-                        "model": req.model,
-                        "trace_id": trace_id,
-                        "upstream_request_id": streamer.upstream_request_id,
-                        "latency_ms": streamer.latency_ms,
-                        "prompt_tokens": streamer.prompt_tokens,
-                        "completion_tokens": streamer.completion_tokens,
-                        "cost_usd": streamer.cost_usd,
-                        "cache_hit": False,
-                        "stream": True,
-                    },
+                    details=details,
                 )
                 logger.info(
                     "egress_llm_chat (stream) agent=%s backend=%s model=%s "
-                    "latency_ms=%d trace_id=%s",
+                    "status=%s latency_ms=%d trace_id=%s",
                     agent.agent_id, streamer.backend, req.model,
-                    streamer.latency_ms, trace_id,
+                    status, streamer.latency_ms, trace_id,
                 )
 
     return StreamingResponse(

@@ -873,12 +873,18 @@ class AnthropicAdapter:
                             yield chunk
                 # Final OpenAI chunk with finish_reason + usage.
                 final_chunk = acc.build_final_chunk()
-                dispatch_obj.prompt_tokens = acc.prompt_tokens
-                dispatch_obj.completion_tokens = acc.completion_tokens
                 yield final_chunk
             except Exception as exc:
                 raise _map_anthropic_exception(exc, model=request_model) from exc
             finally:
+                # Copy the accumulator's incremental counts here, not
+                # only after a full drain (EG-1): Anthropic reports
+                # input_tokens on message_start and cumulative
+                # output_tokens on every message_delta, so on a client
+                # disconnect the router still sees the real partial
+                # usage instead of 0/0.
+                dispatch_obj.prompt_tokens = acc.prompt_tokens
+                dispatch_obj.completion_tokens = acc.completion_tokens
                 dispatch_obj.latency_ms = int(
                     (time.perf_counter() - dispatch_obj.started_at) * 1000
                 )
