@@ -8,9 +8,11 @@ handles the two mutations:
 
   POST   /proxy/users/{principal_id}/api-tokens/create
          Form-submit from the "Create new token" panel in the API
-         Tokens tab. Mints a row, then 303-redirects back to the user
-         page with ``?new_token=<cleartext>`` so the template can
-         render the one-time "save it now" banner.
+         Tokens tab. Mints a row, then renders the user page directly
+         in the POST response with the one-time "save it now" banner —
+         the cleartext never rides a redirect query string (DASH-2,
+         blind-spot audit 2026-06-10: nginx access logs go to the
+         SIEM, plus browser history and Referer).
 
   POST   /proxy/users/{principal_id}/api-tokens/{token_id}/revoke
          Form-submit from the per-row Revoke button. 303-redirects
@@ -28,7 +30,7 @@ import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from mcp_proxy.dashboard.session import require_login, verify_csrf
 from mcp_proxy.db import (
@@ -62,9 +64,13 @@ async def create_api_token(
     expires_at: str = Form(""),
     never_expires: str = Form(""),
     scope_providers: list[str] | None = Form(None),
-) -> RedirectResponse:
-    """Mint a new culk_ token for ``principal_id`` and redirect back to
-    the user detail page with the cleartext as a single-use query param.
+) -> Response:
+    """Mint a new culk_ token for ``principal_id``.
+
+    On success the user detail page is rendered directly in this
+    response with the one-time cleartext banner (DASH-2 — never in a
+    redirect query string); failures redirect back with a generic
+    ``token_error`` message.
     """
     session = require_login(request)
     if isinstance(session, RedirectResponse):
@@ -176,9 +182,18 @@ async def create_api_token(
         "dashboard mint api-token id=%s principal=%s label=%s by=%s",
         minted["id"], minted["principal_id"], minted["label"], created_by,
     )
-    return _back_to_user(
-        principal_id,
-        f"new_token={quote(minted['token'])}&new_token_label={quote(minted['label'])}",
+    # DASH-2 (blind-spot audit 2026-06-10): render the one-time
+    # cleartext banner directly in this POST's response body instead
+    # of a ``?new_token=`` redirect — query strings land in nginx
+    # access logs (shipped to the SIEM, a lower trust tier than the
+    # admin), browser history and Referer headers. No PRG here is
+    # deliberate: a refresh re-submits the form (browser warns first)
+    # and at worst mints a second revocable, audit-logged token.
+    from mcp_proxy.dashboard.users_routes import render_user_detail
+    return await render_user_detail(
+        request, session, principal_id,
+        new_api_token=minted["token"],
+        new_api_token_label=minted["label"],
     )
 
 
